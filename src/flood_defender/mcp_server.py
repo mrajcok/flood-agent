@@ -123,8 +123,9 @@ def _find_violation(node, table: str) -> str | None:
 @mcp.tool()
 @_in_worker_thread
 def show_chart(vega_lite_spec: dict, ctx: Context) -> str:
-    """Show a Vega-Lite Chart Spec to the user. Its data must be {"name": "<result table>"};
-    never include data values. Aggregate first if the Result Table is large."""
+    """Show a Vega-Lite Chart Spec to the user as a chart Display. Its data must be
+    {"name": "<result table>"}; never include data values. Aggregate first if the Result
+    Table is large. Use temporal x scales of type "utc" for epoch-ms time columns."""
     _, results = _paths()
     data = vega_lite_spec.get("data")
     table = data.get("name") if isinstance(data, dict) else None

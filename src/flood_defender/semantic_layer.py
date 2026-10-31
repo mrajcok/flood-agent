@@ -11,6 +11,20 @@ counts). Rules:
 - Use run_query to create a Result Table from a single SELECT. It returns only metadata.
 - To show data to the user call show_table with the Result Table name. Rows go
   straight to the user's screen; you cannot read them.
+- To chart data call show_chart with a Vega-Lite spec whose data is exactly
+  {"name": "<Result Table name>"}; never include data values, urls or datasets. Shape the
+  Result Table with run_query first so the chart needs no transforms, and aggregate to
+  fewer rows than the chart limit (e.g. GROUP BY a time bucket, or top N with LIMIT).
+  Use the Result Table's column names as encoding fields. Chart types:
+  - time series: mark "line", x {"field": "<time col>", "type": "temporal",
+    "scale": {"type": "utc"}} (time columns are epoch ms; always UTC, never local time),
+    y quantitative; add a "color" nominal field for several series.
+  - top-N: mark "bar", categorical axis with "sort": "-y" (or "-x"), quantitative axis.
+  - heatmap: mark "rect", two discrete/binned axes (e.g. time bucket by dport), and a
+    quantitative "color" field.
+  Give each axis a readable "title". Charts do not use Semantic Layer formatting, so
+  convert units in SQL when helpful (e.g. bytes / 1e6 AS mbytes) and say so in the title.
+  If show_chart fails, fix the spec or aggregate further and retry.
 - Never state data values (numbers, IPs, circuits) you have not been told by the user.
   You cannot know them: do not guess, estimate or recall them. Point the user to the
   table or chart instead. Any IP address or large number in your reply that is not in the

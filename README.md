@@ -3,7 +3,8 @@
 Chat-driven flow telemetry analysis where no telemetry data passes through the LLM
 (see `GLOSSARY.md` and `docs/adr/0001-no-telemetry-data-through-the-llm.md`).
 
-This is the tracer bullet: ask a question, get streamed text plus an inline table Display.
+Ask a question in chat and get streamed text plus inline Displays: tables and Vega-Lite charts.
+Conversations are saved in a sidebar, and each turn has a collapsed Trace showing what the LLM saw and did.
 
 ## Setup
 
@@ -63,13 +64,29 @@ column is matched to its source column by **identical name** (`proto`, `bytes`, 
 aliased or derived columns (`SUM(bytes) AS total_bytes`) are shown plain. Pure formatting
 functions live in `static/format.js` (tested with `node --test` via pytest).
 
+## Chart Displays
+
+The LLM asks for a chart with `show_chart(vega_lite_spec)`, a [Vega-Lite](https://vega.github.io/vega-lite/)
+Chart Spec (time series, bar/top-N, heatmap, ...). The spec's `data` must be exactly
+`{"name": "<result table>"}` naming an existing Result Table; inline `values`, `url`,
+`datasets` and any other data source are rejected, so the LLM can't put data in a chart.
+A Result Table with more than `CHART_ROW_CAP` rows (default 10,000) is refused with guidance
+to aggregate and chart the new Result Table.
+
+The Agent rewrites the data reference to `GET /api/results/<rt>/chart-rows` (row objects,
+capped at `CHART_ROW_CAP`; an Agent endpoint, not an LLM tool), and the browser renders the
+chart with vega-embed (Vega, Vega-Lite and vega-embed load from jsdelivr, so charts need
+internet access in the browser). The Alpine component in `templates/display_chart.html`
+finalizes the Vega view when htmx removes it. The Trace shows the Chart Spec before and
+after the data reference is resolved.
+
 ## Layout
 
 - `agent.py` - `Agent.run_turn(conversation, message)` yields `TextDelta`, `DisplayEvent`, `TurnEnd`.
 - `llm.py` - `LLMClient` protocol and the OpenRouter implementation.
-- `mcp_server.py` - stdio MCP server; the only LLM tools are `run_query` and `show_table`.
+- `mcp_server.py` - stdio MCP server; the only LLM tools are `run_query`, `show_table` and `show_chart`.
 - `queries.py` - read-only Telemetry Database access, CTAS into the results DB, internal row access.
-- `web.py` + `templates/` - FastAPI, Jinja, htmx (SSE), Alpine table component.
+- `web.py` + `templates/` - FastAPI, Jinja, htmx (SSE), Alpine table and chart components.
 - `semantic_layer.yaml` - hand-authored Semantic Layer rendered into the system prompt.
 
 ## Eval set and runner (on demand, not CI)

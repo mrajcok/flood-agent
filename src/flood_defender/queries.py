@@ -45,8 +45,25 @@ def sanitize_error(message: str) -> str:
     return re.sub(r"\d+(\.\d+)?", "<n>", message)
 
 
-def run_query(telemetry_db: Path, results_db: Path, sql: str) -> dict:
-    """Run the SQL as CTAS into the results database. Returns Query Metadata only."""
+def _result_table_guard(allowed: set[str]):
+    """SQLite authorizer: reads of results-database tables are limited to `allowed`
+    (the calling Conversation's live Result Tables)."""
+
+    def authorizer(action, arg1, arg2, dbname, source):
+        if action == sqlite3.SQLITE_READ and dbname == "results":
+            name = (arg1 or "").lower()
+            if not name.startswith("sqlite_") and name not in allowed:
+                return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+
+    return authorizer
+
+
+def run_query(telemetry_db: Path, results_db: Path, sql: str, allowed_tables: set[str] | None = None) -> dict:
+    """Run the SQL as CTAS into the results database. Returns Query Metadata only.
+
+    The SELECT may reference only the Result Tables in `allowed_tables` (the Conversation's own).
+    """
     try:
         select = validate_select(sql)
     except QueryRejected as e:
@@ -56,7 +73,9 @@ def run_query(telemetry_db: Path, results_db: Path, sql: str) -> dict:
     con.create_function("in_cidr", 2, in_cidr, deterministic=True)
     try:
         con.execute("ATTACH DATABASE ? AS results", (f"file:{results_db}?mode=rwc",))
+        con.set_authorizer(_result_table_guard({t.lower() for t in allowed_tables or ()}))
         con.execute(f"CREATE TABLE results.{name} AS {select}")
+        con.set_authorizer(None)
         con.commit()
         cols = [
             {"name": r[1], "type": r[2] or "ANY"}

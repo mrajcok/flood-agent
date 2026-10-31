@@ -13,6 +13,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from flood_defender import queries
+from flood_defender.store import ConversationStore
 
 mcp = FastMCP("flood-defender")
 
@@ -26,7 +27,12 @@ def run_query(sql: str, title: str) -> str:
     """Run a single read-only SELECT over the Telemetry Database. The output is stored in
     a new Result Table (named by the tool). Returns only Query Metadata, never rows."""
     telemetry, results = _paths()
-    return json.dumps(queries.run_query(telemetry, results, sql))
+    # The SELECT may reference only this Conversation's live Result Tables.
+    allowed = set()
+    if os.environ.get("APP_DB") and os.environ.get("CONVERSATION_ID"):
+        store = ConversationStore(Path(os.environ["APP_DB"]))
+        allowed = set(store.result_tables(os.environ["CONVERSATION_ID"]))
+    return json.dumps(queries.run_query(telemetry, results, sql, allowed))
 
 
 @mcp.tool()

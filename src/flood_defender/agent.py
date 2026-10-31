@@ -5,11 +5,13 @@ The HTTP/SSE layer is a thin adapter over `Agent.run_turn`. The LLM client is in
 
 import asyncio
 import json
+import sqlite3
 import sys
+import time
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator, Callable
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -29,6 +31,12 @@ class AgentConfig:
     semantic_layer: Path
     model: str
     app_db: Path | None = None  # defaults to app.db beside the results database
+    result_ttl_ms: int = 24 * 3600 * 1000  # Result Tables expire this long after last Conversation activity
+    clock: Callable[[], int] = lambda: int(time.time() * 1000)  # epoch ms; injectable for tests
+
+
+class ResultTableExpired(Exception):
+    """The Result Table existed but was deleted by expiry (HTTP layer maps this to 410)."""
 
 
 @dataclass
@@ -71,7 +79,8 @@ class Agent:
         self.config = config
         self.llm = llm
         self.semantic_layer = SemanticLayer(config.semantic_layer)
-        self.store = ConversationStore(config.app_db or config.results_db.parent / "app.db")
+        self.store = ConversationStore(config.app_db or config.results_db.parent / "app.db", config.clock)
+        self.sweep_expired()
 
     def open_conversation(self, conversation_id: str) -> Conversation:
         """Load a saved Conversation (KeyError if unknown)."""
@@ -79,8 +88,35 @@ class Agent:
             raise KeyError(conversation_id)
         return Conversation(conversation_id, self.store.messages(conversation_id))
 
+    def sweep_expired(self) -> None:
+        """Delete Result Tables whose Conversation has been idle past the TTL.
+
+        Runs on app start, before each turn, and before any row read.
+        """
+        names = [n for n in self.store.due_for_expiry(self.config.result_ttl_ms) if queries.RESULT_TABLE_RE.match(n)]
+        if not names:
+            return
+        if self.config.results_db.exists():
+            con = sqlite3.connect(self.config.results_db)
+            try:
+                for n in names:
+                    con.execute(f"DROP TABLE IF EXISTS {n}")
+                con.commit()
+            finally:
+                con.close()
+        self.store.mark_expired(names)
+
+    def is_expired(self, result_table: str) -> bool:
+        self.sweep_expired()
+        return self.store.is_expired(result_table)
+
     def fetch_rows(self, result_table: str, columns: list[str] | None = None) -> dict:
-        """Internal data path used by the row-JSON endpoint. Not an LLM tool."""
+        """Internal data path used by the row-JSON endpoint. Not an LLM tool.
+
+        Raises ResultTableExpired for a deleted table, KeyError for an unknown one.
+        """
+        if self.is_expired(result_table):
+            raise ResultTableExpired(f"Result Table {result_table} has expired.")
         return queries.fetch_rows(self.config.results_db, result_table, columns)
 
     async def run_turn(self, conversation: Conversation, user_message: str) -> AsyncIterator[Event]:
@@ -105,6 +141,7 @@ class Agent:
             await queue.put(e)
 
     async def _run(self, conversation: Conversation, user_message: str, queue: asyncio.Queue):
+        self.sweep_expired()
         if conversation.id is None:
             conversation.id = self.store.create_conversation(user_message[:60])
         turn_id = self.store.start_turn(conversation.id, user_message)
@@ -114,6 +151,8 @@ class Agent:
             env={
                 "TELEMETRY_DB": str(self.config.telemetry_db),
                 "RESULTS_DB": str(self.config.results_db),
+                "APP_DB": str(self.store.path),
+                "CONVERSATION_ID": conversation.id,
             },
         )
         async with AsyncExitStack() as stack:
@@ -124,7 +163,7 @@ class Agent:
 
             self._record(conversation, turn_id, {"role": "user", "content": user_message})
             for _ in range(MAX_LLM_STEPS):
-                messages = [{"role": "system", "content": self.semantic_layer.system_prompt()}]
+                messages = [{"role": "system", "content": self.semantic_layer.system_prompt(self.store.live_result_tables(conversation.id))}]
                 messages += conversation.messages
                 text, calls = "", []
                 async for chunk in self.llm.stream_chat(messages, tools):
@@ -152,7 +191,7 @@ class Agent:
                     message_id = self._record(
                         conversation, turn_id, {"role": "tool", "tool_call_id": c.id, "content": content}
                     )
-                    await self._emit_display(conversation, turn_id, message_id, content, queue)
+                    await self._emit_display(conversation, turn_id, message_id, content, queue, c.arguments, user_message)
             await queue.put(TurnEnd())
 
     def _record(self, conversation: Conversation, turn_id: int, message: dict) -> int:
@@ -160,7 +199,8 @@ class Agent:
         return self.store.add_message(conversation.id, turn_id, message)
 
     async def _emit_display(
-        self, conversation: Conversation, turn_id: int, message_id: int, tool_content: str, queue: asyncio.Queue
+        self, conversation: Conversation, turn_id: int, message_id: int, tool_content: str, queue: asyncio.Queue,
+        call_arguments: str = "{}", request: str = "",
     ):
         try:
             payload = json.loads(tool_content)
@@ -169,7 +209,13 @@ class Agent:
         if not isinstance(payload, dict):
             return
         if payload.get("success") and payload.get("result_table") and "display" not in payload:
-            self.store.add_result_table(conversation.id, payload["result_table"])
+            try:
+                title = json.loads(call_arguments or "{}").get("title", "")
+            except ValueError:
+                title = ""
+            self.store.add_result_table(
+                conversation.id, payload["result_table"], title, payload.get("columns", []), request
+            )
         display = payload.get("display")
         if display and self.store.owns_result_table(conversation.id, display["result_table"]):
             self.store.add_display(

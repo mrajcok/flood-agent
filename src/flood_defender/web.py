@@ -9,10 +9,10 @@ from html import escape
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
-from flood_defender.agent import Agent, Conversation, DisplayEvent, TextDelta, TurnEnd
+from flood_defender.agent import Agent, Conversation, DisplayEvent, ResultTableExpired, TextDelta, TurnEnd
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
@@ -24,6 +24,12 @@ def _sse(event: str, data: str) -> str:
 
 def create_app(agent: Agent) -> FastAPI:
     app = FastAPI(title="Flood Defender")
+
+    @app.exception_handler(ResultTableExpired)
+    def expired_handler(request: Request, exc: ResultTableExpired):
+        # Any endpoint reading Result Table rows (rows, CSV, chart rows) gets a clear 410.
+        return JSONResponse({"detail": "This result has expired and been deleted. Ask again to regenerate it."}, 410)
+
     pending: dict[str, tuple[Conversation, str]] = {}
 
     def sidebar(current: str | None) -> dict:
@@ -33,7 +39,11 @@ def create_app(agent: Agent) -> FastAPI:
         items = []
         for item in agent.store.transcript(conversation_id):
             if item["type"] == "display":
-                items.append({**item, "rows_url": f"/api/results/{item['result_table']}/rows"})
+                items.append({
+                    **item,
+                    "rows_url": f"/api/results/{item['result_table']}/rows",
+                    "expired": agent.is_expired(item["result_table"]),
+                })
             else:
                 m = item["message"]
                 if m["role"] in ("user", "assistant") and m.get("content"):

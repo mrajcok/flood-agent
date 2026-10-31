@@ -1,7 +1,7 @@
 """Run the app: python -m flood_defender
 
 Environment: OPENROUTER_API_KEY (required), OPENROUTER_MODEL (default
-anthropic/claude-sonnet-5.5), TELEMETRY_DB, RESULTS_DB, SEMANTIC_LAYER, HOST, PORT.
+anthropic/claude-sonnet-5.5), TELEMETRY_DB, RESULTS_DB, SEMANTIC_LAYER, RESULT_TTL_HOURS (default 24), HOST, PORT.
 """
 
 import os
@@ -21,6 +21,7 @@ def build_app():
         semantic_layer=Path(os.environ.get("SEMANTIC_LAYER", "semantic_layer.yaml")),
         app_db=Path(os.environ.get("APP_DB", "data/app.db")).resolve(),
         model=model_from_env(),
+        result_ttl_ms=int(float(os.environ.get("RESULT_TTL_HOURS", "24")) * 3600 * 1000),
     )
     config.results_db.parent.mkdir(parents=True, exist_ok=True)
     return create_app(Agent(config, OpenRouterClient.from_env()))

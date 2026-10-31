@@ -174,9 +174,11 @@ def run_query(
             return 1
         return 0
 
+    executed = None
     try:
         con.set_progress_handler(_progress, 1000)
-        con.execute(f"CREATE TABLE results.{name} AS SELECT * FROM (\n{select}\n) LIMIT {int(max_rows) + 1}")
+        executed = f"CREATE TABLE results.{name} AS SELECT * FROM (\n{select}\n) LIMIT {int(max_rows) + 1}"
+        con.execute(executed)
         con.set_progress_handler(None, 0)
         con.set_authorizer(None)
         con.commit()
@@ -184,7 +186,7 @@ def run_query(
         if count > max_rows:
             con.execute(f"DROP TABLE results.{name}")
             con.commit()
-            return {"success": False, "error": _ROWCAP_GUIDANCE.format(n=max_rows)}
+            return {"success": False, "error": _ROWCAP_GUIDANCE.format(n=max_rows), "executed_sql": executed}
         cols = [
             {"name": r[1], "type": r[2] or "ANY"}
             for r in con.execute(f"PRAGMA results.table_info({name})")
@@ -195,11 +197,12 @@ def run_query(
                 "success": False,
                 "error": _TIMEOUT_GUIDANCE.format(s=timeout_s),
                 "raw_error": str(e),
+                "executed_sql": executed,
             }
-        return {"success": False, "error": sanitize_error(str(e)), "raw_error": str(e)}
+        return {"success": False, "error": sanitize_error(str(e)), "raw_error": str(e), "executed_sql": executed}
     finally:
         con.close()
-    return {"success": True, "result_table": name, "columns": cols, "row_count": count}
+    return {"success": True, "result_table": name, "columns": cols, "row_count": count, "executed_sql": executed}
 
 
 def result_table_columns(results_db: Path, name: str) -> list[str] | None:

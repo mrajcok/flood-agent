@@ -32,7 +32,16 @@ class ToolCallChunk:
     arguments: str
 
 
-Chunk = TextChunk | ToolCallChunk
+@dataclass
+class UsageChunk:
+    """Token counts and cost for one LLM step (cost in USD, None if the provider omits it)."""
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost: float | None = None
+
+
+Chunk = TextChunk | ToolCallChunk | UsageChunk
 
 
 class LLMClient(Protocol):
@@ -53,9 +62,11 @@ class OpenRouterClient:
         return cls(key, model_from_env())
 
     async def stream_chat(self, messages, tools):
-        body = {"model": self.model, "messages": messages, "tools": tools, "stream": True}
+        body = {"model": self.model, "messages": messages, "tools": tools, "stream": True,
+            "stream_options": {"include_usage": True}, "usage": {"include": True}}
         headers = {"Authorization": f"Bearer {self.api_key}"}
         pending: dict[int, dict] = {}
+        usage = None
         async with httpx.AsyncClient(timeout=120) as client:
             async with client.stream("POST", self.url, json=body, headers=headers) as resp:
                 resp.raise_for_status()
@@ -65,7 +76,11 @@ class OpenRouterClient:
                     payload = line[5:].strip()
                     if payload == "[DONE]":
                         break
-                    choices = json.loads(payload).get("choices") or []
+                    obj = json.loads(payload)
+                    if obj.get("usage"):
+                        u = obj["usage"]
+                        usage = UsageChunk(u.get("prompt_tokens", 0), u.get("completion_tokens", 0), u.get("cost"))
+                    choices = obj.get("choices") or []
                     if not choices:
                         continue
                     delta = choices[0].get("delta", {})
@@ -79,3 +94,5 @@ class OpenRouterClient:
                         slot["args"] += fn.get("arguments") or ""
         for _, slot in sorted(pending.items()):
             yield ToolCallChunk(slot["id"], slot["name"], slot["args"] or "{}")
+        if usage:
+            yield usage

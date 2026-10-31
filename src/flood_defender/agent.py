@@ -27,6 +27,7 @@ class AgentConfig:
     results_db: Path
     semantic_layer: Path
     model: str
+    chart_row_cap: int = 10_000
 
 
 @dataclass
@@ -45,7 +46,9 @@ class TextDelta:
 class DisplayEvent:
     kind: str
     result_table: str
-    columns: list[str]
+    columns: list[str] = field(default_factory=list)
+    spec: dict | None = None  # charts: Chart Spec after data-reference resolution
+    source_spec: dict | None = None  # charts: Chart Spec as the LLM wrote it (for the Trace)
 
 
 @dataclass
@@ -63,6 +66,18 @@ def _openai_tool(t) -> dict:
     }
 
 
+def _resolve_data(node, table: str, url: dict):
+    """Copy of the Chart Spec with every {"name": table} data reference replaced by the URL."""
+    if isinstance(node, dict):
+        return {
+            k: (dict(url) if k == "data" and v == {"name": table} else _resolve_data(v, table, url))
+            for k, v in node.items()
+        }
+    if isinstance(node, list):
+        return [_resolve_data(i, table, url) for i in node]
+    return node
+
+
 class Agent:
     def __init__(self, config: AgentConfig, llm: LLMClient):
         self.config = config
@@ -72,6 +87,10 @@ class Agent:
     def fetch_rows(self, result_table: str, columns: list[str] | None = None) -> dict:
         """Internal data path used by the row-JSON endpoint. Not an LLM tool."""
         return queries.fetch_rows(self.config.results_db, result_table, columns)
+
+    def fetch_chart_rows(self, result_table: str) -> list[dict]:
+        """Internal data path for the chart-rows endpoint (chart cap). Not an LLM tool."""
+        return queries.fetch_records(self.config.results_db, result_table, self.config.chart_row_cap)
 
     async def run_turn(self, conversation: Conversation, user_message: str) -> AsyncIterator[Event]:
         """Run one turn. The MCP session lives entirely inside a single producer task."""
@@ -101,6 +120,7 @@ class Agent:
             env={
                 "TELEMETRY_DB": str(self.config.telemetry_db),
                 "RESULTS_DB": str(self.config.results_db),
+                "CHART_ROW_CAP": str(self.config.chart_row_cap),
             },
         )
         async with AsyncExitStack() as stack:
@@ -148,5 +168,14 @@ class Agent:
         except ValueError:
             return
         display = payload.get("display") if isinstance(payload, dict) else None
-        if display:
+        if not display:
+            return
+        if display["kind"] == "chart":
+            source = display["spec"]
+            table = display["result_table"]
+            url = {"url": f"/api/results/{table}/chart-rows"}
+            await queue.put(
+                DisplayEvent("chart", table, spec=_resolve_data(source, table, url), source_spec=source)
+            )
+        else:
             await queue.put(DisplayEvent(display["kind"], display["result_table"], display["columns"]))

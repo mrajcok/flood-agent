@@ -95,10 +95,10 @@ async def test_failed_query_error_is_returned_without_data(make_agent):
     assert "error" in meta
 
 
-async def test_only_run_query_and_show_table_are_llm_tools(make_agent):
+async def test_only_run_query_show_table_and_show_chart_are_llm_tools(make_agent):
     llm = ScriptedLLM([TextChunk("hi")])
     await collect(make_agent(llm), "hello")
-    assert sorted(llm.tools_seen_names) == ["run_query", "show_table"]
+    assert sorted(llm.tools_seen_names) == ["run_query", "show_chart", "show_table"]
 
 
 async def test_system_prompt_contains_semantic_layer_and_now(make_agent):

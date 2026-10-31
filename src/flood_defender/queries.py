@@ -81,3 +81,20 @@ def fetch_rows(results_db: Path, name: str, columns: list[str] | None = None, li
     finally:
         con.close()
     return {"columns": cols, "rows": rows}
+
+
+def result_table_row_count(results_db: Path, name: str) -> int | None:
+    if result_table_columns(results_db, name) is None:
+        return None
+    con = sqlite3.connect(f"file:{results_db}?mode=ro", uri=True)
+    try:
+        return con.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0]
+    finally:
+        con.close()
+
+
+def fetch_records(results_db: Path, name: str, limit: int) -> list[dict]:
+    """Internal data path for charts: rows as JSON objects (Vega-Lite's shape), capped at
+    `limit`. Never an LLM tool."""
+    data = fetch_rows(results_db, name, limit=limit)
+    return [dict(zip(data["columns"], row)) for row in data["rows"]]

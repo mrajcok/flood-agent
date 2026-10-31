@@ -1,0 +1,26 @@
+# Canned Prompts for Fake Mode (LLM_BACKEND=fake). Hand-edited.
+#
+# Each entry is a fixed user message plus the scripted LLM replies that answer it.
+#   id      stable slug
+#   prompt  the exact user message: shown in the picker and matched exactly by the fake
+#   steps   one per simulated LLM call: `text` (streamed) and/or `tool_calls` (name + args)
+#   expect  the declared outcome the test suite checks (`displays`: Display kinds in order)
+#
+# The SQL assumes the data came from the generator with its default seed and attack windows
+# (the same assumption as the eval golden set). Regenerate data with the default seed.
+
+- id: flow-count
+  prompt: How many flows are there in total?
+  steps:
+    - tool_calls:
+        - name: run_query
+          args:
+            sql: SELECT COUNT(*) AS flow_count FROM flows
+            title: Total flows
+    - tool_calls:
+        - name: show_table
+          args:
+            result_table: "{result_table}"
+    - text: "Here is the total number of flows."
+  expect:
+    displays: [table]

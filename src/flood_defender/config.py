@@ -7,6 +7,7 @@ call (in request `_meta`), and it scopes which Result Tables a call may use.
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Literal
 
 from dotenv import dotenv_values
 from pydantic import Field, SecretStr
@@ -43,8 +44,13 @@ class Settings(BaseSettings):
         env_file=".env", env_ignore_empty=True, extra="ignore", toml_file=DEFAULTS_FILE
     )
 
+    llm_backend: Literal["openrouter", "fake"] = Field(
+        description="openrouter calls a real model (needs OPENROUTER_API_KEY). fake is Fake Mode: a scripted\n"
+        "stand-in answers Canned Prompts listed on the page, so no model is called and no key is needed.\n"
+        "Try it for one run with: LLM_BACKEND=fake uv run python -m flood_defender"
+    )
     openrouter_api_key: SecretStr | None = Field(
-        None, description="OpenRouter API key. Required; the only setting without a default. Never commit a real key."
+        None, description="OpenRouter API key. Required when LLM_BACKEND is openrouter; the only setting without a default. Never commit a real key."
     )
     openrouter_model: str = Field(
         description="Model used for chat.\n"
@@ -55,7 +61,10 @@ class Settings(BaseSettings):
         description="Read-only flow records. Create with: uv run python -m flood_defender.generator data/telemetry.db"
     )
     results_db: Path = Field(description="Writable database holding Result Tables.")
-    app_db: Path = Field(description="Conversations, messages, Displays and Traces.")
+    app_db: Path = Field(
+        description="Conversations, messages, Displays and Traces.\n"
+        "Tip: use a separate database for Fake Mode, for example data/fake.db."
+    )
     semantic_layer: Path = Field(
         description="Hand-authored Semantic Layer (the generator also writes window_start/window_end into it)."
     )
@@ -105,7 +114,7 @@ class Settings(BaseSettings):
             results_db=self.results_db.resolve(),
             semantic_layer=self.semantic_layer.resolve(),
             app_db=self.app_db.resolve(),
-            model=self.openrouter_model,
+            model="fake" if self.llm_backend == "fake" else self.openrouter_model,
             result_ttl_ms=int(self.result_ttl_hours * 3600 * 1000),
             query_timeout_s=self.query_timeout_s,
             max_result_rows=self.max_result_rows,

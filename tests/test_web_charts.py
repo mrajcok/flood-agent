@@ -2,15 +2,13 @@
 
 import json
 
-from fastapi.testclient import TestClient
 
 from flood_defender.llm import TextChunk
-from flood_defender.web import create_app
 
 from conftest import ScriptedLLM, last_tool_result, tool_call
 
 
-def test_chart_display_is_streamed_and_rows_served_from_chart_endpoint(make_agent):
+def test_chart_display_is_streamed_and_rows_served_from_chart_endpoint(build_agent, web_client):
     def spec(msgs):
         t = last_tool_result(msgs)["result_table"]
         return [
@@ -32,7 +30,7 @@ def test_chart_display_is_streamed_and_rows_served_from_chart_endpoint(make_agen
         spec,
         [TextChunk("chart")],
     )
-    client = TestClient(create_app(make_agent(llm)))
+    client = web_client(build_agent(llm))
     posted = client.post("/chat", data={"message": "chart bytes"})
     stream_url = posted.text.split('sse-connect="')[1].split('"')[0]
     body = client.get(stream_url).text
@@ -43,10 +41,10 @@ def test_chart_display_is_streamed_and_rows_served_from_chart_endpoint(make_agen
     assert rows[0] == {"dport": 8443, "bytes": 987_654}
 
 
-def test_page_pins_vega_cdn_versions_and_component_finalizes_view(make_agent):
+def test_page_pins_vega_cdn_versions_and_component_finalizes_view(build_agent, web_client):
     import re
 
-    client = TestClient(create_app(make_agent(ScriptedLLM())))
+    client = web_client(build_agent(ScriptedLLM()))
     page = client.get("/").text
     for lib in ("vega", "vega-lite", "vega-embed"):
         assert re.search(rf"/{lib}@\d+\.\d+\.\d+\"", page), lib
@@ -56,12 +54,12 @@ def test_page_pins_vega_cdn_versions_and_component_finalizes_view(make_agent):
     assert "finalize()" in tpl and "destroy()" in tpl
 
 
-def test_chart_rows_endpoint_rejects_unknown_tables(make_agent):
-    client = TestClient(create_app(make_agent(ScriptedLLM())))
+def test_chart_rows_endpoint_rejects_unknown_tables(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM()))
     assert client.get("/api/results/nope/chart-rows").status_code == 404
 
 
-def test_reopening_rerenders_chart_display(make_agent):
+def test_reopening_rerenders_chart_display(build_agent, web_client):
     def spec(msgs):
         t = last_tool_result(msgs)["result_table"]
         return [
@@ -83,14 +81,14 @@ def test_reopening_rerenders_chart_display(make_agent):
         spec,
         [TextChunk("chart")],
     )
-    client = TestClient(create_app(make_agent(llm)))
+    client = web_client(build_agent(llm))
     posted = client.post("/chat", data={"message": "chart bytes"})
     import re
 
     cid = re.search(r'name="conversation_id" value="([0-9a-f]+)"', posted.text).group(1)
     client.get(posted.text.split('sse-connect="')[1].split('"')[0])
 
-    restarted = TestClient(create_app(make_agent(ScriptedLLM())))
+    restarted = web_client(build_agent(ScriptedLLM()))
     page = restarted.get(f"/c/{cid}").text
     assert "vegaEmbed" in page and "/chart-rows" in page
     import html

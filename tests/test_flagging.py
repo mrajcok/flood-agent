@@ -5,12 +5,10 @@ import json
 import re
 
 import pytest
-from fastapi.testclient import TestClient
 
 from flood_defender.agent import Conversation, FlagEvent, TraceReady
 from flood_defender.flagging import find_unseen_values
 from flood_defender.llm import TextChunk
-from flood_defender.web import create_app
 
 from conftest import ScriptedLLM, collect, last_tool_result, tool_call
 
@@ -28,7 +26,7 @@ def trace_flags(events):
 
 async def test_invented_ip_and_large_number_are_flagged(make_agent):
     llm = ScriptedLLM([TextChunk("The top talker is 203.0.113.99 with 4.2M packets.")])
-    events = await collect(make_agent(llm), "who is the top talker?")
+    events = await collect(await make_agent(llm), "who is the top talker?")
     assert sorted(flags_of(events)) == ["203.0.113.99", "4.2M"]
     entries = trace_flags(events)
     assert {(e["type"], e["token"]) for e in entries} == {("ip", "203.0.113.99"), ("number", "4.2M")}
@@ -47,7 +45,7 @@ async def test_values_the_llm_legitimately_knows_are_not_flagged(make_agent):
             "I filtered on etime < 1600000100000 and limit 1,000,000."  # own SQL
         )],
     )
-    events = await collect(make_agent(llm), "Look at 198.51.100.7 around 3 Gbps")
+    events = await collect(await make_agent(llm), "Look at 198.51.100.7 around 3 Gbps")
     assert flags_of(events) == []
     assert trace_flags(events) == []
 
@@ -58,12 +56,12 @@ async def test_row_count_in_query_metadata_is_not_flagged(make_agent):
         [tool_call("run_query", sql="SELECT * FROM flows", title="t")],
         lambda msgs: [TextChunk(f"Got {last_tool_result(msgs)['row_count']} rows.")],
     )
-    events = await collect(make_agent(llm), "show flows")
+    events = await collect(await make_agent(llm), "show flows")
     assert flags_of(events) == []
 
 
 async def test_assistants_own_earlier_prose_does_not_whitelist_a_value(make_agent):
-    agent = make_agent(ScriptedLLM([TextChunk("It was 203.0.113.99.")], [TextChunk("Again 203.0.113.99.")]))
+    agent = await make_agent(ScriptedLLM([TextChunk("It was 203.0.113.99.")], [TextChunk("Again 203.0.113.99.")]))
     conv = Conversation()
     first = await collect(agent, "q1", conv)
     second = await collect(agent, "q2", conv)
@@ -72,7 +70,7 @@ async def test_assistants_own_earlier_prose_does_not_whitelist_a_value(make_agen
 
 async def test_flags_never_reach_the_llm(make_agent):
     llm = ScriptedLLM([TextChunk("Host 203.0.113.99 sent 4.2M packets.")], [TextChunk("fine")])
-    agent = make_agent(llm)
+    agent = await make_agent(llm)
     conv = Conversation()
     await collect(agent, "first", conv)
     await collect(agent, "second", agent.open_conversation(conv.id))
@@ -90,30 +88,30 @@ def ask(client, message, conversation_id=""):
     return cid, client.get(stream_url).text
 
 
-def test_flag_note_streams_and_survives_restart(make_agent):
+def test_flag_note_streams_and_survives_restart(build_agent, web_client):
     llm = ScriptedLLM([TextChunk("Host 203.0.113.99 sent 4.2M <b>packets</b>.")])
-    client = TestClient(create_app(make_agent(llm)))
+    client = web_client(build_agent(llm))
     cid, body = ask(client, "q")
     assert "event: flag" in body
     flag_part = body.split("event: flag")[1].split("event: ")[0]
     assert "203.0.113.99" in flag_part and "4.2M" in flag_part and "<b>" not in flag_part
 
-    restarted = TestClient(create_app(make_agent(ScriptedLLM())))
+    restarted = web_client(build_agent(ScriptedLLM()))
     page = restarted.get(f"/c/{cid}").text
     assert 'class="flag-note"' in page and "203.0.113.99" in page and "4.2M" in page
     assert page.index('class="flag-note"') < page.index('class="trace"')
     assert "&lt;b&gt;packets&lt;/b&gt;" in page
 
 
-def test_unflagged_turn_has_no_flag_note(make_agent):
-    client = TestClient(create_app(make_agent(ScriptedLLM([TextChunk("Nothing numeric here, 42 rows.")]))))
+def test_unflagged_turn_has_no_flag_note(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("Nothing numeric here, 42 rows.")])))
     cid, body = ask(client, "q")
     assert "event: flag" not in body
     assert 'class="flag-note"' not in client.get(f"/c/{cid}").text
 
 
-def test_trace_renders_flag_entries_readably(make_agent):
-    client = TestClient(create_app(make_agent(ScriptedLLM([TextChunk("9.9.9.9")]))))
+def test_trace_renders_flag_entries_readably(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("9.9.9.9")])))
     cid, _ = ask(client, "q")
     page = client.get(f"/c/{cid}").text
     assert 'class="trace-entry trace-flag"' in page and "Flagged IP address" in page

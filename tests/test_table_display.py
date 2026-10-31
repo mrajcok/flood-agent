@@ -7,10 +7,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 from flood_defender import queries
-from flood_defender.web import create_app
 
 from conftest import ScriptedLLM, query_limits
 
@@ -36,10 +34,10 @@ GEN = (
 
 
 @pytest.fixture
-def env(make_agent, semantic_layer_path):
+def env(build_agent, web_client, semantic_layer_path):
     semantic_layer_path.write_text(LAYER)
-    agent = make_agent(ScriptedLLM())
-    client = TestClient(create_app(agent))
+    agent = build_agent(ScriptedLLM())
+    client = web_client(agent)
 
     def table(sql=GEN):
         meta = queries.run_query(agent.config.telemetry_db, agent.config.results_db, sql, **query_limits())

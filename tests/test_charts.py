@@ -60,7 +60,7 @@ def displays(events):
     ],
 )
 async def test_valid_chart_spec_yields_chart_display_pointing_at_row_endpoint(make_agent, mark, sql, encoding):
-    agent = make_agent(chart_script(lambda t: chart_spec(t, mark, encoding), sql))
+    agent = await make_agent(chart_script(lambda t: chart_spec(t, mark, encoding), sql))
     ds = displays(await collect(agent, "chart it"))
     assert len(ds) == 1 and ds[0].kind == "chart"
     d = ds[0]
@@ -71,7 +71,7 @@ async def test_valid_chart_spec_yields_chart_display_pointing_at_row_endpoint(ma
 
 
 async def test_pre_and_post_resolution_specs_are_both_retained(make_agent):
-    d = displays(await collect(make_agent(chart_script(chart_spec)), "chart it"))[0]
+    d = displays(await collect(await make_agent(chart_script(chart_spec)), "chart it"))[0]
     assert d.source_spec["data"] == {"name": d.result_table}
     assert d.spec["data"] == {"url": f"/api/results/{d.result_table}/chart-rows"}
 
@@ -95,7 +95,7 @@ async def test_inline_or_foreign_data_is_rejected_with_guidance(make_agent, muta
         return s
 
     llm = chart_script(spec_for)
-    events = await collect(make_agent(llm), "chart it")
+    events = await collect(await make_agent(llm), "chart it")
     assert not displays(events)
     result = last_tool_result(llm.calls[2])
     assert result["success"] is False
@@ -104,8 +104,7 @@ async def test_inline_or_foreign_data_is_rejected_with_guidance(make_agent, muta
 
 async def test_chart_over_row_cap_is_refused_with_guidance_to_aggregate(make_agent):
     llm = chart_script(chart_spec)
-    agent = make_agent(llm)
-    agent.config.chart_row_cap = 1
+    agent = await make_agent(llm, chart_row_cap=1)  # the server's launch settings come from the config
     events = await collect(agent, "chart it")
     assert not displays(events)
     result = last_tool_result(llm.calls[2])
@@ -121,14 +120,14 @@ async def test_table_and_chart_displays_come_in_order(make_agent):
         ],
         [TextChunk("both")],
     )
-    events = await collect(make_agent(llm), "both")
+    events = await collect(await make_agent(llm), "both")
     assert [e.kind for e in displays(events)] == ["table", "chart"]
     assert sorted(llm.tools_seen_names) == ["run_query", "show_chart", "show_table"]
 
 
 async def test_no_telemetry_value_reaches_the_llm_with_charts(make_agent, telemetry_db):
     llm = chart_script(chart_spec, "SELECT sip, etime, SUM(bytes) AS total_bytes FROM flows GROUP BY sip, etime")
-    await collect(make_agent(llm), "chart")
+    await collect(await make_agent(llm), "chart")
     values = {v for v in all_telemetry_values(telemetry_db) if len(v) >= 4}
     for call in llm.calls:
         for m in call:

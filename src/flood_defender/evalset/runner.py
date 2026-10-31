@@ -106,11 +106,12 @@ async def _run_question(model, q, ref, telemetry_db, semantic_layer, client_fact
     retries, error = 0, None
     start = time.perf_counter()
     try:
-        async for event in agent.run_turn(Conversation(), q.question):
-            if isinstance(event, TraceEntry) and event.kind == "query_error":
-                retries += 1
-            elif isinstance(event, TurnError):
-                error = event.detail
+        async with agent:
+            async for event in agent.run_turn(Conversation(), q.question):
+                if isinstance(event, TraceEntry) and event.kind == "query_error":
+                    retries += 1
+                elif isinstance(event, TurnError):
+                    error = event.detail
     except Exception as e:  # a failed model call is a result, not a crash of the whole run
         error = _describe(e)
     latency = time.perf_counter() - start

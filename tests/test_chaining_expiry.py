@@ -3,11 +3,9 @@
 import re
 
 import pytest
-from fastapi.testclient import TestClient
 
 from flood_defender.agent import Conversation, DisplayEvent
 from flood_defender.llm import TextChunk
-from flood_defender.web import create_app
 
 from conftest import ScriptedLLM, all_telemetry_values, collect, last_tool_result, query_limits, tool_call
 
@@ -26,7 +24,7 @@ class Clock:
 async def run_first(make_agent, request="bytes per port please", **cfg):
     """Turn 1: run_query only. Returns (agent, llm, conversation, result table name)."""
     llm = ScriptedLLM([tool_call("run_query", sql=BY_PORT, title="Bytes per port")], [TextChunk("done")])
-    agent = make_agent(llm, **cfg)
+    agent = await make_agent(llm, **cfg)
     conv = Conversation()
     await collect(agent, request, conv)
     return agent, llm, conv, last_tool_result(llm.calls[1])["result_table"]
@@ -118,14 +116,14 @@ def chat(client, message, conversation_id=""):
     return cid, body
 
 
-def test_expired_display_renders_expired_and_rows_endpoint_gives_410(make_agent):
+def test_expired_display_renders_expired_and_rows_endpoint_gives_410(build_agent, web_client):
     clock = Clock()
     llm = ScriptedLLM(
         [tool_call("run_query", sql=BY_PORT, title="t")],
         lambda msgs: [tool_call("show_table", result_table=last_tool_result(msgs)["result_table"])],
         [TextChunk("here")],
     )
-    client = TestClient(create_app(make_agent(llm, clock=clock, result_ttl_ms=HOUR)))
+    client = web_client(build_agent(llm, clock=clock, result_ttl_ms=HOUR))
     cid, body = chat(client, "ports")
     rows_url = body.split('data-rows-url="')[1].split('"')[0]
     assert client.get(rows_url).status_code == 200
@@ -155,7 +153,7 @@ async def test_same_turn_chain_selects_from_table_created_earlier_in_the_turn(ma
         lambda msgs: [tool_call("show_table", result_table=last_tool_result(msgs)["result_table"])],
         [TextChunk("ok")],
     )
-    agent = make_agent(llm)
+    agent = await make_agent(llm)
     events = await collect(agent, "big ports", Conversation())
     d = next(e for e in events if isinstance(e, DisplayEvent))
     assert agent.fetch_rows(d.result_table)["rows"] == [[8443]]

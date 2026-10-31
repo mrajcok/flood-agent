@@ -2,10 +2,8 @@
 
 import re
 
-from fastapi.testclient import TestClient
 
 from flood_defender.llm import TextChunk
-from flood_defender.web import create_app
 
 from conftest import ScriptedLLM, last_tool_result, tool_call
 
@@ -33,11 +31,11 @@ def main_pane(page: str) -> str:
     return page.split("</aside>")[1]
 
 
-def test_conversation_survives_restart_and_is_listed_in_sidebar(make_agent):
-    client = TestClient(create_app(make_agent(ScriptedLLM(*table_script()))))
+def test_conversation_survives_restart_and_is_listed_in_sidebar(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM(*table_script())))
     cid, _ = ask(client, "top ports by bytes")
 
-    restarted = TestClient(create_app(make_agent(ScriptedLLM())))  # new app, same files
+    restarted = web_client(build_agent(ScriptedLLM()))  # new app, same files
     home = restarted.get("/").text
     assert f'href="/c/{cid}"' in home and "top ports by bytes" in home
 
@@ -45,30 +43,30 @@ def test_conversation_survives_restart_and_is_listed_in_sidebar(make_agent):
     assert "top ports by bytes" in main_pane(reopened) and "Here you go." in reopened
 
 
-def test_reopening_rerenders_table_display_from_its_result_table(make_agent):
-    client = TestClient(create_app(make_agent(ScriptedLLM(*table_script()))))
+def test_reopening_rerenders_table_display_from_its_result_table(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM(*table_script())))
     cid, _ = ask(client, "top ports")
 
-    restarted = TestClient(create_app(make_agent(ScriptedLLM())))
+    restarted = web_client(build_agent(ScriptedLLM()))
     page = restarted.get(f"/c/{cid}").text
     rows_url = page.split('data-rows-url="')[1].split('"')[0]
     assert restarted.get(rows_url).json()["rows"] == [[8443, 1_111_111], [9053, 555_321]]
 
 
-def test_follow_up_in_reopened_conversation_sees_prior_history(make_agent):
-    client = TestClient(create_app(make_agent(ScriptedLLM(*table_script()))))
+def test_follow_up_in_reopened_conversation_sees_prior_history(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM(*table_script())))
     cid, _ = ask(client, "first question")
 
     second = ScriptedLLM([TextChunk("ok")])
-    restarted = TestClient(create_app(make_agent(second)))
+    restarted = web_client(build_agent(second))
     ask(restarted, "second question", cid)
     sent = second.all_sent_text()
     assert "first question" in sent and "second question" in sent
 
 
-def test_new_conversation_starts_clean_and_is_separate(make_agent):
+def test_new_conversation_starts_clean_and_is_separate(build_agent, web_client):
     llm = ScriptedLLM(*table_script("first reply"), [TextChunk("second reply")])
-    client = TestClient(create_app(make_agent(llm)))
+    client = web_client(build_agent(llm))
     cid1, _ = ask(client, "alpha question")
     cid2, _ = ask(client, "beta question", "")  # empty id = new Conversation
     assert cid1 != cid2
@@ -83,8 +81,8 @@ def test_new_conversation_starts_clean_and_is_separate(make_agent):
     assert "alpha question" not in main_pane(home)
 
 
-def test_result_tables_are_not_mixed_between_conversations(make_agent):
-    client = TestClient(create_app(make_agent(ScriptedLLM(*table_script(), *table_script()))))
+def test_result_tables_are_not_mixed_between_conversations(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM(*table_script(), *table_script())))
     cid1, body1 = ask(client, "q one")
     cid2, body2 = ask(client, "q two")
     t1 = body1.split('data-rows-url="')[1].split('"')[0]
@@ -95,8 +93,8 @@ def test_result_tables_are_not_mixed_between_conversations(make_agent):
     assert t2 in page2 and t1 not in page2
 
 
-def test_unknown_conversation_is_404(make_agent):
-    client = TestClient(create_app(make_agent(ScriptedLLM())))
+def test_unknown_conversation_is_404(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM()))
     assert client.get("/c/deadbeef").status_code == 404
 
 
@@ -104,13 +102,13 @@ async def test_agent_cannot_display_another_conversations_result_table(make_agen
     from conftest import collect
     from flood_defender.agent import Conversation, DisplayEvent
 
-    agent = make_agent(ScriptedLLM(*table_script()))
+    agent = await make_agent(ScriptedLLM(*table_script()))
     first = Conversation()
     events = await collect(agent, "q", first)
     table = next(e.result_table for e in events if isinstance(e, DisplayEvent))
 
     intruder = ScriptedLLM([tool_call("show_table", result_table=table)], [TextChunk("x")])
-    other = make_agent(intruder)
+    other = await make_agent(intruder)
     events = await collect(other, "steal", Conversation())
     assert not [e for e in events if isinstance(e, DisplayEvent)]
 

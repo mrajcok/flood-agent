@@ -3,11 +3,9 @@
 import json
 import re
 
-from fastapi.testclient import TestClient
 
 from flood_defender.agent import Conversation, TraceReady
 from flood_defender.llm import TextChunk
-from flood_defender.web import create_app
 
 from conftest import ScriptedLLM, collect, last_tool_result, tool_call
 
@@ -26,7 +24,7 @@ def chart_script():
 
 
 async def run(make_agent, llm, message="q", conversation=None):
-    agent = make_agent(llm)
+    agent = await make_agent(llm)
     events = await collect(agent, message, conversation)
     traces = [e for e in events if isinstance(e, TraceReady)]
     assert len(traces) == 1
@@ -131,23 +129,23 @@ def ask(client, message, conversation_id=""):
     return cid, client.get(stream_url).text
 
 
-def test_trace_is_collapsed_details_in_stream_and_after_restart(make_agent):
-    client = TestClient(create_app(make_agent(ScriptedLLM(*chart_script()))))
+def test_trace_is_collapsed_details_in_stream_and_after_restart(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM(*chart_script())))
     cid, body = ask(client, "chart please")
     assert "event: trace" in body
     assert "<details" in body and "<details open" not in body
 
-    restarted = TestClient(create_app(make_agent(ScriptedLLM())))
+    restarted = web_client(build_agent(ScriptedLLM()))
     page = restarted.get(f"/c/{cid}").text
     assert "<details" in page and "<details open" not in page
     assert page.count('class="trace"') == 1
     assert "CREATE TABLE results.rt_" in page and "test/model" in page
 
 
-def test_trace_content_is_html_escaped(make_agent):
+def test_trace_content_is_html_escaped(build_agent, web_client):
     sql = "SELECT '<script>alert(1)</script>' AS x FROM flows"
     llm = ScriptedLLM([tool_call("run_query", sql=sql, title="t")], [TextChunk("<b>hi</b>")])
-    client = TestClient(create_app(make_agent(llm)))
+    client = web_client(build_agent(llm))
     cid, body = ask(client, "q")
     page = client.get(f"/c/{cid}").text
     for text in (body, page):
@@ -155,9 +153,9 @@ def test_trace_content_is_html_escaped(make_agent):
         assert "&lt;script&gt;alert(1)&lt;/script&gt;" in text or "\\u003cscript" in text
 
 
-def test_each_turn_has_its_own_trace_on_reopen(make_agent):
+def test_each_turn_has_its_own_trace_on_reopen(build_agent, web_client):
     llm = ScriptedLLM([TextChunk("one")], [TextChunk("two")])
-    client = TestClient(create_app(make_agent(llm)))
+    client = web_client(build_agent(llm))
     cid, _ = ask(client, "a")
     ask(client, "b", cid)
     assert client.get(f"/c/{cid}").text.count('class="trace"') == 2

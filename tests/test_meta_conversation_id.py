@@ -37,7 +37,7 @@ async def test_launch_environment_has_no_conversation_id(make_agent):
             seen["env"] = dict(kv.split(b"=", 1) for kv in f.read().split(b"\0") if b"=" in kv)
         return [TextChunk("ok")]
 
-    await collect(make_agent(ScriptedLLM(peek)), "hi")
+    await collect(await make_agent(ScriptedLLM(peek)), "hi")
     assert b"TELEMETRY_DB" in seen["env"]
     assert b"CONVERSATION_ID" not in seen["env"]
 
@@ -51,7 +51,7 @@ async def test_no_tool_schema_mentions_a_conversation_id(make_agent):
             async for c in super().stream_chat(messages, tools):
                 yield c
 
-    await collect(make_agent(Spy([TextChunk("ok")])), "hi")
+    await collect(await make_agent(Spy([TextChunk("ok")])), "hi")
     assert "conversation" not in seen["tools"]
     assert "_meta" not in seen["tools"]
 
@@ -86,7 +86,7 @@ async def test_tool_calls_see_only_tables_of_the_meta_conversation(make_agent):
         [tool_call("run_query", sql="SELECT dport FROM flows", title="t")],
         lambda m: results.append(last_tool_result(m)) or [TextChunk("done")],
     )
-    agent = make_agent(llm)
+    agent = await make_agent(llm)
     conv = Conversation()
     await collect(agent, "q", conv)
     table = results[0]["result_table"]

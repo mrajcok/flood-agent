@@ -4,6 +4,7 @@ A thin layer over `Agent.run_turn`. The row-JSON endpoint is the Agent's interna
 path to the browser; it is a plain HTTP route, never registered as an MCP tool.
 """
 
+import json
 import uuid
 from html import escape
 from pathlib import Path
@@ -50,6 +51,11 @@ def create_app(agent: Agent) -> FastAPI:
                 async for ev in agent.run_turn(conversation, message):
                     if isinstance(ev, TextDelta):
                         yield _sse("text", escape(ev.text))
+                    elif isinstance(ev, DisplayEvent) and ev.kind == "chart":
+                        html = TEMPLATES.get_template("display_chart.html").render(
+                            spec_json=json.dumps(ev.spec)
+                        )
+                        yield _sse("display", html)
                     elif isinstance(ev, DisplayEvent):
                         html = TEMPLATES.get_template("display_table.html").render(
                             rows_url=f"/api/results/{ev.result_table}/rows",
@@ -69,6 +75,14 @@ def create_app(agent: Agent) -> FastAPI:
     def rows(result_table: str):
         try:
             return agent.fetch_rows(result_table)
+        except KeyError:
+            raise HTTPException(404, "unknown result table")
+
+    @app.get("/api/results/{result_table}/chart-rows")
+    def chart_rows(result_table: str):
+        """Internal data path for charts (row objects, chart cap). Never an MCP tool."""
+        try:
+            return agent.fetch_chart_rows(result_table)
         except KeyError:
             raise HTTPException(404, "unknown result table")
 

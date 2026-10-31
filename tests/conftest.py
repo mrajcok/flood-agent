@@ -156,8 +156,7 @@ def config_for_test(tmp_path, telemetry_db, semantic_layer, **overrides) -> Agen
         results_db=tmp_path / "results.db",
         app_db=tmp_path / "app.db",
         semantic_layer=semantic_layer,
-        model="test/model",
-        **overrides,
+        **{"model": "test/model", **overrides},
     )
 
 
@@ -198,7 +197,7 @@ def web_client():
     """`web_client(agent)` -> a TestClient used as a context manager, so the app lifespan runs
     (starting the Agent's MCP server) and is left again at teardown."""
     with ExitStack() as stack:
-        yield lambda agent: stack.enter_context(TestClient(create_app(agent)))
+        yield lambda agent, **kwargs: stack.enter_context(TestClient(create_app(agent, **kwargs)))
 
 
 def mcp_children() -> list[int]:

@@ -8,6 +8,7 @@ import uvicorn
 
 from flood_defender.agent import Agent
 from flood_defender.config import Settings
+from flood_defender.fake_llm import FakeClient, load_canned_prompts
 from flood_defender.llm import OpenRouterClient
 from flood_defender.web import create_app
 
@@ -16,6 +17,9 @@ def build_app(settings: Settings | None = None):
     settings = settings or Settings()  # pyright: ignore[reportCallIssue]  # pydantic-settings fills fields from env/TOML
     config = settings.agent_config()
     config.results_db.parent.mkdir(parents=True, exist_ok=True)
+    if settings.llm_backend == "fake":
+        canned = load_canned_prompts()
+        return create_app(Agent(config, FakeClient(canned)), canned_prompts=canned)
     return create_app(Agent(config, OpenRouterClient(settings.require_api_key(), config.model)))
 
 

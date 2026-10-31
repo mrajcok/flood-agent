@@ -43,6 +43,7 @@
       {% if item.type == "user" %}<div class="user">{{ item.text }}</div>
       {% elif item.type == "assistant" %}<div class="reply">{{ item.text }}</div>
       {% elif item.type == "trace" %}{% with trace=item.trace %}{% include "trace.html" %}{% endwith %}
+      {% elif item.type == "display" and item.expired %}<p class="expired"><em>expired</em> (this result has been deleted)</p>
       {% elif item.type == "display" and item.kind == "table" %}
         {% with rows_url=item.rows_url, csv_url=item.csv_url, result_table=item.result_table, columns=item.columns %}{% include "display_table.html" %}{% endwith %}
       {% elif item.type == "display" and item.kind == "chart" %}

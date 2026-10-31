@@ -100,13 +100,13 @@ def semantic_layer_path(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def make_agent(tmp_path, telemetry_db, semantic_layer_path):
-    def _make(llm, **limits) -> Agent:
+    def _make(llm, **overrides) -> Agent:
         cfg = AgentConfig(
             telemetry_db=telemetry_db,
             results_db=tmp_path / "results.db",
             semantic_layer=semantic_layer_path,
             model="test/model",
-            **limits,
+            **overrides,
         )
         return Agent(cfg, llm)
 

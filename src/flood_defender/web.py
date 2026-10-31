@@ -14,12 +14,12 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from flood_defender.queries import InvalidSort
-from flood_defender.agent import Agent, Conversation, DisplayEvent, TextDelta, TraceReady, TurnEnd, resolve_chart_data
+from flood_defender.agent import Agent, Conversation, DisplayEvent, ResultTableExpired, TextDelta, TraceReady, TurnEnd, resolve_chart_data
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
@@ -31,6 +31,12 @@ def _sse(event: str, data: str) -> str:
 
 def create_app(agent: Agent) -> FastAPI:
     app = FastAPI(title="Flood Defender")
+
+    @app.exception_handler(ResultTableExpired)
+    def expired_handler(request: Request, exc: ResultTableExpired):
+        # Any endpoint reading Result Table rows (rows, CSV, chart rows) gets a clear 410.
+        return JSONResponse({"detail": "This result has expired and been deleted. Ask again to regenerate it."}, 410)
+
     app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
     pending: dict[str, tuple[Conversation, str]] = {}
 
@@ -42,13 +48,16 @@ def create_app(agent: Agent) -> FastAPI:
         for item in agent.store.transcript(conversation_id):
             if item["type"] == "display" and item["kind"] == "chart":
                 spec = resolve_chart_data(item["spec"], item["result_table"])
-                items.append({**item, "spec_json": json.dumps(spec)})
+                items.append({
+                    **item, "spec_json": json.dumps(spec), "expired": agent.is_expired(item["result_table"]),
+                })
             elif item["type"] == "display":
                 items.append(
                     {
                         **item,
                         "rows_url": f"/api/results/{item['result_table']}/rows",
                         "csv_url": f"/api/results/{item['result_table']}/csv",
+                        "expired": agent.is_expired(item["result_table"]),
                     }
                 )
             elif item["type"] == "trace":

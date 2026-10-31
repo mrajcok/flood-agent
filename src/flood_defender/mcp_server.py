@@ -13,6 +13,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from flood_defender import queries
+from flood_defender.store import ConversationStore
 
 mcp = FastMCP("flood-defender")
 
@@ -28,9 +29,14 @@ def run_query(sql: str, title: str) -> str:
     telemetry, results = _paths()
     timeout = float(os.environ.get("QUERY_TIMEOUT_S", queries.DEFAULT_QUERY_TIMEOUT_S))
     max_rows = int(os.environ.get("MAX_RESULT_ROWS", queries.DEFAULT_MAX_ROWS))
+    # The SELECT may reference only this Conversation's live Result Tables.
+    allowed = set()
+    if os.environ.get("APP_DB") and os.environ.get("CONVERSATION_ID"):
+        store = ConversationStore(Path(os.environ["APP_DB"]))
+        allowed = set(store.result_tables(os.environ["CONVERSATION_ID"]))
     # A failed result may carry `raw_error`; the Agent strips it (keeping it for the Trace)
     # before anything is sent to the LLM.
-    return json.dumps(queries.run_query(telemetry, results, sql, timeout, max_rows))
+    return json.dumps(queries.run_query(telemetry, results, sql, timeout, max_rows, allowed))
 
 
 @mcp.tool()

@@ -51,9 +51,21 @@ CREATE INDEX IF NOT EXISTS displays_conv ON displays(conversation_id, id);
 CREATE TABLE IF NOT EXISTS result_tables (
   name TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL REFERENCES conversations(id),
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  columns TEXT NOT NULL DEFAULT '[]',
+  request TEXT NOT NULL DEFAULT '',
+  expired INTEGER NOT NULL DEFAULT 0
 );
 """
+
+# Columns added to result_tables after #8, for app databases created before then.
+_RESULT_TABLE_MIGRATIONS = {
+    "title": "TEXT NOT NULL DEFAULT ''",
+    "columns": "TEXT NOT NULL DEFAULT '[]'",
+    "request": "TEXT NOT NULL DEFAULT ''",
+    "expired": "INTEGER NOT NULL DEFAULT 0",
+}
 
 
 def _now() -> int:
@@ -61,11 +73,17 @@ def _now() -> int:
 
 
 class ConversationStore:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, clock=_now):
+        """`clock` returns epoch milliseconds; injectable so tests control expiry."""
         self.path = Path(path)
+        self._now = clock
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as con:
             con.executescript(SCHEMA)
+            have = {r[1] for r in con.execute("PRAGMA table_info(result_tables)")}
+            for col, decl in _RESULT_TABLE_MIGRATIONS.items():
+                if col not in have:
+                    con.execute(f"ALTER TABLE result_tables ADD COLUMN {col} {decl}")
 
     def _connect(self) -> sqlite3.Connection:
         con = sqlite3.connect(self.path)
@@ -77,12 +95,12 @@ class ConversationStore:
             cur = con.execute(sql, params)
             if conversation_id:
                 con.execute(
-                    "UPDATE conversations SET last_activity_at=? WHERE id=?", (_now(), conversation_id)
+                    "UPDATE conversations SET last_activity_at=? WHERE id=?", (self._now(), conversation_id)
                 )
             return cur.lastrowid
 
     def create_conversation(self, title: str) -> str:
-        cid, now = uuid.uuid4().hex, _now()
+        cid, now = uuid.uuid4().hex, self._now()
         self._write(
             "INSERT INTO conversations(id, title, created_at, last_activity_at) VALUES (?,?,?,?)",
             (cid, title, now, now),
@@ -104,7 +122,7 @@ class ConversationStore:
     def start_turn(self, conversation_id: str, user_message: str) -> int:
         return self._write(
             "INSERT INTO turns(conversation_id, user_message, created_at) VALUES (?,?,?)",
-            (conversation_id, user_message, _now()),
+            (conversation_id, user_message, self._now()),
             conversation_id,
         )
 
@@ -129,10 +147,14 @@ class ConversationStore:
             conversation_id,
         )
 
-    def add_result_table(self, conversation_id: str, name: str) -> None:
+    def add_result_table(
+        self, conversation_id: str, name: str, title: str = "", columns: list[dict] | None = None,
+        request: str = "",
+    ) -> None:
         self._write(
-            "INSERT OR IGNORE INTO result_tables(name, conversation_id, created_at) VALUES (?,?,?)",
-            (name, conversation_id, _now()),
+            "INSERT OR IGNORE INTO result_tables(name, conversation_id, created_at, title, columns, request)"
+            " VALUES (?,?,?,?,?,?)",
+            (name, conversation_id, self._now(), title, json.dumps(columns or []), request),
             conversation_id,
         )
 
@@ -143,10 +165,33 @@ class ConversationStore:
             ).fetchone() is not None
 
     def result_tables(self, conversation_id: str) -> list[str]:
+        """Names of the Conversation's live (unexpired) Result Tables."""
+        return [t["name"] for t in self.live_result_tables(conversation_id)]
+
+    def live_result_tables(self, conversation_id: str) -> list[dict]:
+        """Name, title, column schema and originating request of live Result Tables (no row values)."""
+        with closing(self._connect()) as con:
+            rows = con.execute(
+                "SELECT name, title, columns, request FROM result_tables "
+                "WHERE conversation_id=? AND expired=0 ORDER BY created_at, name", (conversation_id,))
+            return [{**dict(r), "columns": json.loads(r["columns"])} for r in rows]
+
+    def due_for_expiry(self, ttl_ms: int) -> list[str]:
+        """Live Result Tables whose Conversation was last active more than `ttl_ms` ago."""
+        cutoff = self._now() - ttl_ms
         with closing(self._connect()) as con:
             return [r[0] for r in con.execute(
-                "SELECT name FROM result_tables WHERE conversation_id=? ORDER BY created_at, name",
-                (conversation_id,))]
+                "SELECT r.name FROM result_tables r JOIN conversations c ON c.id=r.conversation_id "
+                "WHERE r.expired=0 AND c.last_activity_at <= ?", (cutoff,))]
+
+    def mark_expired(self, names: list[str]) -> None:
+        with closing(self._connect()) as con, con:
+            con.executemany("UPDATE result_tables SET expired=1 WHERE name=?", [(n,) for n in names])
+
+    def is_expired(self, name: str) -> bool:
+        with closing(self._connect()) as con:
+            return con.execute(
+                "SELECT 1 FROM result_tables WHERE name=? AND expired=1", (name,)).fetchone() is not None
 
     def messages(self, conversation_id: str) -> list[dict]:
         """LLM-facing message history, in order."""

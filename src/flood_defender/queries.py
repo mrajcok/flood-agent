@@ -116,23 +116,37 @@ _ALLOWED_ACTIONS = {
 _RESULT_WRITES = {sqlite3.SQLITE_CREATE_TABLE, sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE}
 
 
-def _authorizer(action, arg1, arg2, dbname, source):
-    """Defence in depth: the only writes permitted are creating/filling a table in the
-    results database. No ATTACH, PRAGMA, DDL/DML elsewhere."""
-    if action in _ALLOWED_ACTIONS:
-        return sqlite3.SQLITE_OK
-    if action in _RESULT_WRITES and dbname == "results":
-        return sqlite3.SQLITE_OK
-    return sqlite3.SQLITE_DENY
+def _authorizer(allowed_tables: set[str] | None = None):
+    """Single authorizer enforcing both policies (SQLite allows only one per connection):
+    1. action allow-list: SELECT/READ/FUNCTION/RECURSIVE, plus create/insert/update on the
+       results database for the CTAS. No ATTACH, PRAGMA, DDL/DML elsewhere.
+    2. reads in the results database are limited to `allowed_tables` (the calling
+       Conversation's live Result Tables)."""
+    allowed = {t.lower() for t in allowed_tables or ()}
+
+    def authorizer(action, arg1, arg2, dbname, source):
+        if action in _ALLOWED_ACTIONS:
+            if action == sqlite3.SQLITE_READ and dbname == "results":
+                name = (arg1 or "").lower()
+                if not name.startswith("sqlite_") and name not in allowed:
+                    return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+        if action in _RESULT_WRITES and dbname == "results":
+            return sqlite3.SQLITE_OK
+        return sqlite3.SQLITE_DENY
+
+    return authorizer
 
 
-def open_connection(telemetry_db: Path, results_db: Path) -> sqlite3.Connection:
+def open_connection(
+    telemetry_db: Path, results_db: Path, allowed_tables: set[str] | None = None
+) -> sqlite3.Connection:
     """Read-only Telemetry Database connection with the results database attached and a
     restrictive authorizer installed."""
     con = sqlite3.connect(f"file:{telemetry_db}?mode=ro", uri=True)
     con.execute("ATTACH DATABASE ? AS results", (f"file:{results_db}?mode=rwc",))
     con.create_function("in_cidr", 2, in_cidr, deterministic=True)
-    con.set_authorizer(_authorizer)
+    con.set_authorizer(_authorizer(allowed_tables))
     return con
 
 
@@ -152,18 +166,20 @@ def run_query(
     sql: str,
     timeout_s: float = DEFAULT_QUERY_TIMEOUT_S,
     max_rows: int = DEFAULT_MAX_ROWS,
+    allowed_tables: set[str] | None = None,
 ) -> dict:
     """Run the SQL as CTAS into the results database. Returns Query Metadata only.
 
     On failure the dict has a sanitised `error` (safe for the LLM) and, for SQLite errors,
     a `raw_error` that the caller must keep for the Trace and strip before the LLM.
+    The SELECT may reference only the Result Tables in `allowed_tables` (the Conversation's own).
     """
     try:
         select = validate_select(sql)
     except QueryRejected as e:
         return {"success": False, "error": str(e)}
     name = f"rt_{uuid.uuid4().hex[:8]}"
-    con = open_connection(telemetry_db, results_db)
+    con = open_connection(telemetry_db, results_db, allowed_tables)
     deadline = time.monotonic() + timeout_s
     timed_out = False
 

@@ -35,11 +35,20 @@ class McpConnection:
         self._ready = asyncio.Event()
         self._stop = asyncio.Event()
         self._start_error: BaseException | None = None
+        self._read = None
 
     @property
     def tools(self) -> list[dict]:
         """The server's tools in OpenAI function-tool shape, cached at `start()`."""
         return self._tools
+
+    @property
+    def alive(self) -> bool:
+        """True while the server process and session are up (False once either has died)."""
+        if self._session is None or self._owner is None or self._owner.done() or self._read is None:
+            return False
+        # The server's stdout reader closes its end when the process exits.
+        return self._read.statistics().open_send_streams > 0
 
     async def start(self) -> None:
         """Launch the subprocess, initialise the session, cache the tool list."""
@@ -58,6 +67,7 @@ class McpConnection:
                     await session.initialize()
                     self._tools = [_openai_tool(t) for t in (await session.list_tools()).tools]
                     self._session = session
+                    self._read = read
                     self._ready.set()
                     await self._stop.wait()
         except BaseException as e:

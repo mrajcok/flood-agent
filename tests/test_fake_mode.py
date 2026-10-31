@@ -90,6 +90,42 @@ async def test_a_failed_query_without_telemetry_data_says_so_instead_of_asking_f
     assert not [e for e in events if isinstance(e, DisplayEvent)]
 
 
+async def test_a_failed_query_after_an_earlier_success_does_not_show_the_earlier_result_table(
+    make_agent, telemetry_db
+):
+    agent = await make_agent(fake_client(), model="fake")
+    flow_count = next(c for c in CANNED if c.id == "flow-count")
+    conversation = Conversation()
+    await collect(agent, flow_count.prompt, conversation)
+    with sqlite3.connect(telemetry_db) as con:
+        con.execute("DROP TABLE flows")
+
+    events = await collect(agent, flow_count.prompt, conversation)
+
+    assert "query failed" in text_of(events)
+    assert not [e for e in events if isinstance(e, DisplayEvent)]
+
+
+async def test_a_follow_up_whose_parent_query_failed_says_the_query_failed_not_run_the_parent(
+    make_agent, telemetry_db
+):
+    with sqlite3.connect(telemetry_db) as con:
+        con.execute("DROP TABLE flows")
+    agent = await make_agent(fake_client(), model="fake")
+    follow_up = next(c for c in CANNED if c.after)
+    parent = parent_of(follow_up, CANNED)
+    assert parent
+    conversation = Conversation()
+    await collect(agent, parent.prompt, conversation)
+
+    events = await collect(agent, follow_up.prompt, conversation)
+
+    text = text_of(events)
+    assert "query failed" in text
+    assert "first in this Conversation" not in text
+    assert not [e for e in events if isinstance(e, DisplayEvent)]
+
+
 def test_fake_mode_page_shows_badge_and_clickable_canned_prompts(build_agent, web_client):
     client = web_client(build_agent(fake_client(), model="fake"), picker=PICKER, fake_mode=True)
 
@@ -162,8 +198,12 @@ async def test_malformed_tool_result_json_is_not_reported_as_run_parent_first():
     assert parent
     messages = [
         {"role": "user", "content": parent.prompt},
-        {"role": "assistant", "content": ""},
-        {"role": "tool", "content": "not json"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "q1", "type": "function", "function": {"name": "run_query", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "q1", "content": "not json"},
         {"role": "user", "content": follow_up.prompt},
     ]
 

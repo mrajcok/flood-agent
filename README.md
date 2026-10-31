@@ -68,7 +68,7 @@ Tests run at the Agent turn seam: a real MCP server subprocess and real SQLite f
 with only the OpenRouter client replaced by a scripted fake (`tests/conftest.py`).
 No network or credentials needed.
 
-The page loads htmx, Alpine and Vega from CDNs in the browser. `uv run pytest -m network`
+The page loads htmx, Alpine and Vega from CDNs in the browser. `uv run pytest --network -m network`
 (needs internet access, skipped by default) checks that every one of those script URLs loads.
 
 ## Table Displays

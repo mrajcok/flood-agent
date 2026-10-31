@@ -34,10 +34,10 @@ packages = ["src/flood_defender"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
-addopts = "-n auto -m 'not network'"
+addopts = "-n auto"
 markers = [
     "subprocess: runs the MCP server as a real stdio subprocess",
-    "network: needs internet access; skipped unless selected with -m network",
+    "network: needs internet access; skipped unless run with --network",
 ]
 
 [tool.ruff]

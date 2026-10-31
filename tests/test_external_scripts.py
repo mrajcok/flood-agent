@@ -1,6 +1,6 @@
 """The page's CDN scripts actually load. Needs internet access, so it only runs on request:
 
-    uv run pytest -m network
+    uv run pytest --network -m network
 """
 
 import re

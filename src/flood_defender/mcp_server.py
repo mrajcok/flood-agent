@@ -11,16 +11,29 @@ the MCP request `_meta` (key `flood_defender/conversation_id`), set by the Agent
 argument, so the LLM never sees it. A missing or empty id means no Result Tables are owned.
 """
 
+import functools
 import json
 import os
 import sqlite3
 from pathlib import Path
 
+import anyio.to_thread
 from mcp.server.fastmcp import Context, FastMCP
 
 from flood_defender import queries
 
 mcp = FastMCP("flood-defender")
+
+
+def _in_worker_thread(fn):
+    """Run a sync tool body in a worker thread. FastMCP calls sync tools directly on its event
+    loop, so one slow `run_query` would stall every other Conversation's calls (ADR 0002)."""
+
+    @functools.wraps(fn)  # keeps the signature, so FastMCP builds the same input schema
+    async def wrapper(*args, **kwargs):
+        return await anyio.to_thread.run_sync(functools.partial(fn, *args, **kwargs))
+
+    return wrapper
 
 
 def _paths() -> tuple[Path, Path]:
@@ -55,6 +68,7 @@ def _allowed_tables(ctx: Context) -> set[str]:
 
 
 @mcp.tool()
+@_in_worker_thread
 def run_query(sql: str, title: str, ctx: Context) -> str:
     """Run a single read-only SELECT over the Telemetry Database. The output is stored in
     a new Result Table (named by the tool). Returns only Query Metadata, never rows."""
@@ -69,6 +83,7 @@ def run_query(sql: str, title: str, ctx: Context) -> str:
 
 
 @mcp.tool()
+@_in_worker_thread
 def show_table(result_table: str, ctx: Context, columns: list[str] | None = None) -> str:
     """Show a Result Table to the user as a table Display. You will not see the rows."""
     _, results = _paths()
@@ -110,6 +125,7 @@ def _find_violation(node, table: str) -> str | None:
 
 
 @mcp.tool()
+@_in_worker_thread
 def show_chart(vega_lite_spec: dict, ctx: Context) -> str:
     """Show a Vega-Lite Chart Spec to the user. Its data must be {"name": "<result table>"};
     never include data values. Aggregate first if the Result Table is large."""

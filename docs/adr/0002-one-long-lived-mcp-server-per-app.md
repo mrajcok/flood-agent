@@ -6,7 +6,7 @@ Per-request context, such as the Conversation id, travels in each tool call's MC
 
 A dedicated owner task inside the connection module (`flood_defender.mcp_connection`) enters and exits the MCP client's stdio and session contexts, because they must be exited in the task that entered them. `start()` and `aclose()` only signal that task, so they may be called from any task.
 
-Tools must run off the server's event loop (worker threads), because FastMCP calls sync tool functions on its loop and one slow `run_query` would otherwise stall every Conversation's calls. (Tracked in #18.)
+Tools run off the server's event loop: each tool is an async function that hands its sync body to a worker thread, because FastMCP calls sync tool functions directly on its loop and one slow `run_query` (bounded only by the query timeout) would otherwise stall every Conversation's calls. Each call opens its own SQLite connections, so threads share no state.
 
 ## Consequences
 

@@ -55,9 +55,28 @@ class SemanticLayer:
     def render(self) -> str:
         return yaml.safe_dump(self.data, sort_keys=False)
 
-    def system_prompt(self) -> str:
+    def system_prompt(self, result_tables: list[dict] | None = None) -> str:
         return (
             f"{SYSTEM_INSTRUCTIONS}\n"
             f"The dataset ends at window_end; treat 'now' as epoch ms {self.window_end}.\n\n"
             f"# Semantic Layer\n{self.render()}"
+            f"{self.render_result_tables(result_tables or [])}"
         )
+
+    @staticmethod
+    def render_result_tables(tables: list[dict]) -> str:
+        """The Conversation's live Result Tables: names, schemas and originating requests only."""
+        if not tables:
+            return (
+                "\n# Result Tables\nNone are available in this Conversation. Result Tables named in "
+                "earlier messages have expired and cannot be queried.\n"
+            )
+        lines = [
+            "\n# Result Tables",
+            "Earlier results in this Conversation. Query them by name in run_query like any table "
+            "(e.g. to break down or filter an earlier result). Others have expired.",
+        ]
+        for t in tables:
+            cols = ", ".join(f"{c['name']} {c['type']}" for c in t["columns"])
+            lines.append(f"- {t['name']} ({t['title']}): columns {cols}; from request: {t['request']!r}")
+        return "\n".join(lines) + "\n"

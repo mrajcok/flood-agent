@@ -1,7 +1,7 @@
 """The Agent's connection to its one long-lived MCP server (stdio subprocess).
 
-Interface: `start()`, `tools`, `call_tool(name, arguments, conversation_id)`, `aclose()`, and
-async-context-manager support. The MCP client's stdio and session contexts must be entered and
+Interface: `start()`, `tools`, `alive`, `call_tool(name, arguments, conversation_id)`, `aclose()`.
+A connection starts once and cannot be restarted after `aclose()`; make a new one. The MCP client's stdio and session contexts must be entered and
 exited in the same task, so a dedicated owner task does both; `start()` and `aclose()` only
 signal it and wait, so they may be called from any task. Tool calls from any task share the one
 session (the MCP client multiplexes concurrent requests by id).
@@ -16,7 +16,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.types import CallToolResult
 
-from flood_defender.mcp_server import META_CONVERSATION_ID
+from flood_defender.mcp_protocol import META_CONVERSATION_ID
 
 
 def _openai_tool(t) -> dict:
@@ -36,6 +36,7 @@ class McpConnection:
         self._stop = asyncio.Event()
         self._start_error: BaseException | None = None
         self._read = None
+        self._closed = False
 
     @property
     def tools(self) -> list[dict]:
@@ -44,7 +45,10 @@ class McpConnection:
 
     @property
     def alive(self) -> bool:
-        """True while the server process and session are up (False once either has died)."""
+        """True while the server process and session are up (False once either has died).
+
+        The MCP client exposes no public liveness signal; the stdout reader closes its end of the
+        read stream when the process exits, which anyio's public `statistics()` reports."""
         if self._session is None or self._owner is None or self._owner.done() or self._read is None:
             return False
         # The server's stdout reader closes its end when the process exits.
@@ -52,10 +56,16 @@ class McpConnection:
 
     async def start(self) -> None:
         """Launch the subprocess, initialise the session, cache the tool list."""
-        if self._owner is not None:
-            raise RuntimeError("MCP connection already started")
+        if self._owner is not None or self._closed:
+            raise RuntimeError("MCP connection already started or closed")
         self._owner = asyncio.create_task(self._own())
-        await self._ready.wait()
+        try:
+            await self._ready.wait()
+        except BaseException:
+            # Cancelled (or otherwise interrupted) mid-start: cancel the owner so the subprocess
+            # is reaped rather than orphaned.
+            await self._shutdown(cancel=True)
+            raise
         if self._start_error is not None:
             await asyncio.gather(self._owner, return_exceptions=True)
             raise self._start_error
@@ -75,6 +85,8 @@ class McpConnection:
                 self._start_error = e
             if isinstance(e, asyncio.CancelledError):
                 raise
+            # Any other error after startup (e.g. the server died) just ends the connection:
+            # `alive` turns False and the Agent replaces it; there is no caller to re-raise to.
         finally:
             self._session = None
             self._ready.set()
@@ -87,13 +99,12 @@ class McpConnection:
 
     async def aclose(self) -> None:
         """Shut the server down cleanly and reap the process."""
+        await self._shutdown(cancel=False)
+
+    async def _shutdown(self, cancel: bool) -> None:
+        self._closed = True
         self._stop.set()
         if self._owner is not None:
+            if cancel:
+                self._owner.cancel()
             await asyncio.gather(self._owner, return_exceptions=True)
-
-    async def __aenter__(self) -> "McpConnection":
-        await self.start()
-        return self
-
-    async def __aexit__(self, *exc) -> None:
-        await self.aclose()

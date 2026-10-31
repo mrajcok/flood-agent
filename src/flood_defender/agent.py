@@ -15,8 +15,8 @@ from typing import AsyncIterator, Callable
 from mcp import StdioServerParameters
 
 from flood_defender import flagging, queries
-from flood_defender.mcp_connection import McpConnection
 from flood_defender.llm import LLMClient, LLMError, TextChunk, ToolCallChunk, UsageChunk
+from flood_defender.mcp_connection import McpConnection
 from flood_defender.semantic_layer import SemanticLayer
 from flood_defender.store import ConversationStore
 from flood_defender.trace import TraceBuilder
@@ -179,6 +179,7 @@ class Agent:
         self.store = ConversationStore(config.app_db, config.clock)
         self._connection: McpConnection | None = None
         self._restart_lock = asyncio.Lock()
+        self._turn_tasks: set[asyncio.Task] = set()
         self.sweep_expired()
 
     async def start(self) -> None:
@@ -206,9 +207,16 @@ class Agent:
 
     async def aclose(self) -> None:
         """Stop the MCP server and reap its process."""
-        connection, self._connection = self._connection, None
-        if connection is not None:
-            await connection.aclose()
+        # In-flight turns first (this also cancels a restart in progress), so none is left
+        # talking to a closing connection.
+        tasks = list(self._turn_tasks)
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        async with self._restart_lock:
+            connection, self._connection = self._connection, None
+            if connection is not None:
+                await connection.aclose()
 
     async def __aenter__(self) -> "Agent":
         await self.start()
@@ -298,6 +306,8 @@ class Agent:
             raise RuntimeError("Agent not started: call `await agent.start()` or use `async with agent`")
         queue: asyncio.Queue = asyncio.Queue()
         task = asyncio.create_task(self._produce(conversation, user_message, queue))
+        self._turn_tasks.add(task)
+        task.add_done_callback(self._turn_tasks.discard)
         finished = False
         try:
             while True:
@@ -413,7 +423,9 @@ class Agent:
         self._record(conversation, turn_id, {"role": "assistant", "content": message})
         await queue.put(TextDelta(message))
 
-    async def _run_tool(self, connection, c: ToolCallChunk, queue, trace: TraceBuilder, conversation_id: str):
+    async def _run_tool(
+        self, connection: McpConnection, c: ToolCallChunk, queue: asyncio.Queue, trace: TraceBuilder, conversation_id: str
+    ) -> tuple[str, dict, str | None, int]:
         """Execute one LLM tool call. Returns (content, args, executed_sql, failed 0/1).
 
         Never raises for problems the LLM caused (bad JSON, missing `sql`) or tool failures: it

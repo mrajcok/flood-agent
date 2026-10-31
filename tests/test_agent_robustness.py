@@ -337,3 +337,86 @@ async def test_show_table_still_works_for_own_table(make_agent):
     )
     events = await collect(await make_agent(llm), "q")
     assert len([e for e in events if isinstance(e, DisplayEvent)]) == 1
+
+
+# --- cancellation and lifecycle ------------------------------------------------------------------
+
+HANGING_SERVER = ["-c", "import time; time.sleep(60)  # flood_defender.mcp_server"]
+
+
+async def test_cancelling_a_turn_while_a_replacement_server_starts_leaves_no_child(build_agent, monkeypatch):
+    import sys
+
+    from mcp import StdioServerParameters
+
+    agent = build_agent(ScriptedLLM([TextChunk("one")], [TextChunk("two")]))
+    await agent.start()
+    try:
+        await collect(agent, "q1")
+        await kill_mcp_servers_and_settle()
+        monkeypatch.setattr(
+            agent, "_server_params", lambda: StdioServerParameters(command=sys.executable, args=HANGING_SERVER)
+        )
+        turn = asyncio.create_task(collect(agent, "q2"))
+        deadline = asyncio.get_running_loop().time() + 10
+        while not mcp_children() and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.02)
+        assert mcp_children(), "replacement never started"
+        turn.cancel()
+        await asyncio.gather(turn, return_exceptions=True)
+        assert mcp_children() == []
+    finally:
+        await agent.aclose()
+    assert mcp_children() == []
+
+
+async def test_cancelling_connection_start_reaps_the_subprocess():
+    import sys
+
+    from mcp import StdioServerParameters
+
+    from flood_defender.mcp_connection import McpConnection
+
+    conn = McpConnection(StdioServerParameters(command=sys.executable, args=HANGING_SERVER))
+    task = asyncio.create_task(conn.start())
+    deadline = asyncio.get_running_loop().time() + 10
+    while not mcp_children() and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.02)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    assert mcp_children() == []
+
+
+async def test_connection_start_after_aclose_or_twice_fails_clearly(build_agent):
+    from flood_defender.mcp_connection import McpConnection
+
+    agent = build_agent(ScriptedLLM())
+    conn = McpConnection(agent._server_params())
+    await conn.start()
+    with pytest.raises(RuntimeError, match="already started"):
+        await conn.start()
+    await conn.aclose()
+    with pytest.raises(RuntimeError, match="already started|closed"):
+        await conn.start()
+    assert mcp_children() == []
+
+
+async def test_agent_aclose_cancels_and_awaits_in_flight_turns(build_agent):
+    started = asyncio.Event()
+
+    def hang(messages):
+        started.set()
+        return [tool_call("run_query", "c1", sql=SQL, title="t")]
+
+    agent = build_agent(ScriptedLLM(hang))
+    await agent.start()
+    gen = agent.run_turn(Conversation(), "q")
+    first = asyncio.create_task(gen.__anext__())
+    await asyncio.wait_for(started.wait(), 10)
+    producers = set(agent._turn_tasks)
+    assert producers
+    await agent.aclose()
+    assert all(t.done() for t in producers)
+    first.cancel()
+    await asyncio.gather(first, return_exceptions=True)
+    assert mcp_children() == []

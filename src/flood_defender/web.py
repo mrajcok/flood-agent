@@ -24,26 +24,59 @@ def _sse(event: str, data: str) -> str:
 
 def create_app(agent: Agent) -> FastAPI:
     app = FastAPI(title="Flood Defender")
-    conversation = Conversation()  # single user, single in-memory Conversation for now
-    pending: dict[str, str] = {}
+    pending: dict[str, tuple[Conversation, str]] = {}
+
+    def sidebar(current: str | None) -> dict:
+        return {"conversations": agent.store.list_conversations(), "current_id": current}
+
+    def history(conversation_id: str) -> list[dict]:
+        items = []
+        for item in agent.store.transcript(conversation_id):
+            if item["type"] == "display":
+                items.append({**item, "rows_url": f"/api/results/{item['result_table']}/rows"})
+            else:
+                m = item["message"]
+                if m["role"] in ("user", "assistant") and m.get("content"):
+                    items.append({"type": m["role"], "text": m["content"]})
+        return items
 
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request):
-        return TEMPLATES.TemplateResponse(request, "index.html", {})
+        return TEMPLATES.TemplateResponse(request, "index.html", {**sidebar(None), "items": []})
+
+    @app.get("/c/{conversation_id}", response_class=HTMLResponse)
+    def open_conversation(request: Request, conversation_id: str):
+        if not agent.store.exists(conversation_id):
+            raise HTTPException(404, "unknown conversation")
+        return TEMPLATES.TemplateResponse(
+            request, "index.html",
+            {**sidebar(conversation_id), "items": history(conversation_id), "current_id": conversation_id},
+        )
 
     @app.post("/chat", response_class=HTMLResponse)
-    def chat(request: Request, message: str = Form(...)):
+    def chat(request: Request, message: str = Form(...), conversation_id: str = Form("")):
+        if conversation_id:
+            try:
+                conversation = agent.open_conversation(conversation_id)
+            except KeyError:
+                raise HTTPException(404, "unknown conversation")
+        else:
+            conversation = Conversation()
         turn_id = uuid.uuid4().hex
-        pending[turn_id] = message
+        pending[turn_id] = (conversation, message)
+        if conversation.id is None:  # persist now so the sidebar and form can reference it
+            conversation.id = agent.store.create_conversation(message[:60])
         return TEMPLATES.TemplateResponse(
-            request, "turn.html", {"turn_id": turn_id, "message": message}
+            request, "turn.html",
+            {"turn_id": turn_id, "message": message, **sidebar(conversation.id)},
         )
 
     @app.get("/chat/stream/{turn_id}")
     async def stream(request: Request, turn_id: str):
-        message = pending.pop(turn_id, None)
-        if message is None:
+        entry = pending.pop(turn_id, None)
+        if entry is None:
             raise HTTPException(404)
+        conversation, message = entry
 
         async def events():
             try:

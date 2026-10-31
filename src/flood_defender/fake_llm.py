@@ -15,7 +15,7 @@ from typing import AsyncIterator
 
 import yaml
 
-from flood_defender.llm import Chunk, TextChunk, ToolCallChunk, UsageChunk
+from flood_defender.llm import Chunk, LLMError, TextChunk, ToolCallChunk, UsageChunk
 
 CANNED_PROMPTS_FILE = Path(__file__).with_name("canned_prompts.yaml")
 CHUNK_SIZE = 8
@@ -30,6 +30,10 @@ class CannedPrompt:
     steps: list[dict]
     expect: dict = field(default_factory=dict)
     after: str | None = None
+
+    @property
+    def fails_on_purpose(self) -> bool:
+        return bool(self.expect.get("failed_tool_calls") or self.expect.get("notice"))
 
 
 def load_canned_prompts(path: Path = CANNED_PROMPTS_FILE) -> list[CannedPrompt]:
@@ -55,16 +59,23 @@ class FakeClient:
         else:
             step = canned.steps[step_index]
         try:
-            calls = [(c["name"], self._resolve(c.get("args", {}), messages)) for c in step.get("tool_calls", [])]
+            calls = [(c["name"], self._arguments(c, messages)) for c in step.get("tool_calls", [])]
         except ValueError:  # a placeholder has no Result Table yet: ask for the parent instead of a broken call
             parent = next((c for c in self.canned_prompts if canned and c.id == canned.after), None)
             step = {"text": f"Fake mode: run {parent.prompt if parent else 'an earlier prompt'} first in this Conversation"}
             calls = []
         async for text in self._stream(step.get("text", "")):
             yield TextChunk(text)
-        for n, (name, args) in enumerate(calls):
-            yield ToolCallChunk(f"fake-{step_index}-{n}", name, json.dumps(args))
+        for n, (name, arguments) in enumerate(calls):
+            yield ToolCallChunk(f"fake-{step_index}-{n}", name, arguments)
+        if "error" in step:
+            raise LLMError(step["error"])
         yield UsageChunk(prompt_tokens=0, completion_tokens=0, cost=0)
+
+    def _arguments(self, call: dict, messages: list[dict]) -> str:
+        if "raw_arguments" in call:  # deliberately malformed, sent as-is
+            return call["raw_arguments"]
+        return json.dumps(self._resolve(call.get("args", {}), messages))
 
     async def _stream(self, text: str) -> AsyncIterator[str]:
         for i in range(0, len(text), CHUNK_SIZE):

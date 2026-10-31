@@ -6,6 +6,11 @@
 #   steps   one per simulated LLM call: `text` (streamed) and/or `tool_calls` (name + args)
 #   after   optional id of a parent Canned Prompt: the follow-up is listed indented under it and needs its Result Table
 #   expect  the declared outcome the test suite checks (`displays`: Display kinds in order)
+#   Failure-path entries add to `expect`: `failed_tool_calls` (count), `notice` (text the reply must
+#   contain), `turn_error` (the turn ends in an error). The picker marks entries that declare
+#   `failed_tool_calls` or `notice` as "fails on purpose".
+#   A tool call may give `raw_arguments` (a raw string, sent as-is) instead of `args`; a step may
+#   give `error` (raised as the LLM error after its text streams).
 #   Tool-call args may contain `{result_table}` (latest run_query Result Table) and
 #   `{result_table:-2}` (the one before it), anywhere inside the args, including nested Chart Specs.
 #
@@ -148,3 +153,128 @@
     - text: "Here is the previous result as a chart."
   expect:
     displays: [chart]
+
+- id: invalid-sql-retry
+  prompt: "Fail on purpose: run a query with a typo, then retry."
+  steps:
+    - text: "Let me count the flows."
+      tool_calls:
+        - name: run_query
+          args:
+            sql: SELEKT COUNT(*) AS flow_count FROM flows
+            title: Total flows
+    - text: "That had a typo; retrying."
+      tool_calls:
+        - name: run_query
+          args:
+            sql: SELECT COUNT(*) AS flow_count FROM flows
+            title: Total flows
+    - tool_calls:
+        - name: show_table
+          args:
+            result_table: "{result_table}"
+    - text: "Here is the total number of flows."
+  expect:
+    displays: [table]
+    failed_tool_calls: 1
+
+- id: too-many-rows
+  prompt: "Fail on purpose: run a query that returns too many rows."
+  steps:
+    - tool_calls:
+        - name: run_query
+          args:
+            sql: >-
+              WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2000000)
+              SELECT i FROM n
+            title: Two million rows
+    - text: "That query returned too many rows, so no Result Table was created."
+  expect:
+    displays: []
+    failed_tool_calls: 1
+
+- id: chart-over-row-cap
+  prompt: "Fail on purpose: chart a Result Table above the chart row cap."
+  steps:
+    - tool_calls:
+        - name: run_query
+          args:
+            sql: >-
+              WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10001)
+              SELECT i, i * 2 AS doubled FROM n
+            title: Ten thousand and one rows
+    - tool_calls:
+        - name: show_chart
+          args:
+            vega_lite_spec:
+              data: {name: "{result_table}"}
+              mark: line
+              encoding:
+                x: {field: i, type: quantitative}
+                y: {field: doubled, type: quantitative}
+    - text: "That Result Table has too many rows to chart."
+  expect:
+    displays: []
+    failed_tool_calls: 1
+
+- id: chart-with-inline-data
+  prompt: "Fail on purpose: chart a spec that embeds its own data values."
+  steps:
+    - tool_calls:
+        - name: run_query
+          args:
+            sql: SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC LIMIT 5
+            title: Bytes by destination port
+    - tool_calls:
+        - name: show_chart
+          args:
+            vega_lite_spec:
+              data:
+                name: "{result_table}"
+                values: [{dport: 1, total_bytes: 2}, {dport: 3, total_bytes: 4}]
+              mark: bar
+              encoding:
+                x: {field: dport, type: nominal}
+                y: {field: total_bytes, type: quantitative}
+    - text: "The chart was rejected because the spec embedded data values."
+  expect:
+    displays: []
+    failed_tool_calls: 1
+
+- id: malformed-json-arguments
+  prompt: "Fail on purpose: call a tool with malformed JSON arguments."
+  steps:
+    - tool_calls:
+        - name: run_query
+          raw_arguments: '{"sql": "SELECT 1", "title": '
+    - text: "That tool call had malformed arguments and was rejected."
+  expect:
+    displays: []
+    failed_tool_calls: 1
+
+- id: repeated-failures
+  prompt: "Fail on purpose: keep failing until the attempt limit ends the turn."
+  steps:
+    - tool_calls:
+        - name: run_query
+          args: {sql: SELEKT 1, title: Attempt 1}
+    - tool_calls:
+        - name: run_query
+          args: {sql: SELEKT 2, title: Attempt 2}
+    - tool_calls:
+        - name: run_query
+          args: {sql: SELEKT 3, title: Attempt 3}
+  expect:
+    displays: []
+    failed_tool_calls: 3
+    notice: after several attempts
+
+- id: llm-stream-error
+  prompt: "Fail on purpose: the LLM stream breaks partway."
+  steps:
+    - text: "Let me look into that, and then"
+      error: The response stream was cut off.
+  expect:
+    displays: []
+    notice: couldn't get a complete answer
+    turn_error: true

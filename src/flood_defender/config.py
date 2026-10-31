@@ -129,9 +129,7 @@ _ENV_EXAMPLE_HEADER = """\
 # pin defaults that may change later."""
 
 _ENV_EXAMPLE_FOOTER = """\
-# Not a setting: CONVERSATION_ID. The Agent sets it per turn for its MCP server subprocess;
-# it limits which Result Tables a query may read, so a fixed value here would break
-# Conversation isolation and is ignored. The eval runner (python -m flood_defender.evalset)
+# The eval runner (python -m flood_defender.evalset)
 # reads OPENROUTER_API_KEY and the telemetry_db and semantic_layer paths (overridable with
 # --db and --semantic-layer) from this file or the environment, takes its model list from
 # --models, and always uses the limits in defaults.toml so runs are comparable."""

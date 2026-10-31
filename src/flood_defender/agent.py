@@ -311,6 +311,9 @@ class Agent:
         params = StdioServerParameters(
             command=sys.executable,
             args=["-m", "flood_defender.mcp_server"],
+            # Passed at launch, not as tool arguments, so the LLM can't choose them. In particular
+            # CONVERSATION_ID limits which Result Tables a query may read, and a tool argument
+            # would let the LLM name another Conversation.
             env={
                 "TELEMETRY_DB": str(self.config.telemetry_db),
                 "RESULTS_DB": str(self.config.results_db),

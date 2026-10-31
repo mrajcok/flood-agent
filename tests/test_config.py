@@ -134,7 +134,6 @@ def test_env_example_is_the_generated_one():
 def test_env_example_lists_every_setting_and_copied_verbatim_changes_nothing(tmp_path):
     text = render_env_example()
     assert all(name.upper() in text for name in Settings.model_fields)
-    assert "CONVERSATION_ID" in text  # explains why it is not a setting
 
     copied = tmp_path / ".env"
     copied.write_text(text)

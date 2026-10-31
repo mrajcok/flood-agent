@@ -34,6 +34,7 @@
     .badge { font-size: .5em; vertical-align: middle; padding: .15rem .5rem; background: #fde68a; border-radius: .25rem; }
     .canned { margin-top: 1rem; font-size: .9rem; }
     .canned ul { list-style: none; padding: 0; margin: .25rem 0; }
+    .canned .follow-up { margin-left: 1.5rem; }
     .canned button { background: none; border: 0; padding: .15rem 0; color: #06c; cursor: pointer; text-align: left; }
     input[name=message] { flex: 1; padding: .5rem; }
   </style>
@@ -60,9 +61,13 @@
   <div class="canned">
     <strong>Canned Prompts</strong>
     <ul>
-    {% for c in canned_prompts %}
+    {% for c in canned_prompts if not c.after %}
       <li><button type="button" hx-post="/chat" hx-include="#conversation_id" hx-vals='{{ {"message": c.prompt} | tojson }}'
         hx-target="#chat" hx-swap="beforeend">{{ c.prompt }}</button></li>
+      {% for f in canned_prompts if f.after == c.id %}
+      <li class="follow-up"><button type="button" hx-post="/chat" hx-include="#conversation_id" hx-vals='{{ {"message": f.prompt} | tojson }}'
+        hx-target="#chat" hx-swap="beforeend">{{ f.prompt }}</button></li>
+      {% endfor %}
     {% endfor %}
     </ul>
   </div>

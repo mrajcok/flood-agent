@@ -1,4 +1,4 @@
-"""Agent turn tests: real MCP subprocess, real SQLite files, scripted fake LLM."""
+"""Agent turn tests: MCP server in-process, real SQLite files, scripted fake LLM."""
 
 import sqlite3
 

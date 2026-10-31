@@ -42,6 +42,7 @@ async def test_right_answer_is_correct(telemetry_db, semantic_layer_path, tmp_pa
     assert r.latency_s > 0 and r.model == "fake/model" and r.question_id == "top-dport"
 
 
+@pytest.mark.subprocess
 async def test_eval_run_leaves_no_mcp_server_processes_behind(telemetry_db, semantic_layer_path, tmp_path):
     await run_one([query(GOOD), DONE], telemetry_db, semantic_layer_path, tmp_path)
     assert mcp_children() == []

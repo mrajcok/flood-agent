@@ -4,7 +4,7 @@ The Agent runs one MCP server subprocess (stdio) for the life of the app, not on
 
 Per-request context, such as the Conversation id, travels in each tool call's MCP request `_meta` under a namespaced key (`flood_defender/conversation_id`). It is set by the Agent and never appears in the launch environment or in any tool's input schema, so the LLM can neither see nor set it. The launch environment holds static settings only. A call with a missing or empty id owns no Result Tables (fail closed), so Conversation isolation is as strong as with one server per Conversation.
 
-A dedicated owner task inside the connection module (`flood_defender.mcp_connection`) enters and exits the MCP client's stdio and session contexts, because they must be exited in the task that entered them. `start()` and `aclose()` only signal that task, so they may be called from any task.
+A dedicated owner task inside the connection module (`flood_defender.mcp_connection`) enters and exits the MCP client's transport (stdio in production) and session contexts, because they must be exited in the task that entered them. `start()` and `aclose()` only signal that task, so they may be called from any task.
 
 Tools run off the server's event loop: each tool is an async function that hands its sync body to a worker thread, because FastMCP calls sync tool functions directly on its loop and one slow `run_query` (bounded only by the query timeout) would otherwise stall every Conversation's calls. Each call opens its own SQLite connections, so threads share no state.
 

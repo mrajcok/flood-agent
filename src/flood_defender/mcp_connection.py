@@ -1,4 +1,4 @@
-"""The Agent's connection to its one long-lived MCP server (stdio subprocess).
+"""The Agent's connection to its one long-lived MCP server.
 
 Interface: `start()`, `tools`, `alive`, `call_tool(name, arguments, conversation_id)`, `aclose()`.
 A connection starts once and cannot be restarted after `aclose()`; make a new one. The MCP client's stdio and session contexts must be entered and
@@ -11,6 +11,8 @@ or in tool arguments (ADR 0002).
 """
 
 import asyncio
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -26,9 +28,18 @@ def _openai_tool(t) -> dict:
     }
 
 
+Transport = Callable[[], AbstractAsyncContextManager[tuple]]
+"""Opens the client's (read, write) streams to a server, and closes them (and the server) on exit."""
+
+
+def stdio_transport(params: StdioServerParameters) -> Transport:
+    """A server launched as a stdio subprocess: the production transport."""
+    return lambda: stdio_client(params)
+
+
 class McpConnection:
-    def __init__(self, params: StdioServerParameters):
-        self._params = params
+    def __init__(self, transport: Transport):
+        self._transport = transport
         self._session: ClientSession | None = None
         self._tools: list[dict] = []
         self._owner: asyncio.Task | None = None
@@ -55,7 +66,7 @@ class McpConnection:
         return self._read.statistics().open_send_streams > 0
 
     async def start(self) -> None:
-        """Launch the subprocess, initialise the session, cache the tool list."""
+        """Start the server, initialise the session, cache the tool list."""
         if self._owner is not None or self._closed:
             raise RuntimeError("MCP connection already started or closed")
         self._owner = asyncio.create_task(self._own())
@@ -72,7 +83,7 @@ class McpConnection:
 
     async def _own(self) -> None:
         try:
-            async with stdio_client(self._params) as (read, write):
+            async with self._transport() as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     self._tools = [_openai_tool(t) for t in (await session.list_tools()).tools]
@@ -98,7 +109,7 @@ class McpConnection:
         return await self._session.call_tool(name, arguments, meta={META_CONVERSATION_ID: conversation_id})
 
     async def aclose(self) -> None:
-        """Shut the server down cleanly and reap the process."""
+        """Shut the server down cleanly (a subprocess is reaped)."""
         await self._shutdown(cancel=False)
 
     async def _shutdown(self, cancel: bool) -> None:

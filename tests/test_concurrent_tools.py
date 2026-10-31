@@ -10,7 +10,7 @@ from flood_defender.agent import Conversation
 SLOW_SQL = (
     "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c) SELECT count(*) AS n FROM c"
 )
-TIMEOUT_S = 3
+TIMEOUT_S = 1.0
 
 
 class RoutedLLM(ScriptedLLM):
@@ -19,6 +19,7 @@ class RoutedLLM(ScriptedLLM):
     def __init__(self, scripts: dict[str, list]):
         super().__init__()
         self.scripts = scripts
+        self.served: dict[str, asyncio.Event] = {name: asyncio.Event() for name in scripts}
 
     async def stream_chat(self, messages, tools):
         user = next(m["content"] for m in messages if m["role"] == "user")
@@ -26,6 +27,8 @@ class RoutedLLM(ScriptedLLM):
         chunks = [TextChunk("done")] if has_result else self.scripts[user]
         for c in chunks:
             yield c
+        if not has_result:
+            self.served[user].set()  # the turn's tool call is about to run
 
 
 async def test_slow_query_does_not_block_other_conversations(make_agent):
@@ -44,9 +47,10 @@ async def test_slow_query_does_not_block_other_conversations(make_agent):
         finished[message] = time.monotonic() - start
 
     slow = asyncio.create_task(turn("slow"))
-    await asyncio.sleep(0.5)  # let the slow query start
+    await llm.served["slow"].wait()
+    await asyncio.sleep(0.05)  # the tool call reaches the server's worker thread
     await turn("fast")
     assert not slow.done(), "the slow query should still be running"
-    assert finished["fast"] < TIMEOUT_S - 1
+    assert finished["fast"] < TIMEOUT_S / 2
     await slow
-    assert finished["slow"] >= TIMEOUT_S - 0.5
+    assert finished["slow"] >= TIMEOUT_S * 0.8

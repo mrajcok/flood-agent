@@ -39,6 +39,27 @@ def test_row_endpoint_rejects_unknown_or_malformed_names(make_agent):
     assert client.get("/api/results/rt_deadbeef/rows").status_code == 404
 
 
+def test_reopening_a_conversation_sweeps_expired_tables_once_not_per_display(make_agent):
+    def show(msgs):
+        return [tool_call("show_table", result_table=last_tool_result(msgs)["result_table"])]
+
+    steps = []
+    for i in range(3):  # three table Displays in one Conversation
+        steps += [[tool_call("run_query", f"q{i}", sql="SELECT dport, bytes FROM flows", title="t")], show]
+    agent = make_agent(ScriptedLLM(*steps, [TextChunk("done")]))
+    client = TestClient(create_app(agent))
+    posted = client.post("/chat", data={"message": "show"})
+    client.get(posted.text.split('sse-connect="')[1].split('"')[0])
+    cid = agent.store.list_conversations()[0]["id"]
+
+    sweeps = []
+    real = agent.sweep_expired
+    agent.sweep_expired = lambda: (sweeps.append(1), real())[1]
+    page = client.get(f"/c/{cid}").text
+    assert page.count("data-rows-url=") == 3
+    assert len(sweeps) == 1
+
+
 def test_model_defaults_and_env_override(monkeypatch):
     monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
     assert model_from_env() == DEFAULT_MODEL == "anthropic/claude-sonnet-5.5"

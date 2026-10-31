@@ -6,7 +6,7 @@
       {% if trace.totals.cost is not none %}${{ "%.6f"|format(trace.totals.cost) }}{% else %}cost n/a{% endif %} &middot;
       {{ trace.totals.duration_ms }} ms</span></summary>
   <h4>System prompt and Semantic Layer</h4>
-  <pre>{{ trace.system_prompt }}</pre>
+  <pre>{{ trace.system_prompt or "" }}</pre>
   {% for e in trace.entries %}
   <section class="trace-entry trace-{{ e.kind }}">
     {% if e.kind == "llm_step" %}

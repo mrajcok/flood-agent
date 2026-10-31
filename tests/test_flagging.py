@@ -149,6 +149,14 @@ CTX = ["User asked about 10.1.2.3 and port 8443; window_end 1600000100000; 12,34
         ("ended at 987,654.", ["987,654"]),
         ("203.0.113.99, 203.0.113.99", ["203.0.113.99"]),  # deduplicated
         ("rt_1234567 ABC12345678", []),  # digits inside identifiers
+        ("a cable 20 m long", []),  # spaced single letter is prose, not a magnitude
+        ("top 10 T cells and 15 G", []),
+        ("20 M", []),
+        ("20M packets", ["20M"]),
+        ("5Gbps", ["5Gbps"]),
+        ("5 Gbps", ["5 Gbps"]),
+        ("1 k", []),
+        ("20 million", ["20 million"]),
     ],
 )
 def test_heuristic_table(reply, expected):

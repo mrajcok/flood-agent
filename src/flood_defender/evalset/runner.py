@@ -25,8 +25,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from flood_defender import queries
-from flood_defender.agent import Agent, AgentConfig, Conversation, TraceEntry
-from flood_defender.evalset.client import MeteredOpenRouterClient
+from flood_defender.agent import Agent, AgentConfig, Conversation, TraceEntry, TurnError
+from flood_defender.llm import OpenRouterClient
+from flood_defender.evalset.client import UsageMeter
 from flood_defender.evalset.compare import DEFAULT_TOLERANCE, compare
 from flood_defender.evalset.golden import Question, load_golden, run_reference
 
@@ -94,7 +95,7 @@ async def _run_question(model, q, ref, telemetry_db, semantic_layer, client_fact
     results_db, app_db = qdir / "results.db", qdir / "app.db"
     for p in (results_db, app_db):
         p.unlink(missing_ok=True)
-    llm = client_factory(model, q.id)
+    llm = UsageMeter(client_factory(model, q.id))
     agent = Agent(
         AgentConfig(telemetry_db=telemetry_db, results_db=results_db, semantic_layer=semantic_layer,
                     model=model, app_db=app_db),
@@ -106,10 +107,12 @@ async def _run_question(model, q, ref, telemetry_db, semantic_layer, client_fact
         async for event in agent.run_turn(Conversation(), q.question):
             if isinstance(event, TraceEntry) and event.kind == "query_error":
                 retries += 1
+            elif isinstance(event, TurnError):
+                error = event.detail
     except Exception as e:  # a failed model call is a result, not a crash of the whole run
         error = _describe(e)
     latency = time.perf_counter() - start
-    usage = getattr(llm, "usage", None) or {}
+    usage = llm.usage
     if error:
         ok, reason, extra, matched, n = False, "turn failed", 0, None, 0
     else:
@@ -206,7 +209,7 @@ def main(argv=None) -> int:
             return 2
     results = asyncio.run(
         run_eval(a.models, questions, Path(a.db), Path(a.semantic_layer),
-                 lambda model, qid: MeteredOpenRouterClient(key, model), Path(a.workdir))
+                 lambda model, qid: OpenRouterClient(key, model), Path(a.workdir))
     )
     summary = summarize(results)
     Path(f"{a.out}.md").write_text(render_markdown(summary, results))

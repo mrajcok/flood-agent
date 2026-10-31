@@ -136,16 +136,27 @@ class ConversationStore:
             conversation_id,
         )
 
-    def add_display(
-        self, conversation_id: str, turn_id: int, after_message_id: int, kind: str,
-        result_table: str | None, definition: dict,
-    ) -> int:
-        return self._write(
-            "INSERT INTO displays(conversation_id, turn_id, after_message_id, kind, result_table, definition)"
-            " VALUES (?,?,?,?,?,?)",
-            (conversation_id, turn_id, after_message_id, kind, result_table, json.dumps(definition)),
-            conversation_id,
-        )
+    def add_step(self, conversation_id: str, turn_id: int, items: list[tuple[dict, list[tuple]]]) -> list[int]:
+        """Persist one LLM step atomically: each (message, displays) in order, where a display is
+        (kind, result_table, definition) attached after that message. Either all rows are saved
+        or none, so history never holds an assistant tool_calls message without its tool results.
+        Returns the message ids."""
+        ids = []
+        with closing(self._connect()) as con, con:
+            for message, displays in items:
+                mid = con.execute(
+                    "INSERT INTO messages(conversation_id, turn_id, body) VALUES (?,?,?)",
+                    (conversation_id, turn_id, json.dumps(message)),
+                ).lastrowid
+                ids.append(mid)
+                for kind, table, definition in displays:
+                    con.execute(
+                        "INSERT INTO displays(conversation_id, turn_id, after_message_id, kind, result_table,"
+                        " definition) VALUES (?,?,?,?,?,?)",
+                        (conversation_id, turn_id, mid, kind, table, json.dumps(definition)),
+                    )
+            con.execute("UPDATE conversations SET last_activity_at=? WHERE id=?", (self._now(), conversation_id))
+        return ids
 
     def add_result_table(
         self, conversation_id: str, name: str, title: str = "", columns: list[dict] | None = None,
@@ -192,6 +203,17 @@ class ConversationStore:
         with closing(self._connect()) as con:
             return con.execute(
                 "SELECT 1 FROM result_tables WHERE name=? AND expired=1", (name,)).fetchone() is not None
+
+    def expired_among(self, names) -> set[str]:
+        """The subset of `names` that have expired (one query per 500 names)."""
+        names, out = list(set(names)), set()
+        with closing(self._connect()) as con:
+            for i in range(0, len(names), 500):
+                chunk = names[i:i + 500]
+                marks = ",".join("?" * len(chunk))
+                out.update(r[0] for r in con.execute(
+                    f"SELECT name FROM result_tables WHERE expired=1 AND name IN ({marks})", chunk))
+        return out
 
     def messages(self, conversation_id: str) -> list[dict]:
         """LLM-facing message history, in order."""

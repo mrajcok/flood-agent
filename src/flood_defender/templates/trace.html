@@ -29,6 +29,9 @@
       <h4>Chart Spec for {{ e.result_table }}</h4>
       <p>Before data-reference resolution</p><pre>{{ e.source_spec|tojson(indent=2) }}</pre>
       <p>After resolution</p><pre>{{ e.spec|tojson(indent=2) }}</pre>
+    {% elif e.kind == "flag" %}
+      <h4>Flagged {% if e.type == "ip" %}IP address{% else %}number{% endif %} <code>{{ e.token }}</code></h4>
+      <p>Not found in the user's messages, the Semantic Layer, Query Metadata or the LLM's own SQL. Shown to the analyst only; not sent to the LLM.</p>
     {% else %}
       <h4>{{ e.kind }}</h4><pre>{{ e|tojson(indent=2) }}</pre>
     {% endif %}

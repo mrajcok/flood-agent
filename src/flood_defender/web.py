@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from flood_defender.queries import InvalidSort
-from flood_defender.agent import Agent, Conversation, DisplayEvent, ResultTableExpired, TextDelta, TraceReady, TurnEnd, resolve_chart_data
+from flood_defender.agent import Agent, Conversation, DisplayEvent, FlagEvent, ResultTableExpired, TextDelta, TraceReady, TurnEnd, resolve_chart_data
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
@@ -61,7 +61,7 @@ def create_app(agent: Agent) -> FastAPI:
                     }
                 )
             elif item["type"] == "trace":
-                items.append(item)
+                items.append({**item, "flags": [e for e in item["trace"]["entries"] if e["kind"] == "flag"]})
             else:
                 m = item["message"]
                 if m["role"] in ("user", "assistant") and m.get("content"):
@@ -124,6 +124,8 @@ def create_app(agent: Agent) -> FastAPI:
                             columns=ev.columns,
                         )
                         yield _sse("display", html)
+                    elif isinstance(ev, FlagEvent):
+                        yield _sse("flag", TEMPLATES.get_template("flag_note.html").render(flags=ev.items))
                     elif isinstance(ev, TraceReady):
                         yield _sse("trace", TEMPLATES.get_template("trace.html").render(trace=ev.trace))
                     elif isinstance(ev, TurnEnd):

@@ -16,7 +16,7 @@ from typing import AsyncIterator, Callable
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from flood_defender import queries
+from flood_defender import flagging, queries
 from flood_defender.llm import LLMClient, TextChunk, ToolCallChunk, UsageChunk
 from flood_defender.semantic_layer import SemanticLayer
 from flood_defender.store import ConversationStore
@@ -85,11 +85,20 @@ class TraceReady:
 
 
 @dataclass
+class FlagEvent:
+    """Tokens in a completed reply that the LLM could not have known. For the analyst only
+    (reply note + Trace); never sent to the LLM."""
+
+    tokens: list[str]
+    items: list[dict] = field(default_factory=list)  # [{"type": "ip"|"number", "token": ...}]
+
+
+@dataclass
 class TurnEnd:
     pass
 
 
-Event = TextDelta | DisplayEvent | TraceEntry | TraceReady | TurnEnd
+Event = TextDelta | DisplayEvent | TraceEntry | FlagEvent | TraceReady | TurnEnd
 
 GIVE_UP_MESSAGE = (
     "Sorry, I couldn't build a working query for that after several attempts. "
@@ -242,6 +251,7 @@ class Agent:
                     elif isinstance(chunk, UsageChunk):
                         usage = chunk
                 trace.llm_step(system_prompt, text, calls, usage, step_started)
+                await self._flag_unseen_values(text, system_prompt, messages, trace, queue)
                 assistant: dict = {"role": "assistant", "content": text}
                 if calls:
                     assistant["tool_calls"] = [
@@ -281,6 +291,29 @@ class Agent:
             self.store.save_trace(turn_id, finished)
             await queue.put(TraceReady(finished))
             await queue.put(TurnEnd())
+
+    @staticmethod
+    async def _flag_unseen_values(text: str, system_prompt: str, messages: list[dict], trace, queue) -> None:
+        """Flag IP-like / large-number tokens in a completed reply that the LLM was never sent.
+
+        Allowed context = what this step's LLM call received, except the LLM's own earlier prose
+        (so repeating an invented value is flagged again): system prompt (Semantic Layer, Result
+        Tables), user messages, tool results (Query Metadata), and tool-call SQL arguments."""
+        if not text:
+            return
+        allowed = [system_prompt]
+        for m in messages:
+            if m["role"] in ("user", "tool"):
+                allowed.append(m["content"] or "")
+            elif m["role"] == "assistant":
+                allowed += [c["function"]["arguments"] for c in m.get("tool_calls") or []]
+        found = flagging.find_unseen(text, allowed)
+        if not found:
+            return
+        items = [{"type": t, "token": tok} for t, tok in found]
+        for item in items:
+            trace.add("flag", **item)
+        await queue.put(FlagEvent([i["token"] for i in items], items))
 
     @staticmethod
     def _strip_executed_sql(content: str) -> tuple[str, str | None]:

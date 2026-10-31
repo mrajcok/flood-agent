@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 from mcp.shared.memory import create_client_server_memory_streams
 
-from flood_defender.agent import Agent, AgentConfig, Conversation
+from flood_defender.agent import Agent, AgentConfig, Conversation, TextDelta
 from flood_defender.config import Settings
 from flood_defender.llm import TextChunk, ToolCallChunk, UsageChunk
 from flood_defender.mcp_server import ServerSettings, create_server
@@ -218,6 +218,11 @@ def mcp_children() -> list[int]:
 
 async def collect(agent: Agent, message: str, conversation: Conversation | None = None):
     return [e async for e in agent.run_turn(conversation or Conversation(), message)]
+
+
+def text_of(events) -> str:
+    """All streamed assistant text in a turn's events, joined."""
+    return "".join(e.text for e in events if isinstance(e, TextDelta))
 
 
 __all__ = ["TextChunk"]

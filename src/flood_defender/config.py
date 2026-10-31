@@ -6,6 +6,7 @@ call (in request `_meta`), and it scopes which Result Tables a call may use.
 
 import tomllib
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -20,6 +21,8 @@ from pydantic_settings import (
 )
 
 from flood_defender.agent import AgentConfig
+from flood_defender.fake_llm import CannedPrompt, FakeClient, load_canned_prompts
+from flood_defender.llm import LLMClient, OpenRouterClient
 
 DEFAULTS_FILE = Path(__file__).with_name("defaults.toml")
 
@@ -37,6 +40,19 @@ class _LiteralDotEnvSource(DotEnvSettingsSource):
             for key, value in values.items()
             if value is not None and not (self.env_ignore_empty and value == "")
         }
+
+
+@dataclass(frozen=True)
+class LLMBackend:
+    """The chosen LLM client with the model name to report; `canned_prompts` is set only in Fake Mode."""
+
+    client: LLMClient
+    model: str
+    canned_prompts: list[CannedPrompt] | None = None
+
+    @property
+    def fake_mode(self) -> bool:
+        return self.canned_prompts is not None
 
 
 class Settings(BaseSettings):
@@ -108,13 +124,21 @@ class Settings(BaseSettings):
             raise RuntimeError("OPENROUTER_API_KEY is not set")
         return self.openrouter_api_key.get_secret_value()
 
-    def agent_config(self) -> AgentConfig:
+    def llm_backend_choice(self) -> LLMBackend:
+        """The one place that turns `llm_backend` into a client and model name."""
+        if self.llm_backend == "fake":
+            canned = load_canned_prompts()
+            return LLMBackend(FakeClient(canned), "fake", canned)
+        return LLMBackend(OpenRouterClient(self.require_api_key(), self.openrouter_model), self.openrouter_model)
+
+    def agent_config(self, model: str | None = None) -> AgentConfig:
+        """`model` is the name the chosen LLM backend reports; it defaults to the OpenRouter model."""
         return AgentConfig(
             telemetry_db=self.telemetry_db.resolve(),
             results_db=self.results_db.resolve(),
             semantic_layer=self.semantic_layer.resolve(),
             app_db=self.app_db.resolve(),
-            model="fake" if self.llm_backend == "fake" else self.openrouter_model,
+            model=model or self.openrouter_model,
             result_ttl_ms=int(self.result_ttl_hours * 3600 * 1000),
             query_timeout_s=self.query_timeout_s,
             max_result_rows=self.max_result_rows,

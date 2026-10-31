@@ -20,29 +20,75 @@ from flood_defender.llm import Chunk, LLMError, TextChunk, ToolCallChunk, UsageC
 CANNED_PROMPTS_FILE = Path(__file__).with_name("canned_prompts.yaml")
 CHUNK_SIZE = 8
 CHUNK_DELAY_S = 0.02
+SCRIPT_ENDED = "Fake Mode: script ended."
 _PLACEHOLDER = re.compile(r"\{result_table(?::(-\d+))?\}")
 
 
-@dataclass
+class NoResultTable(Exception):
+    """A placeholder (or a follow-up's parent) has no successful Result Table to draw on."""
+
+
+@dataclass(frozen=True)
+class Call:
+    name: str
+    args: dict = field(default_factory=dict)
+    raw_arguments: str | None = None  # deliberately malformed, sent as-is instead of `args`
+
+
+@dataclass(frozen=True)
+class Step:
+    text: str = ""
+    tool_calls: tuple[Call, ...] = ()
+    error: str | None = None  # raised as the LLM error after the text streams
+
+
+@dataclass(frozen=True)
+class Expect:
+    displays: tuple[str, ...] = ()
+    failed_tool_calls: int = 0
+    notice: str = ""
+    turn_error: bool = False
+
+
+@dataclass(frozen=True)
 class CannedPrompt:
     id: str
     prompt: str
-    steps: list[dict]
-    expect: dict = field(default_factory=dict)
+    steps: tuple[Step, ...]
+    expect: Expect = Expect()
     after: str | None = None
 
     @property
     def fails_on_purpose(self) -> bool:
-        return bool(self.expect.get("failed_tool_calls") or self.expect.get("notice"))
+        return bool(self.expect.failed_tool_calls or self.expect.notice)
+
+
+def _parse_step(raw: dict) -> Step:
+    calls = tuple(Call(**c) for c in raw.get("tool_calls", []))
+    return Step(**{**raw, "tool_calls": calls})
+
+
+def _parse_canned_prompt(entry: dict) -> CannedPrompt:
+    expect = Expect(**{**entry.get("expect", {}), "displays": tuple(entry.get("expect", {}).get("displays", []))})
+    steps = tuple(_parse_step(s) for s in entry.get("steps", []))
+    return CannedPrompt(**{**entry, "steps": steps, "expect": expect})
 
 
 def load_canned_prompts(path: Path = CANNED_PROMPTS_FILE) -> list[CannedPrompt]:
-    prompts = [CannedPrompt(**entry) for entry in yaml.safe_load(path.read_text())]
+    """Parse the YAML into typed prompts; unknown keys anywhere are a load error (TypeError)."""
+    prompts = [_parse_canned_prompt(entry) for entry in yaml.safe_load(path.read_text())]
     ids = {c.id for c in prompts}
     for c in prompts:
         if c.after is not None and c.after not in ids:
             raise ValueError(f"Canned Prompt {c.id!r} has after: {c.after!r}, which is not a Canned Prompt id")
     return prompts
+
+
+def parent_of(canned: CannedPrompt | None, canned_prompts: list[CannedPrompt]) -> CannedPrompt | None:
+    """The Canned Prompt a follow-up (`after:`) depends on, or None."""
+    if canned is None or canned.after is None:
+        return None
+    return next((c for c in canned_prompts if c.id == canned.after), None)
 
 
 class FakeClient:
@@ -53,29 +99,48 @@ class FakeClient:
         last_user = max(i for i, m in enumerate(messages) if m["role"] == "user")
         canned = next((c for c in self.canned_prompts if c.prompt == messages[last_user]["content"]), None)
         step_index = sum(1 for m in messages[last_user:] if m["role"] == "assistant")
-        step: dict
         if canned is None:
-            step = {"text": self._unmatched_reply()}
-        else:
+            step = Step(text=self._unmatched_reply())
+        elif step_index < len(canned.steps):
             step = canned.steps[step_index]
+        else:
+            step = Step(text=SCRIPT_ENDED)
         try:
-            calls = [(c["name"], self._arguments(c, messages)) for c in step.get("tool_calls", [])]
-        except ValueError:  # a placeholder has no Result Table yet: ask for the parent instead of a broken call
-            parent = next((c for c in self.canned_prompts if canned and c.id == canned.after), None)
-            step = {"text": f"Fake mode: run {parent.prompt if parent else 'an earlier prompt'} first in this Conversation"}
+            scope = self._scope(canned, messages, last_user)
+            calls = [(c.name, self._arguments(c, scope)) for c in step.tool_calls]
+        except NoResultTable:  # ask for the parent instead of sending a broken call
+            parent = parent_of(canned, self.canned_prompts)
+            what = f"*{parent.prompt}*" if parent else "an earlier prompt"
+            step = Step(text=f"Fake Mode: run {what} first in this Conversation")
             calls = []
-        async for text in self._stream(step.get("text", "")):
+        async for text in self._stream(step.text):
             yield TextChunk(text)
         for n, (name, arguments) in enumerate(calls):
             yield ToolCallChunk(f"fake-{step_index}-{n}", name, arguments)
-        if "error" in step:
-            raise LLMError(step["error"])
+        if step.error is not None:
+            raise LLMError(step.error)
         yield UsageChunk(prompt_tokens=0, completion_tokens=0, cost=0)
 
-    def _arguments(self, call: dict, messages: list[dict]) -> str:
-        if "raw_arguments" in call:  # deliberately malformed, sent as-is
-            return call["raw_arguments"]
-        return json.dumps(self._resolve(call.get("args", {}), messages))
+    def _scope(self, canned: CannedPrompt | None, messages: list[dict], last_user: int) -> list[dict]:
+        """The messages placeholders resolve from. A follow-up draws only on what came after its
+        parent's latest run in this Conversation; no such run with a Result Table means NoResultTable."""
+        parent = parent_of(canned, self.canned_prompts)
+        if canned is None or canned.after is None:
+            return messages
+        if parent is None:
+            raise NoResultTable
+        ran = [i for i, m in enumerate(messages[:last_user]) if m["role"] == "user" and m["content"] == parent.prompt]
+        if not ran:
+            raise NoResultTable
+        scope = messages[ran[-1] :]
+        if not _result_tables(scope):
+            raise NoResultTable
+        return scope
+
+    def _arguments(self, call: Call, messages: list[dict]) -> str:
+        if call.raw_arguments is not None:
+            return call.raw_arguments
+        return json.dumps(self._resolve(call.args, messages))
 
     async def _stream(self, text: str) -> AsyncIterator[str]:
         for i in range(0, len(text), CHUNK_SIZE):
@@ -99,14 +164,20 @@ class FakeClient:
         return node
 
 
-def _result_table(messages: list[dict], index: int) -> str:
-    """The Nth-latest (-1 = latest) successful run_query Result Table in the message history."""
+def _result_tables(messages: list[dict]) -> list[str]:
+    """Successful run_query Result Table names in the message history, oldest first."""
     names = []
     for m in messages:
         if m["role"] == "tool":
             meta = json.loads(m["content"])
             if meta.get("success") and "result_table" in meta:
                 names.append(meta["result_table"])
+    return names
+
+
+def _result_table(messages: list[dict], index: int) -> str:
+    """The Nth-latest (-1 = latest) successful run_query Result Table in the message history."""
+    names = _result_tables(messages)
     if len(names) < -index:
-        raise ValueError("no earlier Result Table in this Conversation")
+        raise NoResultTable("no earlier Result Table in this Conversation")
     return names[index]

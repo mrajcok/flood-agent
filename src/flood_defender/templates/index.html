@@ -41,7 +41,11 @@
   </style>
 </head>
 <body>
-  <h1>Flood Defender{% if fake_mode %} <span class="badge">Fake mode — no LLM</span>{% endif %}</h1>
+  {% macro entry(c, css_class="") %}
+  <li{% if css_class %} class="{{ css_class }}"{% endif %}><button type="button" hx-post="/chat" hx-include="#conversation_id" hx-vals='{{ {"message": c.prompt} | tojson }}'
+    hx-target="#chat" hx-swap="beforeend">{{ c.prompt }}</button>{% if c.fails_on_purpose %} <small class="fails">fails on purpose</small>{% endif %}</li>
+  {% endmacro %}
+  <h1>Flood Defender{% if fake_mode %} <span class="badge">Fake Mode — no LLM</span>{% endif %}</h1>
   <div class="layout">
   {% include "sidebar.html" %}
   <main>
@@ -62,13 +66,9 @@
   <div class="canned">
     <strong>Canned Prompts</strong>
     <ul>
-    {% for c in canned_prompts if not c.after %}
-      <li><button type="button" hx-post="/chat" hx-include="#conversation_id" hx-vals='{{ {"message": c.prompt} | tojson }}'
-        hx-target="#chat" hx-swap="beforeend">{{ c.prompt }}</button>{% if c.fails_on_purpose %} <small class="fails">fails on purpose</small>{% endif %}</li>
-      {% for f in canned_prompts if f.after == c.id %}
-      <li class="follow-up"><button type="button" hx-post="/chat" hx-include="#conversation_id" hx-vals='{{ {"message": f.prompt} | tojson }}'
-        hx-target="#chat" hx-swap="beforeend">{{ f.prompt }}</button>{% if f.fails_on_purpose %} <small class="fails">fails on purpose</small>{% endif %}</li>
-      {% endfor %}
+    {% for c in picker %}
+      {{ entry(c) }}
+      {% for f in c.follow_ups %}{{ entry(f, "follow-up") }}{% endfor %}
     {% endfor %}
     </ul>
   </div>

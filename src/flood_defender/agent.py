@@ -33,11 +33,11 @@ class AgentConfig:
     app_db: Path | None = None  # defaults to app.db beside the results database
     result_ttl_ms: int = 24 * 3600 * 1000  # Result Tables expire this long after last Conversation activity
     clock: Callable[[], int] = lambda: int(time.time() * 1000)  # epoch ms; injectable for tests
+    chart_row_cap: int = 10_000
 
 
 class ResultTableExpired(Exception):
     """The Result Table existed but was deleted by expiry (HTTP layer maps this to 410)."""
-    chart_row_cap: int = 10_000
 
 
 @dataclass

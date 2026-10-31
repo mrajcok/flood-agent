@@ -1,0 +1,174 @@
+"""App database: Conversations, turns, messages, Display definitions, Result Table ownership.
+
+A separate SQLite file (not the Telemetry Database, not the results database). Displays are
+stored as definitions only (kind + Result Table + options), never rows, so reopening a
+Conversation re-renders them from their Result Tables.
+
+Extension points for later tickets:
+- `conversations.last_activity_at` (epoch ms) is touched on every write (Result Table expiry).
+- `result_tables` records which Conversation owns each Result Table.
+- `turns.trace` is a nullable BLOB reserved for the per-turn Trace.
+"""
+
+import json
+import sqlite3
+import time
+import uuid
+from contextlib import closing
+from pathlib import Path
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS conversations (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_activity_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS turns (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id),
+  user_message TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  trace BLOB
+);
+CREATE TABLE IF NOT EXISTS messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id),
+  turn_id INTEGER NOT NULL REFERENCES turns(id),
+  body TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS messages_conv ON messages(conversation_id, id);
+CREATE TABLE IF NOT EXISTS displays (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id),
+  turn_id INTEGER NOT NULL REFERENCES turns(id),
+  after_message_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  result_table TEXT,
+  definition TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS displays_conv ON displays(conversation_id, id);
+CREATE TABLE IF NOT EXISTS result_tables (
+  name TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id),
+  created_at INTEGER NOT NULL
+);
+"""
+
+
+def _now() -> int:
+    return int(time.time() * 1000)
+
+
+class ConversationStore:
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self._connect() as con:
+            con.executescript(SCHEMA)
+
+    def _connect(self) -> sqlite3.Connection:
+        con = sqlite3.connect(self.path)
+        con.row_factory = sqlite3.Row
+        return con
+
+    def _write(self, sql: str, params=(), conversation_id: str | None = None) -> int:
+        with closing(self._connect()) as con, con:
+            cur = con.execute(sql, params)
+            if conversation_id:
+                con.execute(
+                    "UPDATE conversations SET last_activity_at=? WHERE id=?", (_now(), conversation_id)
+                )
+            return cur.lastrowid
+
+    def create_conversation(self, title: str) -> str:
+        cid, now = uuid.uuid4().hex, _now()
+        self._write(
+            "INSERT INTO conversations(id, title, created_at, last_activity_at) VALUES (?,?,?,?)",
+            (cid, title, now, now),
+        )
+        return cid
+
+    def exists(self, conversation_id: str) -> bool:
+        with closing(self._connect()) as con:
+            return con.execute("SELECT 1 FROM conversations WHERE id=?", (conversation_id,)).fetchone() is not None
+
+    def list_conversations(self) -> list[dict]:
+        with closing(self._connect()) as con:
+            rows = con.execute(
+                "SELECT id, title, created_at, last_activity_at FROM conversations "
+                "ORDER BY last_activity_at DESC, created_at DESC"
+            )
+            return [dict(r) for r in rows]
+
+    def start_turn(self, conversation_id: str, user_message: str) -> int:
+        return self._write(
+            "INSERT INTO turns(conversation_id, user_message, created_at) VALUES (?,?,?)",
+            (conversation_id, user_message, _now()),
+            conversation_id,
+        )
+
+    def add_message(self, conversation_id: str, turn_id: int, message: dict) -> int:
+        return self._write(
+            "INSERT INTO messages(conversation_id, turn_id, body) VALUES (?,?,?)",
+            (conversation_id, turn_id, json.dumps(message)),
+            conversation_id,
+        )
+
+    def add_display(
+        self, conversation_id: str, turn_id: int, after_message_id: int, kind: str,
+        result_table: str | None, definition: dict,
+    ) -> int:
+        return self._write(
+            "INSERT INTO displays(conversation_id, turn_id, after_message_id, kind, result_table, definition)"
+            " VALUES (?,?,?,?,?,?)",
+            (conversation_id, turn_id, after_message_id, kind, result_table, json.dumps(definition)),
+            conversation_id,
+        )
+
+    def add_result_table(self, conversation_id: str, name: str) -> None:
+        self._write(
+            "INSERT OR IGNORE INTO result_tables(name, conversation_id, created_at) VALUES (?,?,?)",
+            (name, conversation_id, _now()),
+            conversation_id,
+        )
+
+    def owns_result_table(self, conversation_id: str, name: str) -> bool:
+        with closing(self._connect()) as con:
+            return con.execute(
+                "SELECT 1 FROM result_tables WHERE name=? AND conversation_id=?", (name, conversation_id)
+            ).fetchone() is not None
+
+    def result_tables(self, conversation_id: str) -> list[str]:
+        with closing(self._connect()) as con:
+            return [r[0] for r in con.execute(
+                "SELECT name FROM result_tables WHERE conversation_id=? ORDER BY created_at, name",
+                (conversation_id,))]
+
+    def messages(self, conversation_id: str) -> list[dict]:
+        """LLM-facing message history, in order."""
+        with closing(self._connect()) as con:
+            return [json.loads(r[0]) for r in con.execute(
+                "SELECT body FROM messages WHERE conversation_id=? ORDER BY id", (conversation_id,))]
+
+    def transcript(self, conversation_id: str) -> list[dict]:
+        """Messages interleaved with Display definitions, for re-rendering the chat.
+
+        Items: {"type": "message", "message": {...}} or {"type": "display", "kind", "result_table", **definition}.
+        """
+        with closing(self._connect()) as con:
+            msgs = con.execute(
+                "SELECT id, body FROM messages WHERE conversation_id=? ORDER BY id", (conversation_id,)
+            ).fetchall()
+            displays = con.execute(
+                "SELECT id, after_message_id, kind, result_table, definition FROM displays "
+                "WHERE conversation_id=? ORDER BY id", (conversation_id,)
+            ).fetchall()
+        out: list[dict] = []
+        for m in msgs:
+            out.append({"type": "message", "message": json.loads(m["body"])})
+            for d in displays:
+                if d["after_message_id"] == m["id"]:
+                    out.append({"type": "display", "kind": d["kind"], "result_table": d["result_table"],
+                                **json.loads(d["definition"])})
+        return out

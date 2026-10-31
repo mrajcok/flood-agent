@@ -59,3 +59,32 @@ functions live in `static/format.js` (tested with `node --test` via pytest).
 - `queries.py` - read-only Telemetry Database access, CTAS into the results DB, internal row access.
 - `web.py` + `templates/` - FastAPI, Jinja, htmx (SSE), Alpine table component.
 - `semantic_layer.yaml` - hand-authored Semantic Layer rendered into the system prompt.
+
+## Eval set and runner (on demand, not CI)
+
+`src/flood_defender/evalset/golden.yaml` holds ~30 golden questions with reference SQL
+(many target the injected attacks of the default seed-1 database). `pytest` checks that
+every reference query runs and that attack answers agree with `attacks.json`, and tests
+the runner with the scripted fake LLM; it never calls OpenRouter.
+
+To compare models against real OpenRouter (costs money):
+
+```
+uv run python -m flood_defender.generator data/telemetry.db        # default seed 1, full scale
+export OPENROUTER_API_KEY=...
+uv run python -m flood_defender.evalset --db data/telemetry.db \
+    --models anthropic/claude-sonnet-5.5 deepseek/deepseek-v4-pro-0813 z-ai/glm-5.3 qwen/qwen3.8-27b \
+    --out eval-report                                              # writes eval-report.md / .json
+```
+
+`--models` defaults to those four; `--questions id ...` runs a subset. Per model it reports
+correctness, retries (failed `run_query` attempts), latency and cost (OpenRouter-reported).
+
+Comparison rules (`evalset/compare.py`): a question is correct if any successful Result Table
+the LLM created matches the reference. Column names and order are ignored; extra columns are
+allowed (counted in the JSON); every reference column must appear with identical values and
+rows must line up. Rows are order-insensitive unless the question sets `ordered: true`.
+Numbers: int/float interchangeable, relative tolerance 1e-6 (per-question `tolerance`);
+strings exact and case-sensitive; NULL equals NULL.
+The runner reads Result Tables itself (Agent-side harness); the LLM receives only what the
+Agent normally sends.

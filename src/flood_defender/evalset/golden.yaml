@@ -1,0 +1,205 @@
+# Golden question set (default generator seed 1). Each entry:
+#   id, question (sent verbatim to the LLM), sql (reference), ordered (row order is
+#   significant), tolerance (relative numeric tolerance override), crosscheck (the
+#   reference answer must agree with <db>.attacks.json; checked by the test suite).
+# Questions name the columns to return; the comparison ignores column names and order
+# and allows extra columns (see evalset/compare.py).
+# Windows (UTC): SYN flood 2026-01-02 14:00-14:30, amplification 2026-01-04 03:00-03:20,
+# port scan 2026-01-06 20:00-20:15. Dataset window is 2026-01-01 .. 2026-01-08.
+
+# ---- common metrics and basics -------------------------------------------------
+- id: total-flow-count
+  question: How many Flow Records are there in total? Return a single number.
+  sql: SELECT COUNT(*) AS flows FROM flows
+
+- id: total-bytes-and-packets
+  question: What are the total bytes and total packets across all Flow Records? Return two columns.
+  sql: SELECT SUM(bytes) AS total_bytes, SUM(pkts) AS total_pkts FROM flows
+
+- id: flows-per-protocol
+  question: How many Flow Records are there for each IP protocol number? Return the protocol number and the count.
+  sql: SELECT proto, COUNT(*) AS flows FROM flows GROUP BY proto
+
+- id: top-dports-by-bytes
+  question: What are the top 5 destination ports by total bytes? Return dport and total bytes, biggest first.
+  ordered: true
+  sql: SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC LIMIT 5
+
+- id: distinct-circuits
+  question: How many distinct Circuits appear in the data? Return a single number.
+  sql: SELECT COUNT(DISTINCT circuit) AS circuits FROM flows
+
+- id: busiest-hour-of-day
+  question: Across the whole dataset, which hour of the day (0-23, UTC) has the most Flow Records? Return only the hour number.
+  sql: SELECT (etime / 3600000) % 24 AS hour FROM flows GROUP BY hour ORDER BY COUNT(*) DESC LIMIT 1
+
+- id: top-talkers-last-hour
+  question: Who are the top 10 source IPs by total bytes in the last hour of the dataset (the 3600 seconds before the end of the window)? Return sip and total bytes, biggest first.
+  ordered: true
+  sql: >-
+    SELECT sip, SUM(bytes) AS total_bytes FROM flows
+    WHERE etime >= 1767826800000 AND etime < 1767830400000
+    GROUP BY sip ORDER BY total_bytes DESC LIMIT 10
+
+- id: bps-last-hour
+  question: What was the average throughput in bits per second over the last hour of the dataset? Return a single number.
+  sql: SELECT SUM(bytes) * 8.0 / 3600 AS bits_per_second FROM flows WHERE etime >= 1767826800000 AND etime < 1767830400000
+
+- id: pps-last-hour
+  question: What was the average packet rate in packets per second over the last hour of the dataset? Return a single number.
+  sql: SELECT SUM(pkts) * 1.0 / 3600 AS packets_per_second FROM flows WHERE etime >= 1767826800000 AND etime < 1767830400000
+
+- id: per-minute-bytes-syn-window
+  question: Give me bytes per minute (minute start as epoch milliseconds, and total bytes) for 2026-01-02 14:00 to 14:10 UTC, in time order.
+  ordered: true
+  sql: >-
+    SELECT (etime / 60000) * 60000 AS minute, SUM(bytes) AS bytes FROM flows
+    WHERE etime >= 1767362400000 AND etime < 1767363000000 GROUP BY minute ORDER BY minute
+
+- id: syn-only-flows-jan-2
+  question: How many TCP Flow Records had tcp_flags exactly 2 (SYN only) on 2026-01-02 (UTC)? Return a single number.
+  sql: >-
+    SELECT COUNT(*) AS flows FROM flows
+    WHERE proto = 6 AND tcp_flags = 2 AND etime >= 1767312000000 AND etime < 1767398400000
+
+- id: sources-in-10-1-slash-16
+  question: How many Flow Records have a source IP inside 10.1.0.0/16? Return a single number.
+  sql: SELECT COUNT(*) AS flows FROM flows WHERE in_cidr(sip, '10.1.0.0/16')
+
+- id: udp-total-bytes
+  question: How many bytes in total were carried by UDP Flow Records? Return a single number.
+  sql: SELECT SUM(bytes) AS total_bytes FROM flows WHERE proto = 17
+
+- id: icmp-flow-count
+  question: How many ICMP Flow Records are there? Return a single number.
+  sql: SELECT COUNT(*) AS flows FROM flows WHERE proto = 1
+
+- id: largest-flow
+  question: Which single Flow Record carried the most bytes? Return its source IP, destination IP and bytes.
+  sql: SELECT sip, dip, bytes FROM flows ORDER BY bytes DESC LIMIT 1
+
+- id: avg-packets-per-tcp-flow
+  question: What is the average number of packets per TCP Flow Record? Return a single number.
+  sql: SELECT AVG(pkts) AS avg_pkts FROM flows WHERE proto = 6
+
+# ---- SYN flood ---------------------------------------------------------------------
+- id: syn-flood-victim
+  question: Between 2026-01-02 14:00 and 14:30 UTC, which destination IP received the most SYN-only (tcp_flags exactly 2) Flow Records? Return only the IP.
+  sql: >-
+    SELECT dip FROM flows
+    WHERE tcp_flags = 2 AND etime >= 1767362400000 AND etime < 1767364200000
+    GROUP BY dip ORDER BY COUNT(*) DESC LIMIT 1
+  crosscheck: {attack: syn_flood, column: dip, in: targets_dip}
+
+- id: syn-flood-flow-count
+  question: How many SYN-only (tcp_flags exactly 2) Flow Records went to 203.0.113.50 port 443 between 2026-01-02 14:00 and 14:30 UTC? Return a single number.
+  sql: >-
+    SELECT COUNT(*) AS flows FROM flows
+    WHERE dip = '203.0.113.50' AND dport = 443 AND tcp_flags = 2
+      AND etime >= 1767362400000 AND etime < 1767364200000
+  crosscheck: {attack: syn_flood, column: flows, field: flow_count, slack: 100}
+
+- id: syn-flood-distinct-sources
+  question: How many distinct source IPs sent SYN-only (tcp_flags exactly 2) traffic to 203.0.113.50 port 443 between 2026-01-02 14:00 and 14:30 UTC? Return a single number.
+  sql: >-
+    SELECT COUNT(DISTINCT sip) AS sources FROM flows
+    WHERE dip = '203.0.113.50' AND dport = 443 AND tcp_flags = 2
+      AND etime >= 1767362400000 AND etime < 1767364200000
+
+- id: syn-flood-circuit
+  question: Which Circuit carried the most SYN-only (tcp_flags exactly 2) Flow Records to 203.0.113.50 port 443 between 2026-01-02 14:00 and 14:30 UTC? Return only the Circuit.
+  sql: >-
+    SELECT circuit FROM flows
+    WHERE dip = '203.0.113.50' AND dport = 443 AND tcp_flags = 2
+      AND etime >= 1767362400000 AND etime < 1767364200000
+    GROUP BY circuit ORDER BY COUNT(*) DESC LIMIT 1
+  crosscheck: {attack: syn_flood, column: circuit, in: circuits}
+
+- id: syn-flood-bps
+  question: What was the average bits per second sent to 203.0.113.50 port 443 between 2026-01-02 14:00 and 14:30 UTC (1800 seconds)? Return a single number.
+  sql: >-
+    SELECT SUM(bytes) * 8.0 / 1800 AS bits_per_second FROM flows
+    WHERE dip = '203.0.113.50' AND dport = 443
+      AND etime >= 1767362400000 AND etime < 1767364200000
+
+# ---- amplification ---------------------------------------------------------------
+- id: amp-victim
+  question: Between 2026-01-04 03:00 and 03:20 UTC, which destination IP received the most bytes from UDP traffic whose source port is 53 or 123? Return only the IP.
+  sql: >-
+    SELECT dip FROM flows
+    WHERE proto = 17 AND sport IN (53, 123) AND etime >= 1767495600000 AND etime < 1767496800000
+    GROUP BY dip ORDER BY SUM(bytes) DESC LIMIT 1
+  crosscheck: {attack: amplification, column: dip, in: targets_dip}
+
+- id: amp-total-bytes
+  question: How many bytes in total did 198.51.100.77 receive from UDP source ports 53 or 123 between 2026-01-04 03:00 and 03:20 UTC? Return a single number.
+  sql: >-
+    SELECT SUM(bytes) AS total_bytes FROM flows
+    WHERE dip = '198.51.100.77' AND proto = 17 AND sport IN (53, 123)
+      AND etime >= 1767495600000 AND etime < 1767496800000
+
+- id: amp-reflector-count
+  question: How many distinct source IPs (reflectors) sent UDP traffic from source port 53 or 123 to 198.51.100.77 between 2026-01-04 03:00 and 03:20 UTC? Return a single number.
+  sql: >-
+    SELECT COUNT(DISTINCT sip) AS reflectors FROM flows
+    WHERE dip = '198.51.100.77' AND proto = 17 AND sport IN (53, 123)
+      AND etime >= 1767495600000 AND etime < 1767496800000
+  crosscheck: {attack: amplification, column: reflectors, field: reflector_count, slack: 0}
+
+- id: amp-flows-per-source-port
+  question: Between 2026-01-04 03:00 and 03:20 UTC, how many UDP Flow Records came from each source port (53 vs 123) towards 198.51.100.77? Return sport and the count.
+  sql: >-
+    SELECT sport, COUNT(*) AS flows FROM flows
+    WHERE dip = '198.51.100.77' AND proto = 17 AND sport IN (53, 123)
+      AND etime >= 1767495600000 AND etime < 1767496800000
+    GROUP BY sport
+
+- id: amp-flow-count
+  question: How many UDP Flow Records from source port 53 or 123 went to 198.51.100.77 between 2026-01-04 03:00 and 03:20 UTC? Return a single number.
+  sql: >-
+    SELECT COUNT(*) AS flows FROM flows
+    WHERE dip = '198.51.100.77' AND proto = 17 AND sport IN (53, 123)
+      AND etime >= 1767495600000 AND etime < 1767496800000
+  crosscheck: {attack: amplification, column: flows, field: flow_count, slack: 0}
+
+- id: amp-circuit
+  question: Which Circuit carried the most bytes sent to 198.51.100.77 from UDP source ports 53 or 123 between 2026-01-04 03:00 and 03:20 UTC? Return only the Circuit.
+  sql: >-
+    SELECT circuit FROM flows
+    WHERE dip = '198.51.100.77' AND proto = 17 AND sport IN (53, 123)
+      AND etime >= 1767495600000 AND etime < 1767496800000
+    GROUP BY circuit ORDER BY SUM(bytes) DESC LIMIT 1
+  crosscheck: {attack: amplification, column: circuit, in: circuits}
+
+- id: busiest-hour-jan-4
+  question: On 2026-01-04 (UTC), which hour (0-23) carried the most bytes? Return only the hour number.
+  sql: >-
+    SELECT (etime / 3600000) % 24 AS hour FROM flows
+    WHERE etime >= 1767484800000 AND etime < 1767571200000
+    GROUP BY hour ORDER BY SUM(bytes) DESC LIMIT 1
+
+# ---- port scan -------------------------------------------------------------------
+- id: scan-source
+  question: Between 2026-01-06 20:00 and 20:15 UTC, which source IP contacted the most distinct destination ports? Return only the IP.
+  sql: >-
+    SELECT sip FROM flows
+    WHERE etime >= 1767729600000 AND etime < 1767730500000
+    GROUP BY sip ORDER BY COUNT(DISTINCT dport) DESC LIMIT 1
+  crosscheck: {attack: port_scan, column: sip, in: sources}
+
+- id: scan-flow-count
+  question: How many Flow Records have source IP 192.0.2.99? Return a single number.
+  sql: SELECT COUNT(*) AS flows FROM flows WHERE sip = '192.0.2.99'
+  crosscheck: {attack: port_scan, column: flows, field: flow_count, slack: 0}
+
+- id: scan-distinct-targets
+  question: How many distinct destination IPs did 192.0.2.99 contact inside 10.20.0.0/24? Return a single number.
+  sql: SELECT COUNT(DISTINCT dip) AS targets FROM flows WHERE sip = '192.0.2.99' AND in_cidr(dip, '10.20.0.0/24')
+
+- id: scan-port-range
+  question: What are the lowest and highest destination ports 192.0.2.99 sent traffic to? Return two columns, lowest first.
+  sql: SELECT MIN(dport) AS min_port, MAX(dport) AS max_port FROM flows WHERE sip = '192.0.2.99'
+
+- id: scan-avg-flow-size
+  question: What is the average bytes per Flow Record for traffic from 192.0.2.99? Return a single number.
+  sql: SELECT AVG(bytes) AS avg_bytes FROM flows WHERE sip = '192.0.2.99'

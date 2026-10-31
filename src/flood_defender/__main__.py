@@ -8,15 +8,27 @@ import uvicorn
 
 from flood_defender.agent import Agent
 from flood_defender.config import Settings
-from flood_defender.llm import OpenRouterClient
-from flood_defender.web import create_app
+from flood_defender.fake_llm import CannedPrompt
+from flood_defender.web import PickerEntry, create_app
+
+
+def picker_entries(canned_prompts: list[CannedPrompt]) -> list[PickerEntry]:
+    """The page's picker: each top-level Canned Prompt with its follow-ups nested under it."""
+
+    def entry(c: CannedPrompt) -> PickerEntry:
+        follow_ups = [entry(f) for f in canned_prompts if f.after == c.id]
+        return PickerEntry(c.prompt, c.fails_on_purpose, follow_ups)
+
+    return [entry(c) for c in canned_prompts if c.after is None]
 
 
 def build_app(settings: Settings | None = None):
     settings = settings or Settings()  # pyright: ignore[reportCallIssue]  # pydantic-settings fills fields from env/TOML
-    config = settings.agent_config()
+    backend = settings.llm_backend_choice()
+    config = settings.agent_config(backend.model)
     config.results_db.parent.mkdir(parents=True, exist_ok=True)
-    return create_app(Agent(config, OpenRouterClient(settings.require_api_key(), config.model)))
+    picker = picker_entries(backend.canned_prompts or [])
+    return create_app(Agent(config, backend.client), picker=picker, fake_mode=backend.fake_mode)
 
 
 if __name__ == "__main__":

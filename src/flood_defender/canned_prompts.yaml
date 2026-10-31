@@ -1,0 +1,280 @@
+# Canned Prompts for Fake Mode (LLM_BACKEND=fake). Hand-edited.
+#
+# Each entry is a fixed user message plus the scripted LLM replies that answer it.
+#   id      stable slug
+#   prompt  the exact user message: shown in the picker and matched exactly by the fake
+#   steps   one per simulated LLM call: `text` (streamed) and/or `tool_calls` (name + args)
+#   after   optional id of a parent Canned Prompt: the follow-up is listed indented under it and needs its Result Table
+#   expect  the declared outcome the test suite checks (`displays`: Display kinds in order)
+#   Failure-path entries add to `expect`: `failed_tool_calls` (count), `notice` (text the reply must
+#   contain), `turn_error` (the turn ends in an error). The picker marks entries that declare
+#   `failed_tool_calls` or `notice` as "fails on purpose".
+#   A tool call may give `raw_arguments` (a raw string, sent as-is) instead of `args`; a step may
+#   give `error` (raised as the LLM error after its text streams).
+#   Tool-call args may contain `{result_table}` (latest run_query Result Table) and
+#   `{result_table:-2}` (the one before it), anywhere inside the args, including nested Chart Specs.
+#
+# The SQL assumes the data came from the generator with its default seed and attack windows
+# (the same assumption as the eval golden set). Regenerate data with the default seed.
+
+- id: flow-count
+  prompt: How many flows are there in total?
+  steps:
+    - tool_calls:
+        - name: run_query
+          args:
+            sql: SELECT COUNT(*) AS flow_count FROM flows
+            title: Total flows
+    - tool_calls:
+        - name: show_table
+          args:
+            result_table: "{result_table}"
+    - text: "Here is the total number of flows."
+  expect:
+    displays: [table]
+
+- id: top-destinations
+  prompt: Which 10 destination IPs received the most bytes?
+  steps:
+    - tool_calls:
+        - name: run_query
+          args:
+            sql: SELECT dip, SUM(bytes) AS total_bytes FROM flows GROUP BY dip ORDER BY total_bytes DESC LIMIT 10
+            title: Top destinations by bytes
+    - tool_calls:
+        - name: show_table
+          args:
+            result_table: "{result_table}"
+    - text: "Here are the top destinations by bytes."
+  expect:
+    displays: [table]
+
+- id: bytes-over-time
+  prompt: Chart total bytes per hour over time.
+  steps:
+    - tool_calls:
+        - name: run_query
+          args:
+            sql: >-
+              SELECT (etime / 3600000) * 3600000 AS bucket_ms, SUM(bytes) AS total_bytes
+              FROM flows GROUP BY bucket_ms ORDER BY bucket_ms
+            title: Bytes per hour
+    - tool_calls:
+        - name: show_chart
+          args:
+            vega_lite_spec:
+              data: {name: "{result_table}"}
+              mark: line
+              encoding:
+                x: {field: bucket_ms, type: temporal, scale: {type: utc}, title: Time (UTC)}
+                y: {field: total_bytes, type: quantitative, title: Bytes}
+    - text: "Here is the hourly traffic."
+  expect:
+    displays: [chart]
+
+- id: bytes-by-port
+  prompt: Chart total bytes by destination port.
+  steps:
+    - tool_calls:
+        - name: run_query
+          args:
+            sql: SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC LIMIT 10
+            title: Bytes by destination port
+    - tool_calls:
+        - name: show_chart
+          args:
+            vega_lite_spec:
+              data: {name: "{result_table}"}
+              mark: bar
+              encoding:
+                x: {field: dport, type: nominal, sort: null, title: Destination port}
+                y: {field: total_bytes, type: quantitative, title: Bytes}
+    - text: "Here are the bytes by destination port."
+  expect:
+    displays: [chart]
+
+- id: chained-query
+  prompt: Total bytes by port, then show the top 3 ports from that result.
+  steps:
+    - tool_calls:
+        - name: run_query
+          args:
+            sql: SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC LIMIT 100
+            title: Bytes by port
+    - tool_calls:
+        - name: run_query
+          args:
+            sql: SELECT dport, total_bytes FROM {result_table} ORDER BY total_bytes DESC LIMIT 3
+            title: Top 3 ports
+    - tool_calls:
+        - name: show_table
+          args:
+            result_table: "{result_table}"
+    - text: "Here are the top 3 ports, queried from the earlier result."
+  expect:
+    displays: [table]
+
+- id: concurrent-tables
+  prompt: Show me flows per destination port and bytes per destination IP together.
+  steps:
+    - tool_calls:
+        - name: run_query
+          args:
+            sql: SELECT dport, COUNT(*) AS flow_count FROM flows GROUP BY dport ORDER BY flow_count DESC LIMIT 20
+            title: Flows per port
+        - name: run_query
+          args:
+            sql: SELECT dip, SUM(bytes) AS total_bytes FROM flows GROUP BY dip ORDER BY total_bytes DESC LIMIT 20
+            title: Bytes per destination IP
+    - tool_calls:
+        - name: show_table
+          args:
+            result_table: "{result_table:-2}"
+        - name: show_table
+          args:
+            result_table: "{result_table}"
+    - text: "Here are both tables."
+  expect:
+    displays: [table, table]
+
+- id: chart-top-destinations
+  prompt: Now chart those bytes by destination IP.
+  after: top-destinations
+  steps:
+    - tool_calls:
+        - name: show_chart
+          args:
+            vega_lite_spec:
+              data: {name: "{result_table}"}
+              mark: bar
+              encoding:
+                x: {field: dip, type: nominal, sort: null, title: Destination IP}
+                y: {field: total_bytes, type: quantitative, title: Bytes}
+    - text: "Here is the previous result as a chart."
+  expect:
+    displays: [chart]
+
+- id: invalid-sql-retry
+  prompt: "Fail on purpose: run a query with a typo, then retry."
+  steps:
+    - text: "Let me count the flows."
+      tool_calls:
+        - name: run_query
+          args:
+            sql: SELEKT COUNT(*) AS flow_count FROM flows
+            title: Total flows
+    - text: "That had a typo; retrying."
+      tool_calls:
+        - name: run_query
+          args:
+            sql: SELECT COUNT(*) AS flow_count FROM flows
+            title: Total flows
+    - tool_calls:
+        - name: show_table
+          args:
+            result_table: "{result_table}"
+    - text: "Here is the total number of flows."
+  expect:
+    displays: [table]
+    failed_tool_calls: 1
+
+- id: too-many-rows
+  prompt: "Fail on purpose: run a query that returns too many rows."
+  steps:
+    - tool_calls:
+        - name: run_query
+          args:
+            sql: >-
+              WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2000000)
+              SELECT i FROM n
+            title: Two million rows
+    - text: "That query returned too many rows, so no Result Table was created."
+  expect:
+    displays: []
+    failed_tool_calls: 1
+
+- id: chart-over-row-cap
+  prompt: "Fail on purpose: chart a Result Table above the chart row cap."
+  steps:
+    - tool_calls:
+        - name: run_query
+          args:
+            sql: >-
+              WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10001)
+              SELECT i, i * 2 AS doubled FROM n
+            title: Ten thousand and one rows
+    - tool_calls:
+        - name: show_chart
+          args:
+            vega_lite_spec:
+              data: {name: "{result_table}"}
+              mark: line
+              encoding:
+                x: {field: i, type: quantitative}
+                y: {field: doubled, type: quantitative}
+    - text: "That Result Table has too many rows to chart."
+  expect:
+    displays: []
+    failed_tool_calls: 1
+
+- id: chart-with-inline-data
+  prompt: "Fail on purpose: chart a spec that embeds its own data values."
+  steps:
+    - tool_calls:
+        - name: run_query
+          args:
+            sql: SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC LIMIT 5
+            title: Bytes by destination port
+    - tool_calls:
+        - name: show_chart
+          args:
+            vega_lite_spec:
+              data:
+                name: "{result_table}"
+                values: [{dport: 1, total_bytes: 2}, {dport: 3, total_bytes: 4}]
+              mark: bar
+              encoding:
+                x: {field: dport, type: nominal}
+                y: {field: total_bytes, type: quantitative}
+    - text: "The chart was rejected because the spec embedded data values."
+  expect:
+    displays: []
+    failed_tool_calls: 1
+
+- id: malformed-json-arguments
+  prompt: "Fail on purpose: call a tool with malformed JSON arguments."
+  steps:
+    - tool_calls:
+        - name: run_query
+          raw_arguments: '{"sql": "SELECT 1", "title": '
+    - text: "That tool call had malformed arguments and was rejected."
+  expect:
+    displays: []
+    failed_tool_calls: 1
+
+- id: repeated-failures
+  prompt: "Fail on purpose: keep failing until the attempt limit ends the turn."
+  steps:
+    - tool_calls:
+        - name: run_query
+          args: {sql: SELEKT 1, title: Attempt 1}
+    - tool_calls:
+        - name: run_query
+          args: {sql: SELEKT 2, title: Attempt 2}
+    - tool_calls:
+        - name: run_query
+          args: {sql: SELEKT 3, title: Attempt 3}
+  expect:
+    displays: []
+    failed_tool_calls: 3
+    notice: after several attempts
+
+- id: llm-stream-error
+  prompt: "Fail on purpose: the LLM stream breaks partway."
+  steps:
+    - text: "Let me look into that, and then"
+      error: The response stream was cut off.
+  expect:
+    displays: []
+    notice: couldn't get a complete answer
+    turn_error: true

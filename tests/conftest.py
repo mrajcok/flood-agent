@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 from mcp.shared.memory import create_client_server_memory_streams
 
-from flood_defender.agent import Agent, AgentConfig, Conversation
+from flood_defender.agent import Agent, AgentConfig, Conversation, TextDelta
 from flood_defender.config import Settings
 from flood_defender.llm import TextChunk, ToolCallChunk, UsageChunk
 from flood_defender.mcp_server import ServerSettings, create_server
@@ -156,8 +156,7 @@ def config_for_test(tmp_path, telemetry_db, semantic_layer, **overrides) -> Agen
         results_db=tmp_path / "results.db",
         app_db=tmp_path / "app.db",
         semantic_layer=semantic_layer,
-        model="test/model",
-        **overrides,
+        **{"model": "test/model", **overrides},
     )
 
 
@@ -198,7 +197,7 @@ def web_client():
     """`web_client(agent)` -> a TestClient used as a context manager, so the app lifespan runs
     (starting the Agent's MCP server) and is left again at teardown."""
     with ExitStack() as stack:
-        yield lambda agent: stack.enter_context(TestClient(create_app(agent)))
+        yield lambda agent, **kwargs: stack.enter_context(TestClient(create_app(agent, **kwargs)))
 
 
 def mcp_children() -> list[int]:
@@ -219,6 +218,11 @@ def mcp_children() -> list[int]:
 
 async def collect(agent: Agent, message: str, conversation: Conversation | None = None):
     return [e async for e in agent.run_turn(conversation or Conversation(), message)]
+
+
+def text_of(events) -> str:
+    """All streamed assistant text in a turn's events, joined."""
+    return "".join(e.text for e in events if isinstance(e, TextDelta))
 
 
 __all__ = ["TextChunk"]

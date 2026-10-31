@@ -31,11 +31,21 @@
     .trace pre { white-space: pre-wrap; word-break: break-word; background: #f6f6f6; padding: .4rem; margin: .2rem 0; }
     .trace h4 { margin: .6rem 0 .2rem; }
     form { display: flex; gap: .5rem; margin-top: 1rem; }
+    .badge { font-size: .5em; vertical-align: middle; padding: .15rem .5rem; background: #fde68a; border-radius: .25rem; }
+    .canned { margin-top: 1rem; font-size: .9rem; }
+    .canned .fails { color: #a40; }
+    .canned ul { list-style: none; padding: 0; margin: .25rem 0; }
+    .canned .follow-up { margin-left: 1.5rem; }
+    .canned button { background: none; border: 0; padding: .15rem 0; color: #06c; cursor: pointer; text-align: left; }
     input[name=message] { flex: 1; padding: .5rem; }
   </style>
 </head>
 <body>
-  <h1>Flood Defender</h1>
+  {% macro entry(c, css_class="") %}
+  <li{% if css_class %} class="{{ css_class }}"{% endif %}><button type="button" hx-post="/chat" hx-include="#conversation_id" hx-vals='{{ {"message": c.prompt} | tojson }}'
+    hx-target="#chat" hx-swap="beforeend">{{ c.prompt }}</button>{% if c.fails_on_purpose %} <small class="fails">fails on purpose</small>{% endif %}</li>
+  {% endmacro %}
+  <h1>Flood Defender{% if fake_mode %} <span class="badge">Fake Mode — no LLM</span>{% endif %}</h1>
   <div class="layout">
   {% include "sidebar.html" %}
   <main>
@@ -52,6 +62,17 @@
       {% endif %}
     {% endfor %}
   </div>
+  {% if fake_mode %}
+  <div class="canned">
+    <strong>Canned Prompts</strong>
+    <ul>
+    {% for c in picker %}
+      {{ entry(c) }}
+      {% for f in c.follow_ups %}{{ entry(f, "follow-up") }}{% endfor %}
+    {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
   <form hx-post="/chat" hx-target="#chat" hx-swap="beforeend" hx-on::after-request="this.reset()">
     <input type="hidden" id="conversation_id" name="conversation_id" value="{{ current_id or '' }}">
     <input name="message" placeholder="Ask about your flow traffic..." autocomplete="off" required>

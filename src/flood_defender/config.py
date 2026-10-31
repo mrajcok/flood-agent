@@ -6,7 +6,9 @@ call (in request `_meta`), and it scopes which Result Tables a call may use.
 
 import tomllib
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from dotenv import dotenv_values
 from pydantic import Field, SecretStr
@@ -19,6 +21,8 @@ from pydantic_settings import (
 )
 
 from flood_defender.agent import AgentConfig
+from flood_defender.fake_llm import CannedPrompt, FakeClient, load_canned_prompts
+from flood_defender.llm import LLMClient, OpenRouterClient
 
 DEFAULTS_FILE = Path(__file__).with_name("defaults.toml")
 
@@ -38,13 +42,31 @@ class _LiteralDotEnvSource(DotEnvSettingsSource):
         }
 
 
+@dataclass(frozen=True)
+class LLMBackend:
+    """The chosen LLM client with the model name to report; `canned_prompts` is set only in Fake Mode."""
+
+    client: LLMClient
+    model: str
+    canned_prompts: list[CannedPrompt] | None = None
+
+    @property
+    def fake_mode(self) -> bool:
+        return self.canned_prompts is not None
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", env_ignore_empty=True, extra="ignore", toml_file=DEFAULTS_FILE
     )
 
+    llm_backend: Literal["openrouter", "fake"] = Field(
+        description="openrouter calls a real model (needs OPENROUTER_API_KEY). fake is Fake Mode: a scripted\n"
+        "stand-in answers Canned Prompts listed on the page, so no model is called and no key is needed.\n"
+        "Try it for one run with: LLM_BACKEND=fake uv run python -m flood_defender"
+    )
     openrouter_api_key: SecretStr | None = Field(
-        None, description="OpenRouter API key. Required; the only setting without a default. Never commit a real key."
+        None, description="OpenRouter API key. Required when LLM_BACKEND is openrouter; the only setting without a default. Never commit a real key."
     )
     openrouter_model: str = Field(
         description="Model used for chat.\n"
@@ -55,7 +77,10 @@ class Settings(BaseSettings):
         description="Read-only flow records. Create with: uv run python -m flood_defender.generator data/telemetry.db"
     )
     results_db: Path = Field(description="Writable database holding Result Tables.")
-    app_db: Path = Field(description="Conversations, messages, Displays and Traces.")
+    app_db: Path = Field(
+        description="Conversations, messages, Displays and Traces.\n"
+        "Tip: use a separate database for Fake Mode, for example data/fake.db."
+    )
     semantic_layer: Path = Field(
         description="Hand-authored Semantic Layer (the generator also writes window_start/window_end into it)."
     )
@@ -99,13 +124,21 @@ class Settings(BaseSettings):
             raise RuntimeError("OPENROUTER_API_KEY is not set")
         return self.openrouter_api_key.get_secret_value()
 
-    def agent_config(self) -> AgentConfig:
+    def llm_backend_choice(self) -> LLMBackend:
+        """The one place that turns `llm_backend` into a client and model name."""
+        if self.llm_backend == "fake":
+            canned = load_canned_prompts()
+            return LLMBackend(FakeClient(canned), "fake", canned)
+        return LLMBackend(OpenRouterClient(self.require_api_key(), self.openrouter_model), self.openrouter_model)
+
+    def agent_config(self, model: str | None = None) -> AgentConfig:
+        """`model` is the name the chosen LLM backend reports; it defaults to the OpenRouter model."""
         return AgentConfig(
             telemetry_db=self.telemetry_db.resolve(),
             results_db=self.results_db.resolve(),
             semantic_layer=self.semantic_layer.resolve(),
             app_db=self.app_db.resolve(),
-            model=self.openrouter_model,
+            model=model or self.openrouter_model,
             result_ttl_ms=int(self.result_ttl_hours * 3600 * 1000),
             query_timeout_s=self.query_timeout_s,
             max_result_rows=self.max_result_rows,

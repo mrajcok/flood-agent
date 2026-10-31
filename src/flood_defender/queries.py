@@ -81,16 +81,66 @@ def result_table_columns(results_db: Path, name: str) -> list[str] | None:
     return cols or None
 
 
-def fetch_rows(results_db: Path, name: str, columns: list[str] | None = None, limit: int = 1000) -> dict:
-    """Internal data path: rows of a Result Table as JSON-able data. Never an LLM tool."""
+class InvalidSort(ValueError):
+    pass
+
+
+def fetch_rows(
+    results_db: Path,
+    name: str,
+    columns: list[str] | None = None,
+    page: int = 1,
+    page_size: int = 50,
+    sort: str | None = None,
+    descending: bool = False,
+) -> dict:
+    """Internal data path: one page of a Result Table as JSON-able data. Never an LLM tool.
+
+    `sort` must exactly match a column of the Result Table (validated against its schema,
+    then quoted); ties break on rowid so paging is stable.
+    """
     all_cols = result_table_columns(results_db, name)
     if all_cols is None:
         raise KeyError(name)
+    if sort is not None and sort not in all_cols:
+        raise InvalidSort(sort)
     cols = [c for c in (columns or all_cols) if c in all_cols]
-    select = ", ".join(f'"{c}"' for c in cols)
+    select = ", ".join(_q(c) for c in cols)
+    order = ""
+    if sort is not None:
+        order = f" ORDER BY {_q(sort)} {'DESC' if descending else 'ASC'}, rowid"
     con = sqlite3.connect(f"file:{results_db}?mode=ro", uri=True)
     try:
-        rows = [list(r) for r in con.execute(f"SELECT {select} FROM {name} LIMIT ?", (limit,))]
+        total = con.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0]
+        rows = [
+            list(r)
+            for r in con.execute(
+                f"SELECT {select} FROM {name}{order or ' ORDER BY rowid'} LIMIT ? OFFSET ?",
+                (page_size, (page - 1) * page_size),
+            )
+        ]
     finally:
         con.close()
-    return {"columns": cols, "rows": rows}
+    return {"columns": cols, "rows": rows, "total": total, "page": page, "page_size": page_size}
+
+
+def iter_all_rows(results_db: Path, name: str):
+    """Yield (columns, row iterator) for the whole Result Table (CSV export)."""
+    all_cols = result_table_columns(results_db, name)
+    if all_cols is None:
+        raise KeyError(name)
+    con = sqlite3.connect(f"file:{results_db}?mode=ro", uri=True)
+
+    def gen():
+        try:
+            yield from con.execute(
+                f"SELECT {', '.join(_q(c) for c in all_cols)} FROM {name} ORDER BY rowid"
+            )
+        finally:
+            con.close()
+
+    return all_cols, gen()
+
+
+def _q(col: str) -> str:
+    return '"' + col.replace('"', '""') + '"'

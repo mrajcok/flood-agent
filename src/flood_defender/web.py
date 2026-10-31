@@ -4,14 +4,20 @@ A thin layer over `Agent.run_turn`. The row-JSON endpoint is the Agent's interna
 path to the browser; it is a plain HTTP route, never registered as an MCP tool.
 """
 
+import csv
+import io
 import uuid
 from html import escape
 from pathlib import Path
 
-from fastapi import FastAPI, Form, HTTPException, Request
+from typing import Literal
+
+from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from flood_defender.queries import InvalidSort
 from flood_defender.agent import Agent, Conversation, DisplayEvent, TextDelta, TurnEnd
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -24,6 +30,7 @@ def _sse(event: str, data: str) -> str:
 
 def create_app(agent: Agent) -> FastAPI:
     app = FastAPI(title="Flood Defender")
+    app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
     conversation = Conversation()  # single user, single in-memory Conversation for now
     pending: dict[str, str] = {}
 
@@ -53,6 +60,7 @@ def create_app(agent: Agent) -> FastAPI:
                     elif isinstance(ev, DisplayEvent):
                         html = TEMPLATES.get_template("display_table.html").render(
                             rows_url=f"/api/results/{ev.result_table}/rows",
+                            csv_url=f"/api/results/{ev.result_table}/csv",
                             result_table=ev.result_table,
                             columns=ev.columns,
                         )
@@ -66,10 +74,54 @@ def create_app(agent: Agent) -> FastAPI:
         return StreamingResponse(events(), media_type="text/event-stream")
 
     @app.get("/api/results/{result_table}/rows")
-    def rows(result_table: str):
+    def rows(
+        result_table: str,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(50, ge=1, le=500),
+        sort: str | None = None,
+        dir: Literal["asc", "desc"] = "asc",
+    ):
         try:
-            return agent.fetch_rows(result_table)
+            return agent.fetch_rows(
+                result_table, page=page, page_size=page_size, sort=sort, descending=dir == "desc"
+            )
+        except KeyError:
+            raise HTTPException(404, "unknown result table")
+        except InvalidSort:
+            raise HTTPException(400, "unknown sort column")
+
+    @app.get("/api/results/{result_table}/csv")
+    def csv_download(result_table: str):
+        try:
+            columns, rows_iter = agent.iter_all_rows(result_table)
         except KeyError:
             raise HTTPException(404, "unknown result table")
 
+        def body():
+            buf = io.StringIO()
+            w = csv.writer(buf, lineterminator="\r\n")
+            w.writerow([_csv_safe(c) for c in columns])
+            for row in rows_iter:
+                w.writerow([_csv_safe(v) for v in row])
+                if buf.tell() > 65536:
+                    yield buf.getvalue()
+                    buf.seek(0)
+                    buf.truncate()
+            yield buf.getvalue()
+
+        return StreamingResponse(
+            body(),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{result_table}.csv"'},
+        )
+
     return app
+
+
+def _csv_safe(v):
+    """Neutralise spreadsheet formula injection in text cells; numbers pass through."""
+    if v is None:
+        return ""
+    if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + v
+    return v

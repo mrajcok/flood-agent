@@ -69,9 +69,17 @@ class Agent:
         self.llm = llm
         self.semantic_layer = SemanticLayer(config.semantic_layer)
 
-    def fetch_rows(self, result_table: str, columns: list[str] | None = None) -> dict:
-        """Internal data path used by the row-JSON endpoint. Not an LLM tool."""
-        return queries.fetch_rows(self.config.results_db, result_table, columns)
+    def fetch_rows(self, result_table: str, columns: list[str] | None = None, **page_args) -> dict:
+        """Internal data path used by the row-JSON endpoint. Not an LLM tool.
+
+        Adds per-column display formats from the Semantic Layer."""
+        data = queries.fetch_rows(self.config.results_db, result_table, columns, **page_args)
+        data["formats"] = self.semantic_layer.column_formats(data["columns"])
+        return data
+
+    def iter_all_rows(self, result_table: str):
+        """Internal data path for CSV export of the full Result Table. Not an LLM tool."""
+        return queries.iter_all_rows(self.config.results_db, result_table)
 
     async def run_turn(self, conversation: Conversation, user_message: str) -> AsyncIterator[Event]:
         """Run one turn. The MCP session lives entirely inside a single producer task."""

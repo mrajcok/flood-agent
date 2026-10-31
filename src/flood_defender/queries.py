@@ -101,8 +101,19 @@ def in_cidr(ip, cidr):
         return None
 
 
+_DENIAL_RE = re.compile(r"is prohibited|not authorized", re.I)
+_QUALIFIED_RE = re.compile(r"\b(?:results|main|temp)\.\w+(?:\.\w+)?", re.I)
+
+
 def sanitize_error(message: str) -> str:
-    """Strip quoted literals and numbers from an SQLite error before it reaches the LLM."""
+    """Strip quoted literals and numbers from an SQLite error before it reaches the LLM.
+
+    Authorizer denials ("access to results.rt_xxxx.col is prohibited", "not authorized") are
+    replaced wholesale so no table or column name from a denied read (possibly another
+    Conversation's) reaches the LLM; any other database-qualified reference is redacted."""
+    if _DENIAL_RE.search(message):
+        return "Access to a table or column was denied."
+    message = _QUALIFIED_RE.sub("<table>", message)
     message = re.sub(r"'[^']*'?|\"[^\"]*\"?|`[^`]*`?", "<literal>", message)
     return re.sub(r"(?<![A-Za-z_])\d+(\.\d+)*", "<n>", message)
 

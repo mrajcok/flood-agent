@@ -4,10 +4,8 @@ A Trace is a plain JSON-able dict: turn-level `model` and `system_prompt`, an or
 `entries`, and `totals`. It is stored in `turns.trace` and rendered by `templates/trace.html`.
 It is never part of any message sent to the LLM.
 
-Extension point (ticket #11, flags): call `TraceBuilder.add("flag", ...)` with any fields; the
-template renders unknown entry kinds generically, and totals ignore them.
-
-Entry kinds: llm_step, tool_call, query_error, result_table, chart_spec.
+Entry kinds: llm_step, tool_call, query_error, result_table, chart_spec, flag
+(`flag`: {"type": "ip"|"number", "token": str}, one per unseen value in a completed reply).
 """
 
 import time

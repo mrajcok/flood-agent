@@ -2,7 +2,6 @@
 subprocess teardown, Result Table ownership in show_*. Real MCP subprocess, scripted LLM."""
 
 import json
-import os
 
 import pytest
 
@@ -10,7 +9,7 @@ import flood_defender.agent as agent_mod
 from flood_defender.agent import Conversation, DisplayEvent, TextDelta, TraceReady, TurnEnd, TurnError
 from flood_defender.llm import LLMError, TextChunk, ToolCallChunk
 
-from conftest import ScriptedLLM, collect, last_tool_result, tool_call
+from conftest import ScriptedLLM, collect, mcp_children, last_tool_result, tool_call
 
 SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
 
@@ -45,7 +44,7 @@ async def test_invalid_json_arguments_give_the_llm_an_error_not_a_crash(make_age
         [tool_call("run_query", "c2", sql=SQL, title="t")],
         [TextChunk("recovered")],
     )
-    events = await collect(make_agent(llm), "q")
+    events = await collect(await make_agent(llm), "q")
     assert isinstance(events[-1], TurnEnd) and text_of(events) == "recovered"
     first = last_tool_result(llm.calls[1])
     assert first["success"] is False and "JSON" in first["error"]
@@ -54,7 +53,7 @@ async def test_invalid_json_arguments_give_the_llm_an_error_not_a_crash(make_age
 
 async def test_non_object_arguments_are_an_error_result(make_agent):
     llm = ScriptedLLM([ToolCallChunk("c1", "show_table", "[1, 2]")], [TextChunk("ok")])
-    events = await collect(make_agent(llm), "q")
+    events = await collect(await make_agent(llm), "q")
     assert isinstance(events[-1], TurnEnd)
     assert last_tool_result(llm.calls[1])["success"] is False
 
@@ -65,7 +64,7 @@ async def test_run_query_without_sql_is_an_error_result_and_counts_as_a_failed_a
         [tool_call("run_query", "c2", title="t")],
         [tool_call("run_query", "c3", title="t")],
     )
-    events = await collect(make_agent(llm), "q")
+    events = await collect(await make_agent(llm), "q")
     r = last_tool_result(llm.calls[1])
     assert r["success"] is False and "sql" in r["error"]
     assert agent_mod.GIVE_UP_MESSAGE in text_of(events)
@@ -80,7 +79,7 @@ async def test_failed_llm_step_keeps_history_valid_surfaces_error_and_saves_trac
         raise LLMError("The model provider reported an error: upstream exploded")
 
     llm = ScriptedLLM([tool_call("run_query", "c1", sql=SQL, title="t")], boom)
-    agent = make_agent(llm)
+    agent = await make_agent(llm)
     conv = Conversation()
     events = await collect(agent, "q", conv)
 
@@ -101,7 +100,7 @@ async def test_unexpected_exception_is_reported_not_raised(make_agent):
     def boom(messages):
         raise RuntimeError("kaboom")
 
-    agent = make_agent(ScriptedLLM(boom))
+    agent = await make_agent(ScriptedLLM(boom))
     conv = Conversation()
     events = await collect(agent, "q", conv)
     (err,) = [e for e in events if isinstance(e, TurnError)]
@@ -111,7 +110,7 @@ async def test_unexpected_exception_is_reported_not_raised(make_agent):
 
 
 async def test_open_conversation_repairs_corrupt_saved_history(make_agent):
-    agent = make_agent(ScriptedLLM())
+    agent = await make_agent(ScriptedLLM())
     cid = agent.store.create_conversation("c")
     turn = agent.store.start_turn(cid, "hi")
     call = lambda i: {"id": i, "type": "function", "function": {"name": "run_query", "arguments": "{}"}}  # noqa: E731
@@ -136,7 +135,7 @@ async def test_steps_exhausted_tells_the_user_and_saves_the_trace(make_agent):
         [tool_call("run_query", "c1", sql=SQL, title="t")],
         [tool_call("run_query", "c2", sql=SQL, title="t")],
     )
-    agent = make_agent(llm, max_llm_steps=2)
+    agent = await make_agent(llm, max_llm_steps=2)
     conv = Conversation()
     events = await collect(agent, "q", conv)
     assert agent_mod.STEP_LIMIT_MESSAGE in text_of(events)
@@ -149,44 +148,68 @@ async def test_steps_exhausted_tells_the_user_and_saves_the_trace(make_agent):
 # --- item 3: no orphaned MCP subprocess ---------------------------------------------------------
 
 
-def mcp_children() -> list[int]:
-    me, found = os.getpid(), []
-    for pid in filter(str.isdigit, os.listdir("/proc")):
-        try:
-            with open(f"/proc/{pid}/stat") as f:
-                ppid = int(f.read().rsplit(")", 1)[1].split()[1])
-            if ppid != me:
-                continue
-            with open(f"/proc/{pid}/cmdline", "rb") as f:
-                if b"flood_defender.mcp_server" in f.read():
-                    found.append(int(pid))
-        except (OSError, IndexError, ValueError):
-            continue  # process vanished
-    return found
+async def test_one_mcp_server_serves_several_turns_across_two_conversations(build_agent):
+    def script():
+        return ScriptedLLM([tool_call("run_query", "c1", sql=SQL, title="t")], [TextChunk("done")])
 
-
-async def test_no_mcp_subprocess_left_after_a_turn(make_agent):
-    llm = ScriptedLLM([tool_call("run_query", "c1", sql=SQL, title="t")], [TextChunk("done")])
-    await collect(make_agent(llm), "q")
+    agent = build_agent(script())
+    assert mcp_children() == []  # constructing an Agent starts nothing
+    await agent.start()
+    (server,) = mcp_children()
+    try:
+        for _ in range(2):
+            for conv in (Conversation(), Conversation()):
+                agent.llm.steps = script().steps
+                events = await collect(agent, "q", conv)
+                assert isinstance(events[-1], TurnEnd)
+                assert mcp_children() == [server]
+    finally:
+        await agent.aclose()
     assert mcp_children() == []
 
 
-async def test_no_mcp_subprocess_left_after_a_failed_turn(make_agent):
+async def test_run_turn_on_an_agent_that_was_not_started_raises_a_clear_error(build_agent):
+    agent = build_agent(ScriptedLLM([TextChunk("x")]))
+    with pytest.raises(RuntimeError, match="not started"):
+        await collect(agent, "q")
+
+
+async def test_agent_as_async_context_manager_starts_and_stops_the_server(build_agent):
+    async with build_agent(ScriptedLLM([TextChunk("x")])) as agent:
+        assert len(mcp_children()) == 1
+        assert isinstance((await collect(agent, "q"))[-1], TurnEnd)
+    assert mcp_children() == []
+
+
+async def test_no_mcp_subprocess_left_after_close_following_a_failed_turn(build_agent):
     def boom(messages):
         raise RuntimeError("x")
 
-    await collect(make_agent(ScriptedLLM(boom)), "q")
+    agent = build_agent(ScriptedLLM(boom))
+    await agent.start()
+    await collect(agent, "q")
+    await agent.aclose()
     assert mcp_children() == []
 
 
-async def test_no_mcp_subprocess_left_when_the_consumer_stops_early(make_agent):
+async def test_consumer_stopping_early_leaves_the_server_running_and_the_next_turn_works(build_agent):
     llm = ScriptedLLM([TextChunk("partial"), tool_call("run_query", "c1", sql=SQL, title="t")], [TextChunk("x")])
-    gen = make_agent(llm).run_turn(Conversation(), "q")
-    async for event in gen:
-        if isinstance(event, TextDelta):
-            break
-    assert mcp_children() != []  # the MCP server really was running when we stopped
-    await gen.aclose()
+    agent = build_agent(llm)
+    await agent.start()
+    try:
+        (server,) = mcp_children()
+        gen = agent.run_turn(Conversation(), "q")
+        async for event in gen:
+            if isinstance(event, TextDelta):
+                break
+        await gen.aclose()
+        assert mcp_children() == [server]  # still running after the consumer left
+        llm.steps = [[tool_call("run_query", "c2", sql=SQL, title="t")], [TextChunk("fine")]]
+        events = await collect(agent, "again")
+        assert isinstance(events[-1], TurnEnd) and text_of(events) == "fine"
+        assert last_tool_result(llm.calls[-1])["success"] is True
+    finally:
+        await agent.aclose()
     assert mcp_children() == []
 
 
@@ -203,7 +226,7 @@ async def first_conversation_table(agent, llm):
 @pytest.mark.parametrize("tool", ["show_table", "show_chart"])
 async def test_show_tools_refuse_another_conversations_result_table(make_agent, tool):
     llm = ScriptedLLM()
-    agent = make_agent(llm)
+    agent = await make_agent(llm)
     mine_elsewhere = await first_conversation_table(agent, llm)
 
     def args(name):
@@ -229,5 +252,5 @@ async def test_show_table_still_works_for_own_table(make_agent):
         lambda msgs: [tool_call("show_table", "c2", result_table=last_tool_result(msgs)["result_table"])],
         [TextChunk("ok")],
     )
-    events = await collect(make_agent(llm), "q")
+    events = await collect(await make_agent(llm), "q")
     assert len([e for e in events if isinstance(e, DisplayEvent)]) == 1

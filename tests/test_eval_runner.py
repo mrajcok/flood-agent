@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from conftest import ScriptedLLM, all_telemetry_values, tool_call
+from conftest import ScriptedLLM, all_telemetry_values, mcp_children, tool_call
 from flood_defender.llm import TextChunk
 from flood_defender.evalset import runner
 from flood_defender.evalset.golden import Question
@@ -40,6 +40,11 @@ async def test_right_answer_is_correct(telemetry_db, semantic_layer_path, tmp_pa
     r, _ = await run_one([query(GOOD), DONE], telemetry_db, semantic_layer_path, tmp_path)
     assert r.correct and r.retries == 0 and r.error is None
     assert r.latency_s > 0 and r.model == "fake/model" and r.question_id == "top-dport"
+
+
+async def test_eval_run_leaves_no_mcp_server_processes_behind(telemetry_db, semantic_layer_path, tmp_path):
+    await run_one([query(GOOD), DONE], telemetry_db, semantic_layer_path, tmp_path)
+    assert mcp_children() == []
 
 
 async def test_different_column_order_and_names_still_correct(telemetry_db, semantic_layer_path, tmp_path):

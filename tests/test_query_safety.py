@@ -13,7 +13,7 @@ from conftest import ScriptedLLM, all_telemetry_values, collect, last_tool_resul
 
 async def run_one(make_agent, sql, **limits):
     llm = ScriptedLLM([tool_call("run_query", sql=sql, title="t")], [TextChunk("ok")])
-    events = await collect(make_agent(llm, **limits), "q")
+    events = await collect(await make_agent(llm, **limits), "q")
     return last_tool_result(llm.calls[1]), events
 
 
@@ -95,7 +95,7 @@ async def test_sanitised_errors_contain_no_data_literals(make_agent):
 async def test_raw_error_kept_for_trace_but_never_sent_to_llm(make_agent):
     sql = "SELECT sip FROM flows WHERE sip = 172.30.41.7"
     llm = ScriptedLLM([tool_call("run_query", sql=sql, title="t")], [TextChunk("ok")])
-    events = await collect(make_agent(llm), "q")
+    events = await collect(await make_agent(llm), "q")
     entries = [e for e in events if isinstance(e, TraceEntry) and e.kind == "query_error"]
     assert len(entries) == 1
     e = entries[0]
@@ -108,7 +108,7 @@ async def test_raw_error_kept_for_trace_but_never_sent_to_llm(make_agent):
 
 async def test_three_failed_attempts_end_turn_with_clear_message(make_agent):
     llm = ScriptedLLM(bad_call(1), bad_call(2), bad_call(3), [TextChunk("SHOULD NOT BE REACHED")])
-    events = await collect(make_agent(llm), "q")
+    events = await collect(await make_agent(llm), "q")
     text = text_of(events)
     assert "couldn't build" in text.lower() and "rephras" in text.lower()
     assert "SHOULD NOT" not in text
@@ -123,13 +123,13 @@ async def test_two_failures_then_success_is_fine(make_agent):
         [tool_call("run_query", call_id="c3", sql="SELECT 1 AS a", title="t")],
         [TextChunk("done")],
     )
-    events = await collect(make_agent(llm), "q")
+    events = await collect(await make_agent(llm), "q")
     assert text_of(events) == "done"
 
 
 async def test_failure_budget_resets_each_turn(make_agent):
     llm = ScriptedLLM(bad_call(1), bad_call(2), [TextChunk("a")], bad_call(3), bad_call(4), [TextChunk("b")])
-    agent = make_agent(llm)
+    agent = await make_agent(llm)
     conv = Conversation()
     for expected in ("a", "b"):
         events = await collect(agent, "q", conv)
@@ -138,7 +138,7 @@ async def test_failure_budget_resets_each_turn(make_agent):
 
 async def test_failure_limit_is_configurable(make_agent):
     llm = ScriptedLLM(bad_call(1), [TextChunk("unreached")])
-    events = await collect(make_agent(llm, max_failed_attempts=1), "q")
+    events = await collect(await make_agent(llm, max_failed_attempts=1), "q")
     assert "couldn't build" in text_of(events).lower()
 
 

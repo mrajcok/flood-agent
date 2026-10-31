@@ -8,16 +8,14 @@ import json
 import sqlite3
 import sys
 import time
-from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import AsyncIterator, Callable
 
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
+from mcp import StdioServerParameters
 
 from flood_defender import flagging, queries
-from flood_defender.mcp_server import META_CONVERSATION_ID
+from flood_defender.mcp_connection import McpConnection
 from flood_defender.llm import LLMClient, LLMError, TextChunk, ToolCallChunk, UsageChunk
 from flood_defender.semantic_layer import SemanticLayer
 from flood_defender.store import ConversationStore
@@ -157,13 +155,6 @@ def repair_history(messages: list[dict]) -> list[dict]:
     return out
 
 
-def _openai_tool(t) -> dict:
-    return {
-        "type": "function",
-        "function": {"name": t.name, "description": t.description or "", "parameters": t.inputSchema},
-    }
-
-
 def resolve_chart_data(source: dict, table: str) -> dict:
     return _resolve_data(source, table, {"url": f"/api/results/{table}/chart-rows"})
 
@@ -186,7 +177,46 @@ class Agent:
         self.llm = llm
         self.semantic_layer = SemanticLayer(config.semantic_layer)
         self.store = ConversationStore(config.app_db, config.clock)
+        self._connection: McpConnection | None = None
         self.sweep_expired()
+
+    async def start(self) -> None:
+        """Launch the long-lived MCP server. Needed before `run_turn`, not for row fetches,
+        CSV export or Conversation listing."""
+        if self._connection is not None:
+            raise RuntimeError("Agent already started")
+        connection = McpConnection(self._server_params())
+        await connection.start()
+        self._connection = connection
+
+    async def aclose(self) -> None:
+        """Stop the MCP server and reap its process."""
+        connection, self._connection = self._connection, None
+        if connection is not None:
+            await connection.aclose()
+
+    async def __aenter__(self) -> "Agent":
+        await self.start()
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        await self.aclose()
+
+    def _server_params(self) -> StdioServerParameters:
+        return StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "flood_defender.mcp_server"],
+            # Static settings only. The Conversation id travels in each call's `_meta`, not here
+            # and not as a tool argument, so the LLM can't name another Conversation.
+            env={
+                "TELEMETRY_DB": str(self.config.telemetry_db),
+                "RESULTS_DB": str(self.config.results_db),
+                "APP_DB": str(self.store.path),
+                "CHART_ROW_CAP": str(self.config.chart_row_cap),
+                "QUERY_TIMEOUT_S": str(self.config.query_timeout_s),
+                "MAX_RESULT_ROWS": str(self.config.max_result_rows),
+            },
+        )
 
     def open_conversation(self, conversation_id: str) -> Conversation:
         """Load a saved Conversation (KeyError if unknown)."""
@@ -245,11 +275,12 @@ class Agent:
         return queries.fetch_records(self.config.results_db, result_table, self.config.chart_row_cap)
 
     async def run_turn(self, conversation: Conversation, user_message: str) -> AsyncIterator[Event]:
-        """Run one turn. The MCP session lives entirely inside a single producer task.
+        """Run one turn on the Agent's MCP connection (`start()` first).
 
-        The producer queues `TurnEnd` only after the MCP session and subprocess are torn down.
-        If the consumer stops early (client disconnect), the producer is cancelled and awaited
-        so the subprocess is reaped before this generator finishes."""
+        The turn runs in a producer task. If the consumer stops early (client disconnect), the
+        producer is cancelled and awaited; the MCP server keeps running."""
+        if self._connection is None:
+            raise RuntimeError("Agent not started: call `await agent.start()` or use `async with agent`")
         queue: asyncio.Queue = asyncio.Queue()
         task = asyncio.create_task(self._produce(conversation, user_message, queue))
         finished = False
@@ -309,83 +340,67 @@ class Agent:
         await queue.put(TurnError(message, detail))
 
     async def _converse(self, conversation, turn_id, user_message, trace: TraceBuilder, queue):
-        params = StdioServerParameters(
-            command=sys.executable,
-            args=["-m", "flood_defender.mcp_server"],
-            # Static settings only. The Conversation id travels in each call's `_meta`, not here
-            # and not as a tool argument, so the LLM can't name another Conversation.
-            env={
-                "TELEMETRY_DB": str(self.config.telemetry_db),
-                "RESULTS_DB": str(self.config.results_db),
-                "APP_DB": str(self.store.path),
-                "CHART_ROW_CAP": str(self.config.chart_row_cap),
-                "QUERY_TIMEOUT_S": str(self.config.query_timeout_s),
-                "MAX_RESULT_ROWS": str(self.config.max_result_rows),
-            },
-        )
-        async with AsyncExitStack() as stack:
-            read, write = await stack.enter_async_context(stdio_client(params))
-            session = await stack.enter_async_context(ClientSession(read, write))
-            await session.initialize()
-            tools = [_openai_tool(t) for t in (await session.list_tools()).tools]
-
-            failed_attempts = 0
-            for _ in range(self.config.max_llm_steps):
-                system_prompt = self.semantic_layer.system_prompt(self.store.live_result_tables(conversation.id))
-                messages = [{"role": "system", "content": system_prompt}]
-                messages += conversation.messages
-                text, calls, usage = "", [], None
-                step_started = time.monotonic()
-                async for chunk in self.llm.stream_chat(messages, tools):
-                    if isinstance(chunk, TextChunk):
-                        text += chunk.text
-                        await queue.put(TextDelta(chunk.text))
-                    elif isinstance(chunk, ToolCallChunk):
-                        calls.append(chunk)
-                    elif isinstance(chunk, UsageChunk):
-                        usage = chunk
-                trace.llm_step(system_prompt, text, calls, usage, step_started)
-                await self._flag_unseen_values(text, system_prompt, messages, trace, queue)
-                assistant: dict = {"role": "assistant", "content": text}
-                if calls:
-                    assistant["tool_calls"] = [
-                        {
-                            "id": c.id,
-                            "type": "function",
-                            "function": {"name": c.name, "arguments": c.arguments},
-                        }
-                        for c in calls
-                    ]
-                # The assistant message and every tool result are saved together after all of the
-                # step's calls have been answered, so a failure partway never leaves history with
-                # an unanswered tool_call.
-                items: list[tuple[dict, list[tuple]]] = [(assistant, [])]
-                for c in calls:
-                    call_started = time.monotonic()
-                    content, args, executed_sql, failed = await self._run_tool(session, c, queue, trace, conversation.id)
-                    failed_attempts += failed
-                    trace.tool_call(c.name, args, content, call_started, executed_sql)
-                    self._trace_result_table(trace, content)
-                    displays = await self._prepare_displays(
-                        conversation, content, args, queue, user_message, trace
-                    )
-                    items.append(({"role": "tool", "tool_call_id": c.id, "content": content}, displays))
-                self.store.add_step(conversation.id, turn_id, items)
-                conversation.messages.extend(m for m, _ in items)
-                if not calls:
-                    break
-                if failed_attempts >= self.config.max_failed_attempts:
-                    await self._end_with_notice(conversation, turn_id, GIVE_UP_MESSAGE, queue)
-                    break
-            else:
-                trace.add("step_limit", max_steps=self.config.max_llm_steps)
-                await self._end_with_notice(conversation, turn_id, STEP_LIMIT_MESSAGE, queue)
+        connection = self._connection
+        if connection is None:
+            raise RuntimeError("Agent not started")
+        tools = connection.tools
+        failed_attempts = 0
+        for _ in range(self.config.max_llm_steps):
+            system_prompt = self.semantic_layer.system_prompt(self.store.live_result_tables(conversation.id))
+            messages = [{"role": "system", "content": system_prompt}]
+            messages += conversation.messages
+            text, calls, usage = "", [], None
+            step_started = time.monotonic()
+            async for chunk in self.llm.stream_chat(messages, tools):
+                if isinstance(chunk, TextChunk):
+                    text += chunk.text
+                    await queue.put(TextDelta(chunk.text))
+                elif isinstance(chunk, ToolCallChunk):
+                    calls.append(chunk)
+                elif isinstance(chunk, UsageChunk):
+                    usage = chunk
+            trace.llm_step(system_prompt, text, calls, usage, step_started)
+            await self._flag_unseen_values(text, system_prompt, messages, trace, queue)
+            assistant: dict = {"role": "assistant", "content": text}
+            if calls:
+                assistant["tool_calls"] = [
+                    {
+                        "id": c.id,
+                        "type": "function",
+                        "function": {"name": c.name, "arguments": c.arguments},
+                    }
+                    for c in calls
+                ]
+            # The assistant message and every tool result are saved together after all of the
+            # step's calls have been answered, so a failure partway never leaves history with
+            # an unanswered tool_call.
+            items: list[tuple[dict, list[tuple]]] = [(assistant, [])]
+            for c in calls:
+                call_started = time.monotonic()
+                content, args, executed_sql, failed = await self._run_tool(connection, c, queue, trace, conversation.id)
+                failed_attempts += failed
+                trace.tool_call(c.name, args, content, call_started, executed_sql)
+                self._trace_result_table(trace, content)
+                displays = await self._prepare_displays(
+                    conversation, content, args, queue, user_message, trace
+                )
+                items.append(({"role": "tool", "tool_call_id": c.id, "content": content}, displays))
+            self.store.add_step(conversation.id, turn_id, items)
+            conversation.messages.extend(m for m, _ in items)
+            if not calls:
+                break
+            if failed_attempts >= self.config.max_failed_attempts:
+                await self._end_with_notice(conversation, turn_id, GIVE_UP_MESSAGE, queue)
+                break
+        else:
+            trace.add("step_limit", max_steps=self.config.max_llm_steps)
+            await self._end_with_notice(conversation, turn_id, STEP_LIMIT_MESSAGE, queue)
 
     async def _end_with_notice(self, conversation, turn_id, message: str, queue) -> None:
         self._record(conversation, turn_id, {"role": "assistant", "content": message})
         await queue.put(TextDelta(message))
 
-    async def _run_tool(self, session, c: ToolCallChunk, queue, trace: TraceBuilder, conversation_id: str):
+    async def _run_tool(self, connection, c: ToolCallChunk, queue, trace: TraceBuilder, conversation_id: str):
         """Execute one LLM tool call. Returns (content, args, executed_sql, failed 0/1).
 
         Never raises for problems the LLM caused (bad JSON, missing `sql`) or tool failures: it
@@ -407,7 +422,7 @@ class Agent:
             else:
                 args = parsed
                 try:
-                    result = await session.call_tool(c.name, args, meta={META_CONVERSATION_ID: conversation_id})
+                    result = await connection.call_tool(c.name, args, conversation_id)
                     content = "".join(b.text for b in result.content if hasattr(b, "text"))
                     if result.isError:
                         content = _fail(content[:500] or "The tool call was rejected.")

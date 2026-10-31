@@ -144,8 +144,10 @@ def test_env_example_lists_every_setting_and_copied_verbatim_changes_nothing(tmp
 
 
 @pytest.fixture
-def agent_from_env_file(tmp_path, telemetry_db, semantic_layer_path):
-    def _build(llm, **env):
+async def agent_from_env_file(tmp_path, telemetry_db, semantic_layer_path):
+    agents = []
+
+    async def _build(llm, **env):
         env_file = write_env(
             tmp_path / ".env",
             TELEMETRY_DB=telemetry_db,
@@ -154,9 +156,14 @@ def agent_from_env_file(tmp_path, telemetry_db, semantic_layer_path):
             SEMANTIC_LAYER=semantic_layer_path,
             **env,
         )
-        return Agent(Settings(_env_file=env_file).agent_config(), llm)
+        agent = Agent(Settings(_env_file=env_file).agent_config(), llm)
+        await agent.start()
+        agents.append(agent)
+        return agent
 
-    return _build
+    yield _build
+    for agent in agents:
+        await agent.aclose()
 
 
 def text_of(events):
@@ -166,7 +173,7 @@ def text_of(events):
 async def test_max_result_rows_from_the_env_file_reaches_the_mcp_server(agent_from_env_file):
     async def refused(**env):
         llm = ScriptedLLM([tool_call("run_query", sql="SELECT * FROM flows", title="t")], [TextChunk("ok")])
-        await collect(agent_from_env_file(llm, **env), "q")
+        await collect(await agent_from_env_file(llm, **env), "q")
         return last_tool_result(llm.calls[1])["success"] is False
 
     assert await refused(MAX_RESULT_ROWS="2") is True
@@ -179,16 +186,16 @@ async def test_max_failed_attempts_from_the_env_file_sets_the_retry_limit(agent_
             [tool_call("run_query", sql="SELECT nope FROM flows", title="t")], [TextChunk("recovered")]
         )
 
-    gave_up = await collect(agent_from_env_file(script(), MAX_FAILED_ATTEMPTS="1"), "q")
+    gave_up = await collect(await agent_from_env_file(script(), MAX_FAILED_ATTEMPTS="1"), "q")
     assert "couldn't build" in text_of(gave_up).lower()
 
-    retried = await collect(agent_from_env_file(script()), "q")
+    retried = await collect(await agent_from_env_file(script()), "q")
     assert text_of(retried) == "recovered"
 
 
 async def test_max_llm_steps_from_the_env_file_limits_llm_calls_per_turn(agent_from_env_file):
     llm = ScriptedLLM([tool_call("run_query", sql="SELECT 1 AS a", title="t")])
-    events = await collect(agent_from_env_file(llm, MAX_LLM_STEPS="1"), "q")
+    events = await collect(await agent_from_env_file(llm, MAX_LLM_STEPS="1"), "q")
 
     assert STEP_LIMIT_MESSAGE in text_of(events)
     assert len(llm.calls) == 1

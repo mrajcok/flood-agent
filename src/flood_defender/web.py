@@ -8,6 +8,7 @@ import csv
 import io
 import json
 import uuid
+from contextlib import asynccontextmanager
 from html import escape
 from pathlib import Path
 
@@ -30,7 +31,13 @@ def _sse(event: str, data: str) -> str:
 
 
 def create_app(agent: Agent) -> FastAPI:
-    app = FastAPI(title="Flood Defender")
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # One long-lived MCP server for the app; a server that can't start fails app startup.
+        async with agent:
+            yield
+
+    app = FastAPI(title="Flood Defender", lifespan=lifespan)
 
     @app.exception_handler(ResultTableExpired)
     def expired_handler(request: Request, exc: ResultTableExpired):

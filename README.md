@@ -23,8 +23,11 @@ export OPENROUTER_MODEL=anthropic/claude-sonnet-5.5   # optional; this is the de
 uv run python -m flood_defender                    # http://127.0.0.1:8000
 ```
 
+Settings come from the environment or from a `.env` file in the working directory (the real
+environment wins); copy `.env.example` to get started.
+
 Optional env: `TELEMETRY_DB` (default `data/telemetry.db`), `RESULTS_DB`
-(`data/results.db`), `APP_DB` (`data/app.db`; Conversations), `SEMANTIC_LAYER` (`semantic_layer.yaml`), `RESULT_TTL_HOURS` (`24`; Result Tables are deleted this long after a Conversation's last activity), `HOST`, `PORT`.
+(`data/results.db`), `APP_DB` (`data/app.db`; Conversations), `SEMANTIC_LAYER` (`semantic_layer.yaml`), `RESULT_TTL_HOURS` (`24`; Result Tables are deleted this long after a Conversation's last activity), `QUERY_TIMEOUT_S` (`30`), `MAX_RESULT_ROWS` (`1000000`), `CHART_ROW_CAP` (`10000`), `HOST`, `PORT`.
 
 ## Test
 

@@ -267,6 +267,7 @@ dependencies = [
     { name = "httpx" },
     { name = "jinja2" },
     { name = "mcp" },
+    { name = "python-dotenv" },
     { name = "pyyaml" },
     { name = "uvicorn" },
 ]
@@ -283,6 +284,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "mcp", specifier = ">=1.9,<2" },
+    { name = "python-dotenv", specifier = ">=1.2.4" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "uvicorn", specifier = ">=0.29" },
 ]

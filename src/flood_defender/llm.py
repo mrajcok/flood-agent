@@ -61,11 +61,11 @@ class OpenRouterClient:
         self.api_key, self.model, self.url, self.transport = api_key, model, url, transport
 
     @classmethod
-    def from_env(cls) -> "OpenRouterClient":
+    def from_env(cls, model: str | None = None) -> "OpenRouterClient":
         key = os.environ.get("OPENROUTER_API_KEY")
         if not key:
             raise RuntimeError("OPENROUTER_API_KEY is not set")
-        return cls(key, model_from_env())
+        return cls(key, model or model_from_env())
 
     async def stream_chat(self, messages, tools):
         body = {"model": self.model, "messages": messages, "tools": tools, "stream": True,

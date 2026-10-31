@@ -2,7 +2,7 @@
 Result Tables the LLM produced against reference results, and reports per-model
 correctness, retries, latency and cost. On demand only; never part of CI or default pytest.
 
-    export OPENROUTER_API_KEY=...
+    export OPENROUTER_API_KEY=...   # or put it in .env
     uv run python -m flood_defender.evalset --db data/telemetry.db \\
         --models anthropic/claude-sonnet-5.5 z-ai/glm-5.3 --out eval-report
 
@@ -26,6 +26,7 @@ from pathlib import Path
 
 from flood_defender import queries
 from flood_defender.agent import Agent, AgentConfig, Conversation, TraceEntry, TurnError
+from flood_defender.config import load_env_file
 from flood_defender.llm import OpenRouterClient
 from flood_defender.evalset.client import UsageMeter
 from flood_defender.evalset.compare import DEFAULT_TOLERANCE, compare
@@ -197,6 +198,7 @@ def main(argv=None) -> int:
     p.add_argument("--out", default="eval-report", help="writes <out>.md and <out>.json")
     p.add_argument("--workdir", default="data/eval-work", help="scratch results/app databases")
     a = p.parse_args(argv)
+    load_env_file(".env", os.environ)
     key = os.environ.get("OPENROUTER_API_KEY")
     if not key:
         print("OPENROUTER_API_KEY is not set; the eval runner calls real OpenRouter models.", file=sys.stderr)

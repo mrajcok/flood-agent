@@ -9,6 +9,7 @@ import io
 import json
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from html import escape
 from pathlib import Path
 from typing import Literal
@@ -29,7 +30,6 @@ from flood_defender.agent import (
     TurnEnd,
     resolve_chart_data,
 )
-from flood_defender.fake_llm import CannedPrompt
 from flood_defender.queries import InvalidSort
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -40,8 +40,17 @@ def _sse(event: str, data: str) -> str:
     return f"event: {event}\n{lines}\n"
 
 
-def create_app(agent: Agent, canned_prompts: list[CannedPrompt] | None = None) -> FastAPI:
-    """`canned_prompts` is given only in Fake Mode: the page then shows its badge and the list."""
+@dataclass(frozen=True)
+class PickerEntry:
+    """One clickable prompt in the Fake Mode picker, with the follow-ups listed under it."""
+
+    prompt: str
+    fails_on_purpose: bool = False
+    follow_ups: list["PickerEntry"] = field(default_factory=list)
+
+
+def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode: bool = False) -> FastAPI:
+    """In Fake Mode the page shows a badge and the `picker` list of prompts."""
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # One long-lived MCP server for the app; a server that can't start fails app startup.
@@ -61,7 +70,7 @@ def create_app(agent: Agent, canned_prompts: list[CannedPrompt] | None = None) -
     def sidebar(current: str | None) -> dict:
         return {
             "conversations": agent.store.list_conversations(), "current_id": current,
-            "fake_mode": canned_prompts is not None, "canned_prompts": canned_prompts or [],
+            "fake_mode": fake_mode, "picker": picker or [],
         }
 
     def history(conversation_id: str) -> list[dict]:

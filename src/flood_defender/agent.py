@@ -178,6 +178,7 @@ class Agent:
         self.semantic_layer = SemanticLayer(config.semantic_layer)
         self.store = ConversationStore(config.app_db, config.clock)
         self._connection: McpConnection | None = None
+        self._restart_lock = asyncio.Lock()
         self.sweep_expired()
 
     async def start(self) -> None:
@@ -188,6 +189,20 @@ class Agent:
         connection = McpConnection(self._server_params())
         await connection.start()
         self._connection = connection
+
+    async def _ensure_connection(self) -> McpConnection:
+        """The live connection; a dead one (process exited or session broken) is replaced first."""
+        async with self._restart_lock:
+            connection = self._connection
+            if connection is None:
+                raise RuntimeError("Agent not started")
+            if not connection.alive:
+                replacement = McpConnection(self._server_params())
+                await connection.aclose()  # reap the dead one
+                await replacement.start()
+                self._connection = replacement
+                connection = replacement
+            return connection
 
     async def aclose(self) -> None:
         """Stop the MCP server and reap its process."""
@@ -340,9 +355,7 @@ class Agent:
         await queue.put(TurnError(message, detail))
 
     async def _converse(self, conversation, turn_id, user_message, trace: TraceBuilder, queue):
-        connection = self._connection
-        if connection is None:
-            raise RuntimeError("Agent not started")
+        connection = await self._ensure_connection()
         tools = connection.tools
         failed_attempts = 0
         for _ in range(self.config.max_llm_steps):

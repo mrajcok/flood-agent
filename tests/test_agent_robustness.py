@@ -1,6 +1,7 @@
 """Agent turn robustness: bad LLM tool arguments, partial failures, atomic history, MCP
 subprocess teardown, Result Table ownership in show_*. Real MCP subprocess, scripted LLM."""
 
+import asyncio
 import json
 
 import pytest
@@ -214,6 +215,88 @@ async def test_consumer_stopping_early_leaves_the_server_running_and_the_next_tu
 
 
 # --- item 4: show_table / show_chart ownership ---------------------------------------------------
+
+
+# --- recovery: a dead MCP server is replaced -----------------------------------------------------
+
+
+def kill_mcp_servers():
+    import os
+    import signal
+    import time
+
+    for pid in mcp_children():
+        os.kill(pid, signal.SIGKILL)
+    deadline = time.monotonic() + 5
+    while mcp_children() and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+
+async def kill_mcp_servers_and_settle():
+    kill_mcp_servers()
+    await asyncio.sleep(0.3)  # let the client notice the exit, as it would between real turns
+
+
+async def test_next_turn_succeeds_on_a_replacement_server_after_the_server_was_killed(build_agent):
+    llm = ScriptedLLM([TextChunk("one")], [tool_call("run_query", "c1", sql=SQL, title="t")], [TextChunk("two")])
+    agent = build_agent(llm)
+    await agent.start()
+    try:
+        await collect(agent, "q1")
+        (old,) = mcp_children()
+        await kill_mcp_servers_and_settle()
+        events = await collect(agent, "q2")
+        assert isinstance(events[-1], TurnEnd) and text_of(events) == "two"
+        assert last_tool_result(llm.calls[-1])["success"] is True
+        (new,) = mcp_children()
+        assert new != old
+    finally:
+        await agent.aclose()
+    assert mcp_children() == []
+
+
+async def test_server_dying_mid_turn_is_a_tool_error_and_the_turn_still_ends_cleanly(build_agent):
+    def kill_then_call(messages):
+        kill_mcp_servers()
+        return [tool_call("run_query", "c1", sql=SQL, title="t")]
+
+    llm = ScriptedLLM(kill_then_call, [TextChunk("sorry")])
+    agent = build_agent(llm)
+    await agent.start()
+    try:
+        conv = Conversation()
+        events = await asyncio.wait_for(collect(agent, "q", conv), 30)
+        assert any(isinstance(e, TraceReady) for e in events) and isinstance(events[-1], TurnEnd)
+        trace = next(e for e in events if isinstance(e, TraceReady)).trace
+        assert "tool_error" in json.dumps(trace, default=str)
+        assert last_tool_result(llm.calls[-1])["success"] is False
+        assert_valid_history(agent.store.messages(conv.id))
+    finally:
+        await agent.aclose()
+    assert mcp_children() == []
+
+
+async def test_failed_restart_is_a_turn_error_with_an_error_trace_entry(build_agent, monkeypatch):
+    import sys
+
+    from mcp import StdioServerParameters
+
+    agent = build_agent(ScriptedLLM([TextChunk("one")], [TextChunk("two")]))
+    await agent.start()
+    try:
+        await collect(agent, "q1")
+        await kill_mcp_servers_and_settle()
+        monkeypatch.setattr(
+            agent, "_server_params", lambda: StdioServerParameters(command=sys.executable, args=["-c", "raise SystemExit(1)"])
+        )
+        events = await asyncio.wait_for(collect(agent, "q2"), 30)
+        assert any(isinstance(e, TurnError) for e in events)
+        assert any(isinstance(e, TraceReady) for e in events) and isinstance(events[-1], TurnEnd)
+        trace = next(e for e in events if isinstance(e, TraceReady)).trace
+        assert '"error"' in json.dumps(trace, default=str)
+    finally:
+        await agent.aclose()
+    assert mcp_children() == []
 
 
 async def first_conversation_table(agent, llm):

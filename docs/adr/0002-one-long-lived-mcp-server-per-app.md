@@ -12,5 +12,5 @@ Tools must run off the server's event loop (worker threads), because FastMCP cal
 
 - The Agent has an async lifecycle (`start()` / `aclose()`, or `async with`); `run_turn` on an unstarted Agent raises.
 - A client disconnect cancels the turn but leaves the server running.
-- Restarting a dead server is handled separately (#17).
+- If the server has died, the next turn replaces it before calling the LLM; a tool call that fails because it died mid-turn takes the normal tool-error path, and a failed restart is an ordinary turn failure (#17).
 - Complements ADR 0001: the server is still a separate process launched with only static settings.

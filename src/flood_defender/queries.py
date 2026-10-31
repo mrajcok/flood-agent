@@ -4,6 +4,7 @@ Telemetry Database: opened read-only. Result Tables: created via CTAS in a separ
 writable results database that is ATTACHed to the (read-only) telemetry connection.
 """
 
+import ipaddress
 import re
 import sqlite3
 import time
@@ -89,6 +90,17 @@ def validate_select(sql: str) -> str:
     return sql
 
 
+def in_cidr(ip, cidr):
+    """SQLite UDF: 1 if IPv4 `ip` is inside `cidr`, else 0 (NULL/invalid input -> NULL).
+    Needs an Ocient mapping when the Telemetry Database moves there."""
+    if ip is None or cidr is None:
+        return None
+    try:
+        return int(ipaddress.IPv4Address(ip) in ipaddress.IPv4Network(cidr, strict=False))
+    except ValueError:
+        return None
+
+
 def sanitize_error(message: str) -> str:
     """Strip quoted literals and numbers from an SQLite error before it reaches the LLM."""
     message = re.sub(r"'[^']*'?|\"[^\"]*\"?|`[^`]*`?", "<literal>", message)
@@ -119,6 +131,7 @@ def open_connection(telemetry_db: Path, results_db: Path) -> sqlite3.Connection:
     restrictive authorizer installed."""
     con = sqlite3.connect(f"file:{telemetry_db}?mode=ro", uri=True)
     con.execute("ATTACH DATABASE ? AS results", (f"file:{results_db}?mode=rwc",))
+    con.create_function("in_cidr", 2, in_cidr, deterministic=True)
     con.set_authorizer(_authorizer)
     return con
 

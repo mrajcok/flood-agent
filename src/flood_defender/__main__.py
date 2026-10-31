@@ -19,6 +19,7 @@ def build_app():
         telemetry_db=Path(os.environ.get("TELEMETRY_DB", "data/telemetry.db")).resolve(),
         results_db=Path(os.environ.get("RESULTS_DB", "data/results.db")).resolve(),
         semantic_layer=Path(os.environ.get("SEMANTIC_LAYER", "semantic_layer.yaml")),
+        app_db=Path(os.environ.get("APP_DB", "data/app.db")).resolve(),
         model=model_from_env(),
     )
     config.results_db.parent.mkdir(parents=True, exist_ok=True)

@@ -1,7 +1,7 @@
 dialect: sqlite
-# The generator (a later ticket) will write the dataset window. "now" = window_end.
+# The generator (python -m flood_defender.generator) writes the dataset window. "now" = window_end.
 window_start: 1767225600000
-window_end: 1767229200000
+window_end: 1767830400000
 time_key: etime
 time_key_rule: Always filter time ranges on etime (the Time Key); it is indexed and, in Ocient, the partition key.
 tables:
@@ -27,3 +27,23 @@ tables:
       etime: {type: INTEGER, unit: epoch ms UTC, description: Flow end time (the Time Key), example: 1767225601000}
       bytes: {type: INTEGER, unit: bytes, description: Total bytes in the flow, example: 1500}
       pkts: {type: INTEGER, unit: packets, description: Total packets in the flow, example: 3}
+functions:
+  in_cidr:
+    signature: in_cidr(ip, cidr)
+    description: >-
+      1 if the IPv4 address is inside the CIDR block, else 0. Use for network-range filters
+      such as WHERE in_cidr(sip, '10.1.0.0/16'). It is a SQLite UDF; it needs an Ocient mapping.
+    example: "in_cidr(sip, '192.0.2.0/24')"
+metrics:
+  bits_per_second:
+    description: Throughput in bits/sec over a window; bytes are totals per flow.
+    sql: SUM(bytes) * 8.0 / <window_seconds>
+  packets_per_second:
+    description: Packet rate over a window.
+    sql: SUM(pkts) / <window_seconds>
+  top_talkers:
+    description: Top talkers - sources (or destinations) ranked by total bytes.
+    sql: SELECT sip, SUM(bytes) AS total_bytes FROM flows WHERE etime >= <start> AND etime < <end> GROUP BY sip ORDER BY total_bytes DESC LIMIT 10
+  per_minute_series:
+    description: Time series bucketed per minute on the Time Key.
+    sql: SELECT (etime / 60000) * 60000 AS minute, SUM(bytes) AS bytes FROM flows WHERE etime >= <start> AND etime < <end> GROUP BY minute ORDER BY minute

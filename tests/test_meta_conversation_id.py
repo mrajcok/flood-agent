@@ -4,10 +4,10 @@ import json
 import os
 import sys
 
+from conftest import ScriptedLLM, TextChunk, collect, last_tool_result, tool_call
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from conftest import ScriptedLLM, TextChunk, collect, last_tool_result, tool_call
 from flood_defender.agent import Conversation
 
 META_KEY = "flood_defender/conversation_id"

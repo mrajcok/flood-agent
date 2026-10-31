@@ -2,10 +2,9 @@
 
 import re
 
+from conftest import ScriptedLLM, last_tool_result, tool_call
 
 from flood_defender.llm import TextChunk
-
-from conftest import ScriptedLLM, last_tool_result, tool_call
 
 SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
 
@@ -100,6 +99,7 @@ def test_unknown_conversation_is_404(build_agent, web_client):
 
 async def test_agent_cannot_display_another_conversations_result_table(make_agent):
     from conftest import collect
+
     from flood_defender.agent import Conversation, DisplayEvent
 
     agent = await make_agent(ScriptedLLM(*table_script()))

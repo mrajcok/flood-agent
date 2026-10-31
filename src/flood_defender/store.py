@@ -97,7 +97,7 @@ class ConversationStore:
                 con.execute(
                     "UPDATE conversations SET last_activity_at=? WHERE id=?", (self._now(), conversation_id)
                 )
-            return cur.lastrowid
+            return cur.lastrowid or 0
 
     def create_conversation(self, title: str) -> str:
         cid, now = uuid.uuid4().hex, self._now()

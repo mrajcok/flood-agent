@@ -1,5 +1,9 @@
 # flood-defender
 
+## Checks
+
+Before committing: `uv run ruff check --fix . && uv run pyright && uv run pytest -q` (the same as CI in `.github/workflows/checks.yml`).
+
 ## Agent skills
 
 ### Issue tracker

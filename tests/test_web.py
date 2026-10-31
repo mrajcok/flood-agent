@@ -1,12 +1,11 @@
 """Thin smoke test of the HTTP/SSE adapter over the Agent turn stream."""
 
 import pytest
+from conftest import ScriptedLLM, last_tool_result, mcp_children, tool_call
 from fastapi.testclient import TestClient
 
 from flood_defender.llm import TextChunk
 from flood_defender.web import create_app
-
-from conftest import ScriptedLLM, last_tool_result, mcp_children, tool_call
 
 
 def test_chat_page_stream_and_row_endpoint(build_agent, web_client):

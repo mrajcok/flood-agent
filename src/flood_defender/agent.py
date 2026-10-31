@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import AsyncIterator, Callable
 
 from mcp import StdioServerParameters
+from mcp.types import TextContent
 
 from flood_defender import flagging, queries
 from flood_defender.llm import LLMClient, LLMError, TextChunk, ToolCallChunk, UsageChunk
@@ -20,6 +21,7 @@ from flood_defender.mcp_connection import McpConnection
 from flood_defender.semantic_layer import SemanticLayer
 from flood_defender.store import ConversationStore
 from flood_defender.trace import TraceBuilder
+
 
 @dataclass
 class AgentConfig:
@@ -156,7 +158,9 @@ def repair_history(messages: list[dict]) -> list[dict]:
 
 
 def resolve_chart_data(source: dict, table: str) -> dict:
-    return _resolve_data(source, table, {"url": f"/api/results/{table}/chart-rows"})
+    resolved = _resolve_data(source, table, {"url": f"/api/results/{table}/chart-rows"})
+    assert isinstance(resolved, dict)  # a dict in gives a dict out
+    return resolved
 
 
 def _resolve_data(node, table: str, url: dict):
@@ -351,7 +355,7 @@ class Agent:
         self.store.save_trace(turn_id, finished)
         await queue.put(TraceReady(finished))
 
-    async def _fail_turn(self, conversation, turn_id, trace: TraceBuilder, queue, error: Exception) -> None:
+    async def _fail_turn(self, conversation, turn_id, trace: TraceBuilder, queue, error: BaseException) -> None:
         """A turn failed partway: tell the user, record it in the Trace and in the history."""
         error = _unwrap(error)
         detail = f"{type(error).__name__}: {error}"
@@ -448,7 +452,7 @@ class Agent:
                 args = parsed
                 try:
                     result = await connection.call_tool(c.name, args, conversation_id)
-                    content = "".join(b.text for b in result.content if hasattr(b, "text"))
+                    content = "".join(b.text for b in result.content if isinstance(b, TextContent))
                     if result.isError:
                         content = _fail(content[:500] or "The tool call was rejected.")
                 except Exception as e:  # a broken tool call must not corrupt or abort the turn
@@ -523,6 +527,7 @@ class Agent:
         return json.dumps(meta), 1
 
     def _record(self, conversation: Conversation, turn_id: int, message: dict) -> int:
+        assert conversation.id is not None  # run_turn persists the Conversation first
         conversation.messages.append(message)
         return self.store.add_message(conversation.id, turn_id, message)
 
@@ -532,6 +537,7 @@ class Agent:
     ) -> list[tuple]:
         """Register a new Result Table, emit any Display to the user, and return the Display
         definitions [(kind, result_table, definition)] to persist with the tool message."""
+        assert conversation.id is not None  # run_turn persists the Conversation first
         try:
             payload = json.loads(tool_content)
         except ValueError:

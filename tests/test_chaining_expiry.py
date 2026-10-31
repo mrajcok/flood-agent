@@ -3,11 +3,10 @@
 import re
 
 import pytest
+from conftest import ScriptedLLM, all_telemetry_values, collect, last_tool_result, query_limits, tool_call
 
 from flood_defender.agent import Conversation, DisplayEvent
 from flood_defender.llm import TextChunk
-
-from conftest import ScriptedLLM, all_telemetry_values, collect, last_tool_result, query_limits, tool_call
 
 BY_PORT = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport"
 HOUR = 3_600_000

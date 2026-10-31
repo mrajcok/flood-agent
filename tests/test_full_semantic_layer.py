@@ -3,12 +3,11 @@
 from pathlib import Path
 
 import pytest
+from conftest import ScriptedLLM, all_telemetry_values, collect, config_for_test, last_tool_result, tool_call
 
 from flood_defender.agent import Agent
 from flood_defender.llm import TextChunk
 from flood_defender.semantic_layer import SemanticLayer
-
-from conftest import ScriptedLLM, all_telemetry_values, collect, config_for_test, last_tool_result, tool_call
 
 REAL = Path(__file__).parent.parent / "semantic_layer.yaml"
 

@@ -28,10 +28,10 @@ from pydantic import ValidationError
 from flood_defender import queries
 from flood_defender.agent import Agent, Conversation, TraceEntry, TurnError
 from flood_defender.config import Settings
-from flood_defender.llm import OpenRouterClient
 from flood_defender.evalset.client import UsageMeter
-from flood_defender.evalset.compare import DEFAULT_TOLERANCE, compare
+from flood_defender.evalset.compare import DEFAULT_TOLERANCE, Comparison, compare
 from flood_defender.evalset.golden import Question, load_golden, run_reference
+from flood_defender.llm import OpenRouterClient
 
 CANDIDATE_MODELS = [
     "anthropic/claude-sonnet-5.5",
@@ -75,13 +75,14 @@ def _judge(q: Question, ref, results_db: Path) -> tuple[bool, str, int, str | No
         return False, "no Result Table was created", 0, None, 0
     ref_cols, ref_rows = ref
     tol = q.tolerance if q.tolerance is not None else DEFAULT_TOLERANCE
-    last = None
+    last: Comparison | None = None
     for name in names:
         cols, rows = queries.iter_all_rows(results_db, name)
         c = compare(ref_cols, ref_rows, cols, list(rows), q.ordered, tol)
         if c.ok:
             return True, "", c.extra_columns, name, len(names)
         last = c
+    assert last is not None  # names is non-empty, so the loop ran
     return False, last.reason, 0, None, len(names)
 
 
@@ -145,7 +146,7 @@ def summarize(results: list[QuestionResult]) -> dict:
     for model in dict.fromkeys(r.model for r in results):
         rs = [r for r in results if r.model == model]
         costs = [r.cost for r in rs]
-        cost = None if any(c is None for c in costs) else sum(costs)
+        cost = None if any(c is None for c in costs) else sum(c for c in costs if c is not None)
         lat = sorted(r.latency_s for r in rs)
         summary[model] = {
             "total": len(rs),
@@ -201,7 +202,7 @@ def main(argv=None) -> int:
     p.add_argument("--workdir", default="data/eval-work", help="scratch results/app databases")
     a = p.parse_args(argv)
     try:
-        settings = Settings()
+        settings = Settings()  # pyright: ignore[reportCallIssue]  # pydantic-settings fills fields from env/TOML
     except ValidationError as e:
         print(f"invalid settings:\n{e}", file=sys.stderr)
         return 2

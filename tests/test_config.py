@@ -4,13 +4,12 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from conftest import ScriptedLLM, collect, last_tool_result, tool_call
 from pydantic import ValidationError
 
 from flood_defender.agent import STEP_LIMIT_MESSAGE, Agent, TextDelta
 from flood_defender.config import DEFAULTS_FILE, Settings, render_env_example
 from flood_defender.llm import TextChunk
-
-from conftest import ScriptedLLM, collect, last_tool_result, tool_call
 
 ENV_EXAMPLE = Path(__file__).parent.parent / ".env.example"
 

@@ -85,6 +85,7 @@ class Settings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
+        assert isinstance(dotenv_settings, DotEnvSettingsSource)
         literal_dotenv = _LiteralDotEnvSource(settings_cls, env_file=dotenv_settings.env_file)
         return (init_settings, env_settings, literal_dotenv, TomlConfigSettingsSource(settings_cls))
 

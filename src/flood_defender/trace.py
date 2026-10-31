@@ -47,7 +47,7 @@ class TraceBuilder:
         self.add("tool_call", name=name, arguments=arguments, query_metadata=query_metadata,
                  duration_ms=elapsed_ms(started), **fields)
 
-    def result_table(self, name: str, row_count: int, columns: list) -> None:
+    def result_table(self, name: str, row_count: int | None, columns: list | None) -> None:
         self.add("result_table", name=name, row_count=row_count, columns=columns)
 
     def finish(self) -> dict:

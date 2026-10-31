@@ -5,12 +5,11 @@ import json
 import re
 
 import pytest
+from conftest import ScriptedLLM, collect, last_tool_result, tool_call
 
 from flood_defender.agent import Conversation, FlagEvent, TraceReady
 from flood_defender.flagging import find_unseen_values
 from flood_defender.llm import TextChunk
-
-from conftest import ScriptedLLM, collect, last_tool_result, tool_call
 
 SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
 

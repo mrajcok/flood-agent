@@ -1,11 +1,10 @@
 """Chart tests at the Agent turn seam: real MCP subprocess, scripted fake LLM."""
 
 import pytest
+from conftest import ScriptedLLM, all_telemetry_values, collect, last_tool_result, tool_call
 
 from flood_defender.agent import DisplayEvent
 from flood_defender.llm import TextChunk
-
-from conftest import ScriptedLLM, all_telemetry_values, collect, last_tool_result, tool_call
 
 CHART_SQL = "SELECT etime, SUM(bytes) AS total_bytes FROM flows GROUP BY etime"
 TOP_PORTS_SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"

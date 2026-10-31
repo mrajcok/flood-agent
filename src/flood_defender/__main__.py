@@ -13,12 +13,12 @@ from flood_defender.web import create_app
 
 
 def build_app(settings: Settings | None = None):
-    settings = settings or Settings()
+    settings = settings or Settings()  # pyright: ignore[reportCallIssue]  # pydantic-settings fills fields from env/TOML
     config = settings.agent_config()
     config.results_db.parent.mkdir(parents=True, exist_ok=True)
     return create_app(Agent(config, OpenRouterClient(settings.require_api_key(), config.model)))
 
 
 if __name__ == "__main__":
-    settings = Settings()
+    settings = Settings()  # pyright: ignore[reportCallIssue]  # pydantic-settings fills fields from env/TOML
     uvicorn.run(build_app(settings), host=settings.host, port=settings.port)

@@ -22,12 +22,11 @@ def query(sql, call_id="c1"):
     return [tool_call("run_query", call_id, sql=sql, title="t")]
 
 
-async def run_one(scripts, telemetry_db, semantic_layer_path, tmp_path, question=Q, usage=None):
+async def run_one(scripts, telemetry_db, semantic_layer_path, tmp_path, question=Q):
     llms = []
 
     def factory(model, question_id):
         llm = ScriptedLLM(*scripts)
-        llm.usage = usage
         llms.append(llm)
         return llm
 
@@ -107,9 +106,9 @@ async def test_llm_sees_only_the_question_and_no_telemetry_values(telemetry_db, 
 
 
 async def test_cost_and_tokens_come_from_client_usage(telemetry_db, semantic_layer_path, tmp_path):
-    usage = {"cost": 0.0123, "prompt_tokens": 100, "completion_tokens": 20}
-    r, _ = await run_one([query(GOOD), DONE], telemetry_db, semantic_layer_path, tmp_path, usage=usage)
-    assert r.cost == pytest.approx(0.0123) and r.prompt_tokens == 100 and r.completion_tokens == 20
+    # the scripted fake emits UsageChunk(100, 20, 0.0012) after each of the two LLM steps
+    r, _ = await run_one([query(GOOD), DONE], telemetry_db, semantic_layer_path, tmp_path)
+    assert r.cost == pytest.approx(0.0024) and r.prompt_tokens == 200 and r.completion_tokens == 40
 
 
 async def test_client_exception_is_recorded_not_raised(telemetry_db, semantic_layer_path, tmp_path):

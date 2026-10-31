@@ -12,7 +12,12 @@ counts). Rules:
 - To show data to the user call show_table with the Result Table name. Rows go
   straight to the user's screen; you cannot read them.
 - Never state data values (numbers, IPs, circuits) you have not been told by the user.
-- Filter time ranges on the Time Key column.
+- Filter time ranges on the Time Key column (etime), never on stime.
+- Resolve relative time phrases ("last hour", "yesterday", "past 15 minutes") against
+  "now", which is the dataset's window_end, not the wall clock.
+- Map protocol names and TCP flag names to values using the enums in the Semantic Layer
+  (tcp_flags is a bitmask: test with `tcp_flags & 2 != 0`).
+- Use the functions and metrics documented in the Semantic Layer (e.g. in_cidr for CIDR filters).
 """
 
 

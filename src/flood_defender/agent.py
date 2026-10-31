@@ -17,7 +17,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from flood_defender import flagging, queries
-from flood_defender.llm import LLMClient, TextChunk, ToolCallChunk, UsageChunk
+from flood_defender.llm import LLMClient, LLMError, TextChunk, ToolCallChunk, UsageChunk
 from flood_defender.semantic_layer import SemanticLayer
 from flood_defender.store import ConversationStore
 from flood_defender.trace import TraceBuilder
@@ -94,16 +94,66 @@ class FlagEvent:
 
 
 @dataclass
+class TurnError:
+    """The turn failed partway. `message` was already streamed to the user (and saved); `detail`
+    is the technical description (also in the Trace) for harnesses such as the eval runner."""
+
+    message: str
+    detail: str
+
+
+@dataclass
 class TurnEnd:
     pass
 
 
-Event = TextDelta | DisplayEvent | TraceEntry | FlagEvent | TraceReady | TurnEnd
+Event = TextDelta | DisplayEvent | TraceEntry | FlagEvent | TraceReady | TurnError | TurnEnd
 
 GIVE_UP_MESSAGE = (
     "Sorry, I couldn't build a working query for that after several attempts. "
     "Please try rephrasing your question."
 )
+
+
+STEP_LIMIT_MESSAGE = (
+    "Sorry, I wasn't able to finish that within the allowed number of steps. "
+    "Please try a simpler or more specific question."
+)
+
+
+def _fail(message: str) -> str:
+    return json.dumps({"success": False, "error": message})
+
+
+def _unwrap(e: BaseException) -> BaseException:
+    while isinstance(e, BaseExceptionGroup) and e.exceptions:
+        e = e.exceptions[0]  # the MCP client wraps the real failure in a TaskGroup
+    return e
+
+
+def repair_history(messages: list[dict]) -> list[dict]:
+    """Drop assistant tool_calls messages that lack a tool result for every call id (and the
+    partial results after them), and orphan tool messages, so a corrupt saved history never
+    makes the provider reject every later request."""
+    out: list[dict] = []
+    i = 0
+    while i < len(messages):
+        m = messages[i]
+        if m["role"] == "assistant" and m.get("tool_calls"):
+            j = i + 1
+            answered = set()
+            while j < len(messages) and messages[j]["role"] == "tool":
+                answered.add(messages[j].get("tool_call_id"))
+                j += 1
+            if {tc["id"] for tc in m["tool_calls"]} <= answered:
+                out.extend(messages[i:j])
+            i = j
+        elif m["role"] == "tool":
+            i += 1
+        else:
+            out.append(m)
+            i += 1
+    return out
 
 
 def _openai_tool(t) -> dict:
@@ -141,7 +191,7 @@ class Agent:
         """Load a saved Conversation (KeyError if unknown)."""
         if not self.store.exists(conversation_id):
             raise KeyError(conversation_id)
-        return Conversation(conversation_id, self.store.messages(conversation_id))
+        return Conversation(conversation_id, repair_history(self.store.messages(conversation_id)))
 
     def sweep_expired(self) -> None:
         """Delete Result Tables whose Conversation has been idle past the TTL.
@@ -164,6 +214,11 @@ class Agent:
     def is_expired(self, result_table: str) -> bool:
         self.sweep_expired()
         return self.store.is_expired(result_table)
+
+    def expired_among(self, result_tables) -> set[str]:
+        """Sweep once, then return which of the given Result Tables have expired."""
+        self.sweep_expired()
+        return self.store.expired_among(result_tables)
 
     def _raise_if_expired(self, result_table: str) -> None:
         if self.is_expired(result_table):
@@ -189,23 +244,35 @@ class Agent:
         return queries.fetch_records(self.config.results_db, result_table, self.config.chart_row_cap)
 
     async def run_turn(self, conversation: Conversation, user_message: str) -> AsyncIterator[Event]:
-        """Run one turn. The MCP session lives entirely inside a single producer task."""
+        """Run one turn. The MCP session lives entirely inside a single producer task.
+
+        The producer queues `TurnEnd` only after the MCP session and subprocess are torn down.
+        If the consumer stops early (client disconnect), the producer is cancelled and awaited
+        so the subprocess is reaped before this generator finishes."""
         queue: asyncio.Queue = asyncio.Queue()
         task = asyncio.create_task(self._produce(conversation, user_message, queue))
+        finished = False
         try:
             while True:
                 item = await queue.get()
                 if isinstance(item, BaseException):
+                    finished = True
                     raise item
+                finished = isinstance(item, TurnEnd)
                 yield item
-                if isinstance(item, TurnEnd):
+                if finished:
                     break
         finally:
-            await task if task.done() else task.cancel()
+            if not finished:
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     async def _produce(self, conversation: Conversation, user_message: str, queue: asyncio.Queue):
         try:
             await self._run(conversation, user_message, queue)
+            await queue.put(TurnEnd())
+        except asyncio.CancelledError:
+            raise
         except BaseException as e:  # surfaced to the consumer
             await queue.put(e)
 
@@ -214,6 +281,33 @@ class Agent:
         if conversation.id is None:
             conversation.id = self.store.create_conversation(user_message[:60])
         turn_id = self.store.start_turn(conversation.id, user_message)
+        self._record(conversation, turn_id, {"role": "user", "content": user_message})
+        trace = TraceBuilder(self.config.model)
+        try:
+            await self._converse(conversation, turn_id, user_message, trace, queue)
+        except asyncio.CancelledError:
+            self.store.save_trace(turn_id, trace.finish())
+            raise
+        except Exception as e:
+            await self._fail_turn(conversation, turn_id, trace, queue, e)
+        finished = trace.finish()
+        self.store.save_trace(turn_id, finished)
+        await queue.put(TraceReady(finished))
+
+    async def _fail_turn(self, conversation, turn_id, trace: TraceBuilder, queue, error: Exception) -> None:
+        """A turn failed partway: tell the user, record it in the Trace and in the history."""
+        error = _unwrap(error)
+        detail = f"{type(error).__name__}: {error}"
+        if isinstance(error, LLMError):
+            message = f"Sorry, I couldn't get a complete answer from the model. {error}"
+        else:
+            message = f"Sorry, something went wrong while handling that request ({type(error).__name__}). Please try again."
+        trace.add("error", message=message, detail=detail)
+        self._record(conversation, turn_id, {"role": "assistant", "content": message})
+        await queue.put(TextDelta(message))
+        await queue.put(TurnError(message, detail))
+
+    async def _converse(self, conversation, turn_id, user_message, trace: TraceBuilder, queue):
         params = StdioServerParameters(
             command=sys.executable,
             args=["-m", "flood_defender.mcp_server"],
@@ -233,9 +327,7 @@ class Agent:
             await session.initialize()
             tools = [_openai_tool(t) for t in (await session.list_tools()).tools]
 
-            self._record(conversation, turn_id, {"role": "user", "content": user_message})
             failed_attempts = 0
-            trace = TraceBuilder(self.config.model)
             for _ in range(MAX_LLM_STEPS):
                 system_prompt = self.semantic_layer.system_prompt(self.store.live_result_tables(conversation.id))
                 messages = [{"role": "system", "content": system_prompt}]
@@ -262,35 +354,70 @@ class Agent:
                         }
                         for c in calls
                     ]
-                self._record(conversation, turn_id, assistant)
-                if not calls:
-                    break
+                # The assistant message and every tool result are saved together after all of the
+                # step's calls have been answered, so a failure partway never leaves history with
+                # an unanswered tool_call.
+                items: list[tuple[dict, list[tuple]]] = [(assistant, [])]
                 for c in calls:
-                    args = json.loads(c.arguments or "{}")
                     call_started = time.monotonic()
-                    result = await session.call_tool(c.name, args)
-                    content = "".join(b.text for b in result.content if hasattr(b, "text"))
-                    executed_sql = None
-                    if c.name == "run_query":
-                        content, executed_sql = self._strip_executed_sql(content)
-                        content, failed = await self._split_query_error(content, args, queue, trace)
-                        failed_attempts += failed
-                    message_id = self._record(
-                        conversation, turn_id, {"role": "tool", "tool_call_id": c.id, "content": content}
-                    )
+                    content, args, executed_sql, failed = await self._run_tool(session, c, queue, trace)
+                    failed_attempts += failed
                     trace.tool_call(c.name, args, content, call_started, executed_sql)
                     self._trace_result_table(trace, content)
-                    await self._emit_display(
-                        conversation, turn_id, message_id, content, queue, c.arguments, user_message, trace
+                    displays = await self._prepare_displays(
+                        conversation, content, args, queue, user_message, trace
                     )
-                if failed_attempts >= self.config.max_failed_attempts:
-                    self._record(conversation, turn_id, {"role": "assistant", "content": GIVE_UP_MESSAGE})
-                    await queue.put(TextDelta(GIVE_UP_MESSAGE))
+                    items.append(({"role": "tool", "tool_call_id": c.id, "content": content}, displays))
+                self.store.add_step(conversation.id, turn_id, items)
+                conversation.messages.extend(m for m, _ in items)
+                if not calls:
                     break
-            finished = trace.finish()
-            self.store.save_trace(turn_id, finished)
-            await queue.put(TraceReady(finished))
-            await queue.put(TurnEnd())
+                if failed_attempts >= self.config.max_failed_attempts:
+                    await self._end_with_notice(conversation, turn_id, GIVE_UP_MESSAGE, queue)
+                    break
+            else:
+                trace.add("step_limit", max_steps=MAX_LLM_STEPS)
+                await self._end_with_notice(conversation, turn_id, STEP_LIMIT_MESSAGE, queue)
+
+    async def _end_with_notice(self, conversation, turn_id, message: str, queue) -> None:
+        self._record(conversation, turn_id, {"role": "assistant", "content": message})
+        await queue.put(TextDelta(message))
+
+    async def _run_tool(self, session, c: ToolCallChunk, queue, trace: TraceBuilder):
+        """Execute one LLM tool call. Returns (content, args, executed_sql, failed 0/1).
+
+        Never raises for problems the LLM caused (bad JSON, missing `sql`) or tool failures: it
+        returns an error result the LLM can act on, and a failed run_query counts toward the limit."""
+        is_query = c.name == "run_query"
+        args: dict = {}
+        executed_sql = None
+        try:
+            parsed = json.loads(c.arguments or "{}")
+        except ValueError:
+            parsed = None
+            content = _fail("The tool arguments were not valid JSON. Send a JSON object and try again.")
+        else:
+            if not isinstance(parsed, dict):
+                content = _fail("The tool arguments must be a JSON object. Try again.")
+            elif is_query and not isinstance(parsed.get("sql"), str):
+                args = parsed
+                content = _fail("run_query requires a 'sql' string argument. Try again.")
+            else:
+                args = parsed
+                try:
+                    result = await session.call_tool(c.name, args)
+                    content = "".join(b.text for b in result.content if hasattr(b, "text"))
+                    if result.isError:
+                        content = _fail(content[:500] or "The tool call was rejected.")
+                except Exception as e:  # a broken tool call must not corrupt or abort the turn
+                    trace.add("tool_error", name=c.name, detail=f"{type(_unwrap(e)).__name__}: {_unwrap(e)}")
+                    content = _fail("The tool failed to run. Try again.")
+                    return content, args, None, 1
+        if is_query:
+            content, executed_sql = self._strip_executed_sql(content)
+            content, failed = await self._split_query_error(content, args, queue, trace)
+            return content, args, executed_sql, failed
+        return content, args, None, 0
 
     @staticmethod
     async def _flag_unseen_values(text: str, system_prompt: str, messages: list[dict], trace, queue) -> None:
@@ -357,43 +484,36 @@ class Agent:
         conversation.messages.append(message)
         return self.store.add_message(conversation.id, turn_id, message)
 
-    async def _emit_display(
-        self, conversation: Conversation, turn_id: int, message_id: int, tool_content: str, queue: asyncio.Queue,
-        call_arguments: str = "{}", request: str = "", trace: TraceBuilder | None = None,
-    ):
+    async def _prepare_displays(
+        self, conversation: Conversation, tool_content: str, args: dict, queue: asyncio.Queue,
+        request: str, trace: TraceBuilder,
+    ) -> list[tuple]:
+        """Register a new Result Table, emit any Display to the user, and return the Display
+        definitions [(kind, result_table, definition)] to persist with the tool message."""
         try:
             payload = json.loads(tool_content)
         except ValueError:
-            return
+            return []
         if not isinstance(payload, dict):
-            return
+            return []
         if payload.get("success") and payload.get("result_table") and "display" not in payload:
-            try:
-                title = json.loads(call_arguments or "{}").get("title", "")
-            except ValueError:
-                title = ""
+            title = args.get("title", "")
             self.store.add_result_table(
-                conversation.id, payload["result_table"], title, payload.get("columns", []), request
+                conversation.id, payload["result_table"], title if isinstance(title, str) else "",
+                payload.get("columns", []), request,
             )
         display = payload.get("display")
         if not display:
-            return
-        owned = self.store.owns_result_table(conversation.id, display["result_table"])
+            return []
+        table = display["result_table"]
+        owned = self.store.owns_result_table(conversation.id, table)
         if display["kind"] == "chart":
             source = display["spec"]
-            table = display["result_table"]
-            if owned:
-                self.store.add_display(
-                    conversation.id, turn_id, message_id, "chart", table, {"spec": source}
-                )
             resolved = resolve_chart_data(source, table)
-            if trace:
-                trace.add("chart_spec", result_table=table, source_spec=source, spec=resolved)
+            trace.add("chart_spec", result_table=table, source_spec=source, spec=resolved)
             await queue.put(DisplayEvent("chart", table, spec=resolved, source_spec=source))
-            return
-        if owned:
-            self.store.add_display(
-                conversation.id, turn_id, message_id, display["kind"], display["result_table"],
-                {"columns": display["columns"]},
-            )
-            await queue.put(DisplayEvent(display["kind"], display["result_table"], display["columns"]))
+            return [("chart", table, {"spec": source})] if owned else []
+        if not owned:
+            return []
+        await queue.put(DisplayEvent(display["kind"], table, display["columns"]))
+        return [(display["kind"], table, {"columns": display["columns"]})]

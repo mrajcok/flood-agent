@@ -42,7 +42,8 @@ Tables are paginated (50 rows/page, max 500) and sortable on any column by the A
 `GET /api/results/<rt>/rows?page=&page_size=&sort=<col>&dir=asc|desc` re-queries the
 Result Table; `sort` must exactly match a column of that Result Table or the request is a
 400. `GET /api/results/<rt>/csv` streams the full Result Table (raw values, formula-leading
-text prefixed with `'`). Both are Agent endpoints, not LLM tools.
+text prefixed with `'`). Both are Agent endpoints, not LLM tools. The `/api/results/...`
+endpoints are not scoped per Conversation by design: Flood Defender is single-user and local, with no authentication.
 
 Formatting comes from Semantic Layer column metadata (`tables.flows.columns.<col>`):
 `enum` -> names (proto), `enum_bits` -> flag letters (S, SA, FPA), `unit: bytes` -> decimal

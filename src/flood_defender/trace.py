@@ -41,7 +41,7 @@ class TraceBuilder:
     def tool_call(self, name: str, arguments: dict, query_metadata: str, started: float,
                   executed_sql: str | None = None) -> None:
         """`query_metadata` is the exact tool message content sent to the LLM."""
-        fields = {"sql": arguments["sql"], "title": arguments.get("title")} if name == "run_query" else {}
+        fields = {"sql": arguments.get("sql"), "title": arguments.get("title")} if name == "run_query" else {}
         if executed_sql:
             fields["executed_sql"] = executed_sql
         self.add("tool_call", name=name, arguments=arguments, query_metadata=query_metadata,

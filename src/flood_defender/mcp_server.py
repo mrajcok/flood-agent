@@ -8,18 +8,34 @@ Configuration comes from the environment: TELEMETRY_DB and RESULTS_DB.
 
 import json
 import os
+import sqlite3
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
 from flood_defender import queries
-from flood_defender.store import ConversationStore
 
 mcp = FastMCP("flood-defender")
 
 
 def _paths() -> tuple[Path, Path]:
     return Path(os.environ["TELEMETRY_DB"]), Path(os.environ["RESULTS_DB"])
+
+
+def _allowed_tables() -> set[str]:
+    """This Conversation's live Result Tables, read live from the app database with a
+    read-only query (no DDL, no write lock). Empty if the environment is incomplete."""
+    app_db, conversation_id = os.environ.get("APP_DB"), os.environ.get("CONVERSATION_ID")
+    if not app_db or not conversation_id:
+        return set()
+    con = sqlite3.connect(f"file:{app_db}?mode=ro", uri=True, timeout=5)
+    try:
+        rows = con.execute(
+            "SELECT name FROM result_tables WHERE conversation_id=? AND expired=0", (conversation_id,)
+        )
+        return {r[0] for r in rows}
+    finally:
+        con.close()
 
 
 @mcp.tool()
@@ -30,10 +46,7 @@ def run_query(sql: str, title: str) -> str:
     timeout = float(os.environ.get("QUERY_TIMEOUT_S", queries.DEFAULT_QUERY_TIMEOUT_S))
     max_rows = int(os.environ.get("MAX_RESULT_ROWS", queries.DEFAULT_MAX_ROWS))
     # The SELECT may reference only this Conversation's live Result Tables.
-    allowed = set()
-    if os.environ.get("APP_DB") and os.environ.get("CONVERSATION_ID"):
-        store = ConversationStore(Path(os.environ["APP_DB"]))
-        allowed = set(store.result_tables(os.environ["CONVERSATION_ID"]))
+    allowed = _allowed_tables()
     # A failed result may carry `raw_error`; the Agent strips it (keeping it for the Trace)
     # before anything is sent to the LLM.
     return json.dumps(queries.run_query(telemetry, results, sql, timeout, max_rows, allowed))
@@ -43,7 +56,10 @@ def run_query(sql: str, title: str) -> str:
 def show_table(result_table: str, columns: list[str] | None = None) -> str:
     """Show a Result Table to the user as a table Display. You will not see the rows."""
     _, results = _paths()
-    available = queries.result_table_columns(results, result_table)
+    # Another Conversation's table is reported exactly like one that does not exist.
+    available = (
+        queries.result_table_columns(results, result_table) if result_table in _allowed_tables() else None
+    )
     if available is None:
         return json.dumps({"success": False, "error": "Unknown Result Table."})
     if columns is not None and not set(columns) <= set(available):
@@ -86,7 +102,7 @@ def show_chart(vega_lite_spec: dict) -> str:
     table = data.get("name") if isinstance(data, dict) else None
     if not isinstance(table, str):
         return json.dumps({"success": False, "error": "Missing data source. " + CHART_GUIDANCE})
-    count = queries.result_table_row_count(results, table)
+    count = queries.result_table_row_count(results, table) if table in _allowed_tables() else None
     if count is None:
         return json.dumps({"success": False, "error": "Unknown Result Table. " + CHART_GUIDANCE})
     violation = _find_violation(vega_lite_spec, table)

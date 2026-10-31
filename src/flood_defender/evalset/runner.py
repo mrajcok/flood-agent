@@ -2,7 +2,7 @@
 Result Tables the LLM produced against reference results, and reports per-model
 correctness, retries, latency and cost. On demand only; never part of CI or default pytest.
 
-    export OPENROUTER_API_KEY=...   # or put it in .env
+    export OPENROUTER_API_KEY=...   # or put it in .env (see .env.example)
     uv run python -m flood_defender.evalset --db data/telemetry.db \\
         --models anthropic/claude-sonnet-5.5 z-ai/glm-5.3 --out eval-report
 
@@ -16,17 +16,18 @@ run_query attempts (the Agent's failed-attempt counter).
 import argparse
 import asyncio
 import json
-import os
 import re
 import sqlite3
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from flood_defender import queries
-from flood_defender.agent import Agent, AgentConfig, Conversation, TraceEntry, TurnError
-from flood_defender.config import load_env_file
+from flood_defender.agent import Agent, Conversation, TraceEntry, TurnError
+from flood_defender.config import Settings
 from flood_defender.llm import OpenRouterClient
 from flood_defender.evalset.client import UsageMeter
 from flood_defender.evalset.compare import DEFAULT_TOLERANCE, compare
@@ -98,8 +99,8 @@ async def _run_question(model, q, ref, telemetry_db, semantic_layer, client_fact
         p.unlink(missing_ok=True)
     llm = UsageMeter(client_factory(model, q.id))
     agent = Agent(
-        AgentConfig(telemetry_db=telemetry_db, results_db=results_db, semantic_layer=semantic_layer,
-                    model=model, app_db=app_db),
+        replace(Settings.from_defaults().agent_config(), telemetry_db=telemetry_db, results_db=results_db,
+                semantic_layer=semantic_layer, model=model, app_db=app_db),
         llm,
     )
     retries, error = 0, None
@@ -191,16 +192,20 @@ def render_json(summary: dict, results: list[QuestionResult]) -> str:
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="Run the golden set against OpenRouter models.")
-    p.add_argument("--db", default="data/telemetry.db", help="generated Telemetry Database (seed 1)")
-    p.add_argument("--semantic-layer", default="semantic_layer.yaml", help="must carry the same window as --db")
+    p.add_argument("--db", help="generated Telemetry Database (seed 1); default: the telemetry_db setting")
+    p.add_argument("--semantic-layer", help="must carry the same window as --db; default: the semantic_layer setting")
     p.add_argument("--models", nargs="+", default=CANDIDATE_MODELS)
     p.add_argument("--questions", nargs="+", help="only these question ids")
     p.add_argument("--out", default="eval-report", help="writes <out>.md and <out>.json")
     p.add_argument("--workdir", default="data/eval-work", help="scratch results/app databases")
     a = p.parse_args(argv)
-    load_env_file(".env", os.environ)
-    key = os.environ.get("OPENROUTER_API_KEY")
-    if not key:
+    try:
+        settings = Settings()
+    except ValidationError as e:
+        print(f"invalid settings:\n{e}", file=sys.stderr)
+        return 2
+    key = settings.openrouter_api_key
+    if key is None:
         print("OPENROUTER_API_KEY is not set; the eval runner calls real OpenRouter models.", file=sys.stderr)
         return 2
     questions = load_golden()
@@ -210,8 +215,8 @@ def main(argv=None) -> int:
             print("no matching question ids", file=sys.stderr)
             return 2
     results = asyncio.run(
-        run_eval(a.models, questions, Path(a.db), Path(a.semantic_layer),
-                 lambda model, qid: OpenRouterClient(key, model), Path(a.workdir))
+        run_eval(a.models, questions, Path(a.db or settings.telemetry_db), Path(a.semantic_layer or settings.semantic_layer),
+                 lambda model, qid: OpenRouterClient(key.get_secret_value(), model), Path(a.workdir))
     )
     summary = summarize(results)
     Path(f"{a.out}.md").write_text(render_markdown(summary, results))

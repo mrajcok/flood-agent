@@ -3,7 +3,8 @@
 No tool here returns rows: `run_query` returns Query Metadata, `show_table` records a
 Display definition. Rows reach the browser only through the Agent's internal data path.
 
-Configuration comes from the environment: TELEMETRY_DB and RESULTS_DB.
+Configuration comes from the environment the Agent passes it: TELEMETRY_DB, RESULTS_DB, APP_DB,
+CONVERSATION_ID, QUERY_TIMEOUT_S, MAX_RESULT_ROWS and CHART_ROW_CAP. There are no fallbacks.
 """
 
 import json
@@ -43,8 +44,8 @@ def run_query(sql: str, title: str) -> str:
     """Run a single read-only SELECT over the Telemetry Database. The output is stored in
     a new Result Table (named by the tool). Returns only Query Metadata, never rows."""
     telemetry, results = _paths()
-    timeout = float(os.environ.get("QUERY_TIMEOUT_S", queries.DEFAULT_QUERY_TIMEOUT_S))
-    max_rows = int(os.environ.get("MAX_RESULT_ROWS", queries.DEFAULT_MAX_ROWS))
+    timeout = float(os.environ["QUERY_TIMEOUT_S"])
+    max_rows = int(os.environ["MAX_RESULT_ROWS"])
     # The SELECT may reference only this Conversation's live Result Tables.
     allowed = _allowed_tables()
     # A failed result may carry `raw_error`; the Agent strips it (keeping it for the Trace)
@@ -108,7 +109,7 @@ def show_chart(vega_lite_spec: dict) -> str:
     violation = _find_violation(vega_lite_spec, table)
     if violation:
         return json.dumps({"success": False, "error": violation})
-    cap = int(os.environ.get("CHART_ROW_CAP", "10000"))
+    cap = int(os.environ["CHART_ROW_CAP"])
     if count > cap:
         return json.dumps(
             {

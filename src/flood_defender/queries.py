@@ -13,9 +13,6 @@ from pathlib import Path
 
 RESULT_TABLE_RE = re.compile(r"^rt_[0-9a-f]{8}$")
 
-DEFAULT_QUERY_TIMEOUT_S = 30.0
-DEFAULT_MAX_ROWS = 1_000_000
-
 _FORBIDDEN_WORDS = {
     "insert", "update", "delete", "drop", "create", "alter", "attach", "detach",
     "pragma", "vacuum", "reindex", "analyze", "begin", "commit",
@@ -175,8 +172,8 @@ def run_query(
     telemetry_db: Path,
     results_db: Path,
     sql: str,
-    timeout_s: float = DEFAULT_QUERY_TIMEOUT_S,
-    max_rows: int = DEFAULT_MAX_ROWS,
+    timeout_s: float,
+    max_rows: int,
     allowed_tables: set[str] | None = None,
 ) -> dict:
     """Run the SQL as CTAS into the results database. Returns Query Metadata only.

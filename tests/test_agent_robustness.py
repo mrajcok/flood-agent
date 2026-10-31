@@ -131,13 +131,12 @@ async def test_open_conversation_repairs_corrupt_saved_history(make_agent):
     assert [m["role"] for m in msgs] == ["user", "user", "assistant", "tool", "assistant"]
 
 
-async def test_steps_exhausted_tells_the_user_and_saves_the_trace(make_agent, monkeypatch):
-    monkeypatch.setattr(agent_mod, "MAX_LLM_STEPS", 2)
+async def test_steps_exhausted_tells_the_user_and_saves_the_trace(make_agent):
     llm = ScriptedLLM(
         [tool_call("run_query", "c1", sql=SQL, title="t")],
         [tool_call("run_query", "c2", sql=SQL, title="t")],
     )
-    agent = make_agent(llm)
+    agent = make_agent(llm, max_llm_steps=2)
     conv = Conversation()
     events = await collect(agent, "q", conv)
     assert agent_mod.STEP_LIMIT_MESSAGE in text_of(events)

@@ -8,7 +8,7 @@ from flood_defender import queries
 from flood_defender.agent import Conversation, TextDelta, TraceEntry, TurnEnd
 from flood_defender.llm import TextChunk
 
-from conftest import ScriptedLLM, all_telemetry_values, collect, last_tool_result, tool_call
+from conftest import ScriptedLLM, all_telemetry_values, collect, last_tool_result, query_limits, tool_call
 
 
 async def run_one(make_agent, sql, **limits):
@@ -185,6 +185,6 @@ def test_telemetry_database_is_unwritable_even_if_validation_bypassed(telemetry_
 def test_bypassed_validation_cannot_write_via_run_query(telemetry_db, tmp_path, monkeypatch):
     monkeypatch.setattr(queries, "validate_select", lambda sql: sql)
     for sql in ["SELECT 1; DELETE FROM flows", "SELECT 1) ; DELETE FROM flows; --"]:
-        res = queries.run_query(telemetry_db, tmp_path / "results.db", sql)
+        res = queries.run_query(telemetry_db, tmp_path / "results.db", sql, **query_limits())
         assert res["success"] is False
     assert len(all_telemetry_values(telemetry_db)) > 10

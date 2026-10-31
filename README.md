@@ -18,16 +18,24 @@ uv run python -m flood_defender.generator data/telemetry.db   # 7 days, ~2M Flow
 ## Run
 
 ```
-export OPENROUTER_API_KEY=...                      # never commit this
-export OPENROUTER_MODEL=anthropic/claude-sonnet-5.5   # optional; this is the default
+cp .env.example .env     # then set OPENROUTER_API_KEY in .env (never commit it)
 uv run python -m flood_defender                    # http://127.0.0.1:8000
 ```
 
-Settings come from the environment or from a `.env` file in the working directory (the real
-environment wins); copy `.env.example` to get started.
+## Settings
 
-Optional env: `TELEMETRY_DB` (default `data/telemetry.db`), `RESULTS_DB`
-(`data/results.db`), `APP_DB` (`data/app.db`; Conversations), `SEMANTIC_LAYER` (`semantic_layer.yaml`), `RESULT_TTL_HOURS` (`24`; Result Tables are deleted this long after a Conversation's last activity), `QUERY_TIMEOUT_S` (`30`), `MAX_RESULT_ROWS` (`1000000`), `CHART_ROW_CAP` (`10000`), `HOST`, `PORT`.
+Every setting has a default in `src/flood_defender/defaults.toml`, the only place defaults
+are written. Override any of them, highest priority first, with an environment variable, a
+`.env` file in the working directory, or (lowest) that defaults file. Names are the keys in
+upper case (`QUERY_TIMEOUT_S`, `MAX_LLM_STEPS`, ...); blank values count as unset and `$`
+is never interpolated. Validation errors name the offending setting.
+
+`.env.example` documents every setting and is generated from `flood_defender/config.py`
+and `defaults.toml`; a test fails if it is stale. After changing either, regenerate it:
+
+```
+uv run python -m flood_defender.config > .env.example
+```
 
 ## Test
 
@@ -80,6 +88,10 @@ uv run python -m flood_defender.evalset --db data/telemetry.db \
     --models anthropic/claude-sonnet-5.5 deepseek/deepseek-v4-pro-0813 z-ai/glm-5.3 qwen/qwen3.8-27b \
     --out eval-report                                              # writes eval-report.md / .json
 ```
+
+The eval always runs with the limits in `defaults.toml`, ignoring your `.env` and exported
+variables, so runs are comparable between machines; the API key (`.env` is fine) and the
+default `--db` / `--semantic-layer` paths are the only settings it reads from them.
 
 `--models` defaults to those four; `--questions id ...` runs a subset. Per model it reports
 correctness, retries (failed `run_query` attempts), latency and cost (OpenRouter-reported).

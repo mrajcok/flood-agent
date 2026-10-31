@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from flood_defender import queries
 from flood_defender.web import create_app
 
-from conftest import ScriptedLLM
+from conftest import ScriptedLLM, query_limits
 
 LAYER = """\
 dialect: sqlite
@@ -42,7 +42,7 @@ def env(make_agent, semantic_layer_path):
     client = TestClient(create_app(agent))
 
     def table(sql=GEN):
-        meta = queries.run_query(agent.config.telemetry_db, agent.config.results_db, sql)
+        meta = queries.run_query(agent.config.telemetry_db, agent.config.results_db, sql, **query_limits())
         assert meta["success"], meta
         return meta["result_table"]
 

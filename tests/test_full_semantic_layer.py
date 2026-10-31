@@ -2,23 +2,17 @@
 
 from pathlib import Path
 
-from flood_defender.agent import Agent, AgentConfig
+from flood_defender.agent import Agent
 from flood_defender.llm import TextChunk
 from flood_defender.semantic_layer import SemanticLayer
 
-from conftest import ScriptedLLM, all_telemetry_values, collect, last_tool_result, tool_call
+from conftest import ScriptedLLM, all_telemetry_values, collect, config_for_test, last_tool_result, tool_call
 
 REAL = Path(__file__).parent.parent / "semantic_layer.yaml"
 
 
 def real_layer_agent(llm, tmp_path, telemetry_db):
-    cfg = AgentConfig(
-        telemetry_db=telemetry_db,
-        results_db=tmp_path / "results.db",
-        semantic_layer=REAL,
-        model="test/model",
-    )
-    return Agent(cfg, llm)
+    return Agent(config_for_test(tmp_path, telemetry_db, REAL), llm)
 
 
 async def test_system_prompt_carries_full_semantic_layer_and_no_telemetry(tmp_path, telemetry_db):

@@ -4,18 +4,12 @@ The Agent depends only on the `LLMClient` protocol, so tests inject a scripted f
 """
 
 import json
-import os
 from dataclasses import dataclass
 from typing import AsyncIterator, Protocol
 
 import httpx
 
-DEFAULT_MODEL = "anthropic/claude-sonnet-5.5"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-
-
-def model_from_env() -> str:
-    return os.environ.get("OPENROUTER_MODEL") or DEFAULT_MODEL
 
 
 @dataclass
@@ -59,13 +53,6 @@ class OpenRouterClient:
     def __init__(self, api_key: str, model: str, url: str = OPENROUTER_URL,
                  transport: httpx.AsyncBaseTransport | None = None):
         self.api_key, self.model, self.url, self.transport = api_key, model, url, transport
-
-    @classmethod
-    def from_env(cls, model: str | None = None) -> "OpenRouterClient":
-        key = os.environ.get("OPENROUTER_API_KEY")
-        if not key:
-            raise RuntimeError("OPENROUTER_API_KEY is not set")
-        return cls(key, model or model_from_env())
 
     async def stream_chat(self, messages, tools):
         body = {"model": self.model, "messages": messages, "tools": tools, "stream": True,

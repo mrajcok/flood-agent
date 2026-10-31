@@ -3,11 +3,13 @@
 import copy
 import json
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from flood_defender.agent import Agent, AgentConfig, Conversation
+from flood_defender.config import Settings
 from flood_defender.llm import TextChunk, ToolCallChunk, UsageChunk
 
 SCHEMA = """
@@ -98,17 +100,37 @@ def semantic_layer_path(tmp_path: Path) -> Path:
     return p
 
 
+@pytest.fixture(autouse=True)
+def isolated_settings(monkeypatch):
+    """Settings must not pick up a developer's .env file or exported variables."""
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
+    for name in Settings.model_fields:
+        monkeypatch.delenv(name.upper(), raising=False)
+
+
+def config_for_test(tmp_path, telemetry_db, semantic_layer, **overrides) -> AgentConfig:
+    """The defaults.toml settings, pointed at this test's files."""
+    return replace(
+        Settings().agent_config(),
+        telemetry_db=telemetry_db,
+        results_db=tmp_path / "results.db",
+        app_db=tmp_path / "app.db",
+        semantic_layer=semantic_layer,
+        model="test/model",
+        **overrides,
+    )
+
+
+def query_limits() -> dict:
+    """timeout_s and max_rows for calling queries.run_query directly."""
+    cfg = Settings().agent_config()
+    return {"timeout_s": cfg.query_timeout_s, "max_rows": cfg.max_result_rows}
+
+
 @pytest.fixture
 def make_agent(tmp_path, telemetry_db, semantic_layer_path):
     def _make(llm, **overrides) -> Agent:
-        cfg = AgentConfig(
-            telemetry_db=telemetry_db,
-            results_db=tmp_path / "results.db",
-            semantic_layer=semantic_layer_path,
-            model="test/model",
-            **overrides,
-        )
-        return Agent(cfg, llm)
+        return Agent(config_for_test(tmp_path, telemetry_db, semantic_layer_path, **overrides), llm)
 
     return _make
 

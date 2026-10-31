@@ -1,25 +1,24 @@
 """Run the app: python -m flood_defender
 
-Settings come from the environment, or from a .env file in the working directory
-(the real environment wins). See .env.example for every variable.
+Settings come from defaults.toml, a .env file in the working directory, and the
+environment, in that order of increasing priority. See .env.example for every setting.
 """
-
-import os
 
 import uvicorn
 
 from flood_defender.agent import Agent
-from flood_defender.config import agent_config_from_env, load_env_file
+from flood_defender.config import Settings
 from flood_defender.llm import OpenRouterClient
 from flood_defender.web import create_app
 
 
-def build_app():
-    load_env_file(".env", os.environ)
-    config = agent_config_from_env(os.environ)
+def build_app(settings: Settings | None = None):
+    settings = settings or Settings()
+    config = settings.agent_config()
     config.results_db.parent.mkdir(parents=True, exist_ok=True)
-    return create_app(Agent(config, OpenRouterClient.from_env(config.model)))
+    return create_app(Agent(config, OpenRouterClient(settings.require_api_key(), config.model)))
 
 
 if __name__ == "__main__":
-    uvicorn.run(build_app(), host=os.environ.get("HOST", "127.0.0.1"), port=int(os.environ.get("PORT", "8000")))
+    settings = Settings()
+    uvicorn.run(build_app(settings), host=settings.host, port=settings.port)

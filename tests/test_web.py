@@ -2,7 +2,7 @@
 
 from fastapi.testclient import TestClient
 
-from flood_defender.llm import TextChunk, DEFAULT_MODEL, model_from_env
+from flood_defender.llm import TextChunk
 from flood_defender.web import create_app
 
 from conftest import ScriptedLLM, last_tool_result, tool_call
@@ -58,10 +58,3 @@ def test_reopening_a_conversation_sweeps_expired_tables_once_not_per_display(mak
     page = client.get(f"/c/{cid}").text
     assert page.count("data-rows-url=") == 3
     assert len(sweeps) == 1
-
-
-def test_model_defaults_and_env_override(monkeypatch):
-    monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
-    assert model_from_env() == DEFAULT_MODEL == "anthropic/claude-sonnet-5.5"
-    monkeypatch.setenv("OPENROUTER_MODEL", "z-ai/glm-5.3")
-    assert model_from_env() == "z-ai/glm-5.3"

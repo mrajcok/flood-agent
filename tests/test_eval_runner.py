@@ -141,3 +141,17 @@ def test_main_requires_api_key(monkeypatch, capsys):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     assert runner.main(["--db", "x.db"]) == 2
     assert "OPENROUTER_API_KEY" in capsys.readouterr().err
+
+
+async def test_eval_limits_ignore_the_operators_environment(telemetry_db, semantic_layer_path, tmp_path, monkeypatch):
+    # Models must be scored under the same limits on every machine: defaults.toml, not the shell or .env.
+    monkeypatch.setenv("MAX_FAILED_ATTEMPTS", "1")  # would make the Agent give up after the first failure
+    scripts = [query("SELECT nope FROM flows", "a"), query(GOOD, "b"), DONE]
+    r, _ = await run_one(scripts, telemetry_db, semantic_layer_path, tmp_path)
+    assert r.correct and r.retries == 1
+
+
+def test_main_reports_invalid_settings_instead_of_a_traceback(monkeypatch, capsys):
+    monkeypatch.setenv("PORT", "abc")  # irrelevant to the runner, but still an invalid setting
+    assert runner.main(["--db", "x.db"]) == 2
+    assert "port" in capsys.readouterr().err.lower()

@@ -22,22 +22,22 @@ from flood_defender.semantic_layer import SemanticLayer
 from flood_defender.store import ConversationStore
 from flood_defender.trace import TraceBuilder
 
-MAX_LLM_STEPS = 10
-
-
 @dataclass
 class AgentConfig:
+    """Built from `config.Settings`, which holds every default."""
+
     telemetry_db: Path
     results_db: Path
+    app_db: Path
     semantic_layer: Path
     model: str
-    query_timeout_s: float = 30.0
-    max_result_rows: int = 1_000_000
-    max_failed_attempts: int = 3
-    app_db: Path | None = None  # defaults to app.db beside the results database
-    result_ttl_ms: int = 24 * 3600 * 1000  # Result Tables expire this long after last Conversation activity
+    result_ttl_ms: int  # Result Tables expire this long after last Conversation activity
+    query_timeout_s: float
+    max_result_rows: int
+    chart_row_cap: int
+    max_failed_attempts: int
+    max_llm_steps: int
     clock: Callable[[], int] = lambda: int(time.time() * 1000)  # epoch ms; injectable for tests
-    chart_row_cap: int = 10_000
 
 
 class ResultTableExpired(Exception):
@@ -184,7 +184,7 @@ class Agent:
         self.config = config
         self.llm = llm
         self.semantic_layer = SemanticLayer(config.semantic_layer)
-        self.store = ConversationStore(config.app_db or config.results_db.parent / "app.db", config.clock)
+        self.store = ConversationStore(config.app_db, config.clock)
         self.sweep_expired()
 
     def open_conversation(self, conversation_id: str) -> Conversation:
@@ -328,7 +328,7 @@ class Agent:
             tools = [_openai_tool(t) for t in (await session.list_tools()).tools]
 
             failed_attempts = 0
-            for _ in range(MAX_LLM_STEPS):
+            for _ in range(self.config.max_llm_steps):
                 system_prompt = self.semantic_layer.system_prompt(self.store.live_result_tables(conversation.id))
                 messages = [{"role": "system", "content": system_prompt}]
                 messages += conversation.messages
@@ -376,7 +376,7 @@ class Agent:
                     await self._end_with_notice(conversation, turn_id, GIVE_UP_MESSAGE, queue)
                     break
             else:
-                trace.add("step_limit", max_steps=MAX_LLM_STEPS)
+                trace.add("step_limit", max_steps=self.config.max_llm_steps)
                 await self._end_with_notice(conversation, turn_id, STEP_LIMIT_MESSAGE, queue)
 
     async def _end_with_notice(self, conversation, turn_id, message: str, queue) -> None:

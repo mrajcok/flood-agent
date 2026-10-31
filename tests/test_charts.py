@@ -1,4 +1,4 @@
-"""Chart tests at the Agent turn seam: real MCP subprocess, scripted fake LLM."""
+"""Chart tests at the Agent turn seam: MCP server in-process, scripted fake LLM."""
 
 import pytest
 from conftest import ScriptedLLM, all_telemetry_values, collect, last_tool_result, tool_call

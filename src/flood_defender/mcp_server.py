@@ -6,8 +6,8 @@ Display definition. Rows reach the browser only through the Agent's internal dat
 `create_server(settings)` builds the server from static `ServerSettings`. In production it runs
 as a stdio subprocess (`python -m flood_defender.mcp_server`) and reads those settings from the
 launch environment the Agent passes it: TELEMETRY_DB, RESULTS_DB, APP_DB, QUERY_TIMEOUT_S,
-MAX_RESULT_ROWS and CHART_ROW_CAP. There are no fallbacks. Tests run it in-process through
-`in_process_transport`.
+MAX_RESULT_ROWS and CHART_ROW_CAP. There are no fallbacks. Most tests run it in-process
+(`tests/conftest.py`).
 
 The Conversation id that limits which Result Tables a call may use arrives with every tool call in
 the MCP request `_meta` (key `flood_defender/conversation_id`), set by the Agent. It is not a tool
@@ -18,15 +18,12 @@ import functools
 import json
 import os
 import sqlite3
-from collections.abc import AsyncIterator, Mapping
-from contextlib import asynccontextmanager
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-import anyio
 import anyio.to_thread
 from mcp.server.fastmcp import Context, FastMCP
-from mcp.shared.memory import create_client_server_memory_streams
 
 from flood_defender import queries
 from flood_defender.mcp_protocol import META_CONVERSATION_ID
@@ -128,7 +125,6 @@ def _find_violation(node, table: str) -> str | None:
 def create_server(settings: ServerSettings) -> FastMCP:
     """The MCP server with its tools bound to these static settings."""
     mcp = FastMCP("flood-defender")
-    s = settings
 
     @mcp.tool()
     @_in_worker_thread
@@ -136,11 +132,11 @@ def create_server(settings: ServerSettings) -> FastMCP:
         """Run a single read-only SELECT over the Telemetry Database. The output is stored in
         a new Result Table (named by the tool). Returns only Query Metadata, never rows."""
         # The SELECT may reference only this Conversation's live Result Tables.
-        allowed = _allowed_tables(s.app_db, ctx)
+        allowed = _allowed_tables(settings.app_db, ctx)
         # A failed result may carry `raw_error`; the Agent strips it (keeping it for the Trace)
         # before anything is sent to the LLM.
         return json.dumps(
-            queries.run_query(s.telemetry_db, s.results_db, sql, s.query_timeout_s, s.max_result_rows, allowed)
+            queries.run_query(settings.telemetry_db, settings.results_db, sql, settings.query_timeout_s, settings.max_result_rows, allowed)
         )
 
     @mcp.tool()
@@ -148,8 +144,8 @@ def create_server(settings: ServerSettings) -> FastMCP:
     def show_table(result_table: str, ctx: Context, columns: list[str] | None = None) -> str:
         """Show a Result Table to the user as a table Display. You will not see the rows."""
         # Another Conversation's table is reported exactly like one that does not exist.
-        owned = result_table in _allowed_tables(s.app_db, ctx)
-        available = queries.result_table_columns(s.results_db, result_table) if owned else None
+        owned = result_table in _allowed_tables(settings.app_db, ctx)
+        available = queries.result_table_columns(settings.results_db, result_table) if owned else None
         if available is None:
             return json.dumps({"success": False, "error": "Unknown Result Table."})
         if columns is not None and not set(columns) <= set(available):
@@ -166,18 +162,18 @@ def create_server(settings: ServerSettings) -> FastMCP:
         table = data.get("name") if isinstance(data, dict) else None
         if not isinstance(table, str):
             return json.dumps({"success": False, "error": "Missing data source. " + CHART_GUIDANCE})
-        owned = table in _allowed_tables(s.app_db, ctx)
-        count = queries.result_table_row_count(s.results_db, table) if owned else None
+        owned = table in _allowed_tables(settings.app_db, ctx)
+        count = queries.result_table_row_count(settings.results_db, table) if owned else None
         if count is None:
             return json.dumps({"success": False, "error": "Unknown Result Table. " + CHART_GUIDANCE})
         violation = _find_violation(vega_lite_spec, table)
         if violation:
             return json.dumps({"success": False, "error": violation})
-        if count > s.chart_row_cap:
+        if count > settings.chart_row_cap:
             return json.dumps(
                 {
                     "success": False,
-                    "error": f"Result Table has too many rows to chart (limit {s.chart_row_cap}). "
+                    "error": f"Result Table has too many rows to chart (limit {settings.chart_row_cap}). "
                     "Aggregate or filter with run_query (e.g. GROUP BY a time bucket or LIMIT to top N) "
                     "and chart the new Result Table.",
                 }
@@ -187,20 +183,6 @@ def create_server(settings: ServerSettings) -> FastMCP:
         )
 
     return mcp
-
-
-@asynccontextmanager
-async def in_process_transport(settings: ServerSettings) -> AsyncIterator[tuple]:
-    """Client (read, write) streams to a server running in this process, for tests: the same
-    tools and settings as the stdio subprocess, without the 0.4 s interpreter start."""
-    server = create_server(settings)._mcp_server  # the SDK's in-memory helper does the same
-    async with create_client_server_memory_streams() as (client_streams, (server_read, server_write)):
-        async with anyio.create_task_group() as tg:
-            tg.start_soon(lambda: server.run(server_read, server_write, server.create_initialization_options()))
-            try:
-                yield client_streams
-            finally:
-                tg.cancel_scope.cancel()
 
 
 if __name__ == "__main__":

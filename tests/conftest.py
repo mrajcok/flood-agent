@@ -5,17 +5,19 @@ import json
 import os
 import shutil
 import sqlite3
-from contextlib import ExitStack
+from contextlib import ExitStack, asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
 
+import anyio
 import pytest
 from fastapi.testclient import TestClient
+from mcp.shared.memory import create_client_server_memory_streams
 
 from flood_defender.agent import Agent, AgentConfig, Conversation
 from flood_defender.config import Settings
 from flood_defender.llm import TextChunk, ToolCallChunk, UsageChunk
-from flood_defender.mcp_server import in_process_transport
+from flood_defender.mcp_server import ServerSettings, create_server
 from flood_defender.web import create_app
 
 SCHEMA = """
@@ -112,12 +114,30 @@ def semantic_layer_path(tmp_path: Path) -> Path:
     return p
 
 
+@asynccontextmanager
+async def in_process_transport(settings: ServerSettings):
+    """Client (read, write) streams to the MCP server running in this process: the same tools
+    and settings as the stdio subprocess, without its 0.4 s interpreter start."""
+    server = create_server(settings)._mcp_server  # as the SDK's own in-memory helper does
+    async with create_client_server_memory_streams() as (client_streams, (server_read, server_write)):
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(lambda: server.run(server_read, server_write, server.create_initialization_options()))
+            try:
+                yield client_streams
+            finally:
+                tg.cancel_scope.cancel()
+
+
 @pytest.fixture(autouse=True)
 def in_process_mcp_server(request, monkeypatch):
-    """Agents run their MCP server in this process (no 0.4 s interpreter start per server).
-    Tests marked `subprocess` keep the real stdio subprocess: process lifecycle, launch env."""
-    if request.node.get_closest_marker("subprocess") is None:
-        monkeypatch.setattr(Agent, "_transport", lambda self: lambda: in_process_transport(self._server_settings()))
+    """Agents run their MCP server in this process. Tests marked `subprocess` keep the real stdio
+    subprocess (process lifecycle, launch env); any other test that leaves one running fails."""
+    if request.node.get_closest_marker("subprocess") is not None:
+        yield
+        return
+    monkeypatch.setattr(Agent, "_transport", lambda self: lambda: in_process_transport(self._server_settings()))
+    yield
+    assert mcp_children() == [], "an unmarked test started an MCP server process; mark it `subprocess`"
 
 
 @pytest.fixture(autouse=True)

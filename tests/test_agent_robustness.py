@@ -240,7 +240,8 @@ async def kill_mcp_servers_and_settle(agent):
     """Kill the server and wait until the Agent's connection has noticed, as it would between real turns."""
     kill_mcp_servers()
     deadline = asyncio.get_running_loop().time() + 5
-    while agent._connection.alive and asyncio.get_running_loop().time() < deadline:
+    while agent._connection.alive:
+        assert asyncio.get_running_loop().time() < deadline, "the connection never noticed the kill"
         await asyncio.sleep(0.01)
 
 

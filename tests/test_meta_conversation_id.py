@@ -1,32 +1,14 @@
 """The Conversation id travels in MCP request _meta, never in the launch environment or a tool schema."""
 
 import json
-import os
-import sys
 
 import pytest
-from conftest import ScriptedLLM, TextChunk, collect, last_tool_result, tool_call
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
+from conftest import ScriptedLLM, TextChunk, collect, in_process_transport, last_tool_result, mcp_children, tool_call
+from mcp import ClientSession
 
 from flood_defender.agent import Conversation
 
 META_KEY = "flood_defender/conversation_id"
-
-
-def _server_children() -> list[int]:
-    me, found = os.getpid(), []
-    for pid in filter(str.isdigit, os.listdir("/proc")):
-        try:
-            with open(f"/proc/{pid}/stat") as f:
-                if int(f.read().rsplit(")", 1)[1].split()[1]) != me:
-                    continue
-            with open(f"/proc/{pid}/cmdline", "rb") as f:
-                if b"flood_defender.mcp_server" in f.read():
-                    found.append(int(pid))
-        except (OSError, IndexError, ValueError):
-            continue
-    return found
 
 
 @pytest.mark.subprocess
@@ -34,7 +16,7 @@ async def test_launch_environment_has_no_conversation_id(make_agent):
     seen = {}
 
     def peek(messages):
-        (pid,) = _server_children()
+        (pid,) = mcp_children()
         with open(f"/proc/{pid}/environ", "rb") as f:
             seen["env"] = dict(kv.split(b"=", 1) for kv in f.read().split(b"\0") if b"=" in kv)
         return [TextChunk("ok")]
@@ -44,7 +26,6 @@ async def test_launch_environment_has_no_conversation_id(make_agent):
     assert b"CONVERSATION_ID" not in seen["env"]
 
 
-@pytest.mark.subprocess
 async def test_no_tool_schema_mentions_a_conversation_id(make_agent):
     seen = {}
 
@@ -61,21 +42,8 @@ async def test_no_tool_schema_mentions_a_conversation_id(make_agent):
 
 async def _raw_calls(agent, calls):
     """Call the MCP server directly: [(tool, args, meta)] -> parsed results."""
-    cfg = agent.config
-    params = StdioServerParameters(
-        command=sys.executable,
-        args=["-m", "flood_defender.mcp_server"],
-        env={
-            "TELEMETRY_DB": str(cfg.telemetry_db),
-            "RESULTS_DB": str(cfg.results_db),
-            "APP_DB": str(agent.store.path),
-            "CHART_ROW_CAP": str(cfg.chart_row_cap),
-            "QUERY_TIMEOUT_S": str(cfg.query_timeout_s),
-            "MAX_RESULT_ROWS": str(cfg.max_result_rows),
-        },
-    )
     out = []
-    async with stdio_client(params) as (r, w), ClientSession(r, w) as session:
+    async with in_process_transport(agent._server_settings()) as (r, w), ClientSession(r, w) as session:
         await session.initialize()
         for name, args, meta in calls:
             res = await session.call_tool(name, args, meta=meta)
@@ -83,7 +51,6 @@ async def _raw_calls(agent, calls):
     return out
 
 
-@pytest.mark.subprocess
 async def test_tool_calls_see_only_tables_of_the_meta_conversation(make_agent):
     results = []
     llm = ScriptedLLM(

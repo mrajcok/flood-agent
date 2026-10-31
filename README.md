@@ -24,7 +24,7 @@ uv run python -m flood_defender                    # http://127.0.0.1:8000
 ```
 
 Optional env: `TELEMETRY_DB` (default `data/telemetry.db`), `RESULTS_DB`
-(`data/results.db`), `SEMANTIC_LAYER` (`semantic_layer.yaml`), `HOST`, `PORT`.
+(`data/results.db`), `APP_DB` (`data/app.db`; Conversations), `SEMANTIC_LAYER` (`semantic_layer.yaml`), `HOST`, `PORT`.
 
 ## Test
 

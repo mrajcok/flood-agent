@@ -4,15 +4,22 @@ A thin layer over `Agent.run_turn`. The row-JSON endpoint is the Agent's interna
 path to the browser; it is a plain HTTP route, never registered as an MCP tool.
 """
 
+import csv
+import io
+import json
 import uuid
 from html import escape
 from pathlib import Path
 
-from fastapi import FastAPI, Form, HTTPException, Request
+from typing import Literal
+
+from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from flood_defender.agent import Agent, Conversation, DisplayEvent, ResultTableExpired, TextDelta, TurnEnd
+from flood_defender.queries import InvalidSort
+from flood_defender.agent import Agent, Conversation, DisplayEvent, ResultTableExpired, TextDelta, TurnEnd, resolve_chart_data
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
@@ -30,6 +37,7 @@ def create_app(agent: Agent) -> FastAPI:
         # Any endpoint reading Result Table rows (rows, CSV, chart rows) gets a clear 410.
         return JSONResponse({"detail": "This result has expired and been deleted. Ask again to regenerate it."}, 410)
 
+    app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
     pending: dict[str, tuple[Conversation, str]] = {}
 
     def sidebar(current: str | None) -> dict:
@@ -38,12 +46,20 @@ def create_app(agent: Agent) -> FastAPI:
     def history(conversation_id: str) -> list[dict]:
         items = []
         for item in agent.store.transcript(conversation_id):
-            if item["type"] == "display":
+            if item["type"] == "display" and item["kind"] == "chart":
+                spec = resolve_chart_data(item["spec"], item["result_table"])
                 items.append({
-                    **item,
-                    "rows_url": f"/api/results/{item['result_table']}/rows",
-                    "expired": agent.is_expired(item["result_table"]),
+                    **item, "spec_json": json.dumps(spec), "expired": agent.is_expired(item["result_table"]),
                 })
+            elif item["type"] == "display":
+                items.append(
+                    {
+                        **item,
+                        "rows_url": f"/api/results/{item['result_table']}/rows",
+                        "csv_url": f"/api/results/{item['result_table']}/csv",
+                        "expired": agent.is_expired(item["result_table"]),
+                    }
+                )
             else:
                 m = item["message"]
                 if m["role"] in ("user", "assistant") and m.get("content"):
@@ -93,9 +109,15 @@ def create_app(agent: Agent) -> FastAPI:
                 async for ev in agent.run_turn(conversation, message):
                     if isinstance(ev, TextDelta):
                         yield _sse("text", escape(ev.text))
+                    elif isinstance(ev, DisplayEvent) and ev.kind == "chart":
+                        html = TEMPLATES.get_template("display_chart.html").render(
+                            spec_json=json.dumps(ev.spec)
+                        )
+                        yield _sse("display", html)
                     elif isinstance(ev, DisplayEvent):
                         html = TEMPLATES.get_template("display_table.html").render(
                             rows_url=f"/api/results/{ev.result_table}/rows",
+                            csv_url=f"/api/results/{ev.result_table}/csv",
                             result_table=ev.result_table,
                             columns=ev.columns,
                         )
@@ -109,10 +131,62 @@ def create_app(agent: Agent) -> FastAPI:
         return StreamingResponse(events(), media_type="text/event-stream")
 
     @app.get("/api/results/{result_table}/rows")
-    def rows(result_table: str):
+    def rows(
+        result_table: str,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(50, ge=1, le=500),
+        sort: str | None = None,
+        dir: Literal["asc", "desc"] = "asc",
+    ):
         try:
-            return agent.fetch_rows(result_table)
+            return agent.fetch_rows(
+                result_table, page=page, page_size=page_size, sort=sort, descending=dir == "desc"
+            )
+        except KeyError:
+            raise HTTPException(404, "unknown result table")
+        except InvalidSort:
+            raise HTTPException(400, "unknown sort column")
+
+    @app.get("/api/results/{result_table}/csv")
+    def csv_download(result_table: str):
+        try:
+            columns, rows_iter = agent.iter_all_rows(result_table)
+        except KeyError:
+            raise HTTPException(404, "unknown result table")
+
+        def body():
+            buf = io.StringIO()
+            w = csv.writer(buf, lineterminator="\r\n")
+            w.writerow([_csv_safe(c) for c in columns])
+            for row in rows_iter:
+                w.writerow([_csv_safe(v) for v in row])
+                if buf.tell() > 65536:
+                    yield buf.getvalue()
+                    buf.seek(0)
+                    buf.truncate()
+            yield buf.getvalue()
+
+        return StreamingResponse(
+            body(),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{result_table}.csv"'},
+        )
+
+    @app.get("/api/results/{result_table}/chart-rows")
+    def chart_rows(result_table: str):
+        """Internal data path for charts (row objects, chart cap). Never an MCP tool."""
+        try:
+            return agent.fetch_chart_rows(result_table)
         except KeyError:
             raise HTTPException(404, "unknown result table")
 
     return app
+
+
+def _csv_safe(v):
+    """Neutralise spreadsheet formula injection in text cells; numbers pass through."""
+    if v is None:
+        return ""
+    if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + v
+    return v

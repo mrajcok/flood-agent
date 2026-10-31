@@ -134,5 +134,9 @@ def test_expired_display_renders_expired_and_rows_endpoint_gives_410(make_agent)
     resp = client.get(rows_url)
     assert resp.status_code == 410 and "expired" in resp.json()["detail"].lower()
 
+    for suffix in ("csv", "chart-rows"):
+        gone = client.get(rows_url.replace("/rows", "/" + suffix))
+        assert gone.status_code == 410 and "expired" in gone.json()["detail"].lower()
+
     page = client.get(f"/c/{cid}").text.split("</aside>")[1]
     assert "expired" in page.lower() and "data-rows-url" not in page

@@ -37,6 +37,7 @@ class AgentConfig:
 
 class ResultTableExpired(Exception):
     """The Result Table existed but was deleted by expiry (HTTP layer maps this to 410)."""
+    chart_row_cap: int = 10_000
 
 
 @dataclass
@@ -56,7 +57,9 @@ class TextDelta:
 class DisplayEvent:
     kind: str
     result_table: str
-    columns: list[str]
+    columns: list[str] = field(default_factory=list)
+    spec: dict | None = None  # charts: Chart Spec after data-reference resolution
+    source_spec: dict | None = None  # charts: Chart Spec as the LLM wrote it (for the Trace)
 
 
 @dataclass
@@ -72,6 +75,22 @@ def _openai_tool(t) -> dict:
         "type": "function",
         "function": {"name": t.name, "description": t.description or "", "parameters": t.inputSchema},
     }
+
+
+def resolve_chart_data(source: dict, table: str) -> dict:
+    return _resolve_data(source, table, {"url": f"/api/results/{table}/chart-rows"})
+
+
+def _resolve_data(node, table: str, url: dict):
+    """Copy of the Chart Spec with every {"name": table} data reference replaced by the URL."""
+    if isinstance(node, dict):
+        return {
+            k: (dict(url) if k == "data" and v == {"name": table} else _resolve_data(v, table, url))
+            for k, v in node.items()
+        }
+    if isinstance(node, list):
+        return [_resolve_data(i, table, url) for i in node]
+    return node
 
 
 class Agent:
@@ -110,14 +129,28 @@ class Agent:
         self.sweep_expired()
         return self.store.is_expired(result_table)
 
-    def fetch_rows(self, result_table: str, columns: list[str] | None = None) -> dict:
-        """Internal data path used by the row-JSON endpoint. Not an LLM tool.
-
-        Raises ResultTableExpired for a deleted table, KeyError for an unknown one.
-        """
+    def _raise_if_expired(self, result_table: str) -> None:
         if self.is_expired(result_table):
             raise ResultTableExpired(f"Result Table {result_table} has expired.")
-        return queries.fetch_rows(self.config.results_db, result_table, columns)
+
+    def fetch_rows(self, result_table: str, columns: list[str] | None = None, **page_args) -> dict:
+        """Internal data path used by the row-JSON endpoint. Not an LLM tool.
+
+        Adds per-column display formats from the Semantic Layer."""
+        self._raise_if_expired(result_table)
+        data = queries.fetch_rows(self.config.results_db, result_table, columns, **page_args)
+        data["formats"] = self.semantic_layer.column_formats(data["columns"])
+        return data
+
+    def iter_all_rows(self, result_table: str):
+        """Internal data path for CSV export of the full Result Table. Not an LLM tool."""
+        self._raise_if_expired(result_table)
+        return queries.iter_all_rows(self.config.results_db, result_table)
+
+    def fetch_chart_rows(self, result_table: str) -> list[dict]:
+        """Internal data path for the chart-rows endpoint (chart cap). Not an LLM tool."""
+        self._raise_if_expired(result_table)
+        return queries.fetch_records(self.config.results_db, result_table, self.config.chart_row_cap)
 
     async def run_turn(self, conversation: Conversation, user_message: str) -> AsyncIterator[Event]:
         """Run one turn. The MCP session lives entirely inside a single producer task."""
@@ -153,6 +186,7 @@ class Agent:
                 "RESULTS_DB": str(self.config.results_db),
                 "APP_DB": str(self.store.path),
                 "CONVERSATION_ID": conversation.id,
+                "CHART_ROW_CAP": str(self.config.chart_row_cap),
             },
         )
         async with AsyncExitStack() as stack:
@@ -217,7 +251,21 @@ class Agent:
                 conversation.id, payload["result_table"], title, payload.get("columns", []), request
             )
         display = payload.get("display")
-        if display and self.store.owns_result_table(conversation.id, display["result_table"]):
+        if not display:
+            return
+        owned = self.store.owns_result_table(conversation.id, display["result_table"])
+        if display["kind"] == "chart":
+            source = display["spec"]
+            table = display["result_table"]
+            if owned:
+                self.store.add_display(
+                    conversation.id, turn_id, message_id, "chart", table, {"spec": source}
+                )
+            await queue.put(
+                DisplayEvent("chart", table, spec=resolve_chart_data(source, table), source_spec=source)
+            )
+            return
+        if owned:
             self.store.add_display(
                 conversation.id, turn_id, message_id, display["kind"], display["result_table"],
                 {"columns": display["columns"]},

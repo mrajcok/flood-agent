@@ -1,0 +1,13 @@
+<div class="display chart" data-spec="{{ spec_json }}"
+     x-data="{ view: null, error: false,
+               async init() {
+                 try {
+                   const spec = JSON.parse($el.dataset.spec);
+                   const res = await vegaEmbed($refs.target, spec, { actions: false });
+                   this.view = res.view;
+                 } catch (e) { this.error = true; }
+               },
+               destroy() { if (this.view) { this.view.finalize(); this.view = null; } } }">
+  <p x-show="error" x-cloak>Could not render chart.</p>
+  <div x-ref="target"></div>
+</div>

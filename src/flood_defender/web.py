@@ -45,11 +45,13 @@ def create_app(agent: Agent) -> FastAPI:
 
     def history(conversation_id: str) -> list[dict]:
         items = []
-        for item in agent.store.transcript(conversation_id):
+        transcript = agent.store.transcript(conversation_id)
+        expired = agent.expired_among({i["result_table"] for i in transcript if i["type"] == "display"})
+        for item in transcript:
             if item["type"] == "display" and item["kind"] == "chart":
                 spec = resolve_chart_data(item["spec"], item["result_table"])
                 items.append({
-                    **item, "spec_json": json.dumps(spec), "expired": agent.is_expired(item["result_table"]),
+                    **item, "spec_json": json.dumps(spec), "expired": item["result_table"] in expired,
                 })
             elif item["type"] == "display":
                 items.append(
@@ -57,7 +59,7 @@ def create_app(agent: Agent) -> FastAPI:
                         **item,
                         "rows_url": f"/api/results/{item['result_table']}/rows",
                         "csv_url": f"/api/results/{item['result_table']}/csv",
-                        "expired": agent.is_expired(item["result_table"]),
+                        "expired": item["result_table"] in expired,
                     }
                 )
             elif item["type"] == "trace":

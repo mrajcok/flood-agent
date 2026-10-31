@@ -98,9 +98,17 @@ class Agent:
             raise KeyError(conversation_id)
         return Conversation(conversation_id, self.store.messages(conversation_id))
 
-    def fetch_rows(self, result_table: str, columns: list[str] | None = None) -> dict:
-        """Internal data path used by the row-JSON endpoint. Not an LLM tool."""
-        return queries.fetch_rows(self.config.results_db, result_table, columns)
+    def fetch_rows(self, result_table: str, columns: list[str] | None = None, **page_args) -> dict:
+        """Internal data path used by the row-JSON endpoint. Not an LLM tool.
+
+        Adds per-column display formats from the Semantic Layer."""
+        data = queries.fetch_rows(self.config.results_db, result_table, columns, **page_args)
+        data["formats"] = self.semantic_layer.column_formats(data["columns"])
+        return data
+
+    def iter_all_rows(self, result_table: str):
+        """Internal data path for CSV export of the full Result Table. Not an LLM tool."""
+        return queries.iter_all_rows(self.config.results_db, result_table)
 
     def fetch_chart_rows(self, result_table: str) -> list[dict]:
         """Internal data path for the chart-rows endpoint (chart cap). Not an LLM tool."""

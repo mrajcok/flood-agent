@@ -1,17 +1,38 @@
-<div class="display" data-rows-url="{{ rows_url }}"
-     x-data="{ columns: [], rows: [], loaded: false, error: false,
-               async init() {
+<div class="display" data-rows-url="{{ rows_url }}" data-csv-url="{{ csv_url }}"
+     x-data="{ columns: [], rows: [], formats: {}, total: 0, page: 1, pageSize: 50,
+               sort: null, dir: 'asc', loaded: false, error: false,
+               async load() {
                  try {
-                   const r = await fetch($el.dataset.rowsUrl);
+                   const q = new URLSearchParams({ page: this.page, page_size: this.pageSize });
+                   if (this.sort) { q.set('sort', this.sort); q.set('dir', this.dir); }
+                   const r = await fetch($el.dataset.rowsUrl + '?' + q);
                    if (!r.ok) throw new Error(r.status);
                    const d = await r.json();
-                   this.columns = d.columns; this.rows = d.rows; this.loaded = true;
+                   this.columns = d.columns; this.rows = d.rows; this.formats = d.formats;
+                   this.total = d.total; this.loaded = true; this.error = false;
                  } catch (e) { this.error = true; }
-               } }">
+               },
+               init() { this.load(); },
+               get pages() { return Math.max(1, Math.ceil(this.total / this.pageSize)); },
+               go(p) { this.page = Math.min(Math.max(1, p), this.pages); this.load(); },
+               sortBy(c) {
+                 if (this.sort === c) { this.dir = this.dir === 'asc' ? 'desc' : 'asc'; }
+                 else { this.sort = c; this.dir = 'asc'; }
+                 this.page = 1; this.load();
+               },
+               fmt(v, c) { return FloodFormat.formatCell(v, this.formats[c]); } }">
   <p x-show="!loaded && !error">Loading {{ result_table }}...</p>
   <p x-show="error" x-cloak>Could not load table.</p>
-  <table x-show="loaded" x-cloak>
-    <thead><tr><template x-for="c in columns" :key="c"><th x-text="c"></th></template></tr></thead>
-    <tbody><template x-for="(row, i) in rows" :key="i"><tr><template x-for="(v, j) in row" :key="j"><td x-text="v"></td></template></tr></template></tbody>
-  </table>
+  <div x-show="loaded" x-cloak>
+    <table>
+      <thead><tr><template x-for="c in columns" :key="c"><th @click="sortBy(c)" style="cursor:pointer" :aria-sort="sort === c ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'"><span x-text="c"></span><span x-text="sort === c ? (dir === 'asc' ? ' ▲' : ' ▼') : ''"></span></th></template></tr></thead>
+      <tbody><template x-for="(row, i) in rows" :key="i"><tr><template x-for="(v, j) in row" :key="j"><td x-text="fmt(v, columns[j])"></td></template></tr></template></tbody>
+    </table>
+    <div class="pager">
+      <button type="button" @click="go(page - 1)" :disabled="page <= 1">Prev</button>
+      <span x-text="'Page ' + page + ' of ' + pages + ' (' + total + ' rows)'"></span>
+      <button type="button" @click="go(page + 1)" :disabled="page >= pages">Next</button>
+      <a :href="$el.closest('.display').dataset.csvUrl" download>Download CSV</a>
+    </div>
+  </div>
 </div>

@@ -30,6 +30,28 @@ class SemanticLayer:
     def window_end(self):
         return self.data.get("window_end")
 
+    def column_formats(self, columns: list[str], table: str = "flows") -> dict:
+        """Display format per Result Table column, from Semantic Layer column metadata.
+
+        A Result Table column is matched to a source column by identical name; aliased
+        or derived columns (e.g. `bytes_total`) get plain formatting."""
+        meta = ((self.data.get("tables") or {}).get(table) or {}).get("columns") or {}
+        out = {}
+        for c in columns:
+            m = meta.get(c) or {}
+            unit = str(m.get("unit", "")).lower()
+            if m.get("enum_bits"):
+                out[c] = {"kind": "flags", "map": {str(k): str(v) for k, v in m["enum_bits"].items()}}
+            elif m.get("enum"):
+                out[c] = {"kind": "enum", "map": {str(k): str(v) for k, v in m["enum"].items()}}
+            elif unit == "bytes":
+                out[c] = {"kind": "bytes"}
+            elif unit.startswith("epoch ms"):
+                out[c] = {"kind": "time"}
+            else:
+                out[c] = {"kind": "plain"}
+        return out
+
     def render(self) -> str:
         return yaml.safe_dump(self.data, sort_keys=False)
 

@@ -59,3 +59,13 @@ _Avoid_: Debug log, details
 **Display**:
 A table or chart the Agent renders for the user from a Result Table.
 _Avoid_: Widget, view, output
+
+## Fake Mode
+
+**Fake Mode**:
+Running Flood Defender with a scripted stand-in for the LLM, so no language model is called. Everything else — the Agent, queries, Result Tables, Displays, Traces — runs for real.
+_Avoid_: Demo mode, offline mode, mock mode
+
+**Canned Prompt**:
+A fixed user message offered in Fake Mode, paired with the scripted LLM replies it produces.
+_Avoid_: Sample query, test prompt, scenario

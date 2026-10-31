@@ -2,6 +2,7 @@
 
 import json
 import re
+import sqlite3
 
 import pytest
 from conftest import all_telemetry_values, collect, text_of
@@ -69,6 +70,23 @@ async def test_an_unmatched_message_gets_a_reply_naming_fake_mode_and_listing_pr
     text = text_of(events)
     assert "Fake Mode" in text
     assert all(c.prompt in text for c in CANNED)
+    assert not [e for e in events if isinstance(e, DisplayEvent)]
+
+
+async def test_a_failed_query_without_telemetry_data_says_so_instead_of_asking_for_an_earlier_prompt(
+    make_agent, telemetry_db
+):
+    with sqlite3.connect(telemetry_db) as con:  # this test's own copy: as if the data was never generated
+        con.execute("DROP TABLE flows")
+    agent = await make_agent(fake_client(), model="fake")
+    flow_count = next(c for c in CANNED if c.id == "flow-count")
+
+    events = await collect(agent, flow_count.prompt)
+
+    text = text_of(events)
+    assert "run an earlier prompt" not in text
+    assert "query failed" in text
+    assert "flood_defender.generator" in text
     assert not [e for e in events if isinstance(e, DisplayEvent)]
 
 

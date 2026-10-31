@@ -108,10 +108,9 @@ class FakeClient:
         try:
             scope = self._scope(canned, messages, last_user)
             calls = [(c.name, self._arguments(c, scope)) for c in step.tool_calls]
-        except NoResultTable:  # ask for the parent instead of sending a broken call
+        except NoResultTable:  # don't send a broken call: say why there is nothing to show
             parent = parent_of(canned, self.canned_prompts)
-            what = f"*{parent.prompt}*" if parent else "an earlier prompt"
-            step = Step(text=f"Fake Mode: run {what} first in this Conversation")
+            step = Step(text=_parent_first(parent) if parent else _query_failed(messages[last_user:]))
             calls = []
         async for text in self._stream(step.text):
             yield TextChunk(text)
@@ -162,6 +161,22 @@ class FakeClient:
         if isinstance(node, list):
             return [self._resolve(v, messages) for v in node]
         return node
+
+
+def _parent_first(parent: CannedPrompt) -> str:
+    return f"Fake Mode: run *{parent.prompt}* first in this Conversation"
+
+
+def _query_failed(turn: list[dict]) -> str:
+    """This turn's own query failed, so its Result Table never existed. Quote the (value-free)
+    Query Metadata error; a missing Telemetry Database is the usual cause in Fake Mode."""
+    errors = [json.loads(m["content"]).get("error") for m in turn if m["role"] == "tool"]
+    error = next((e for e in reversed(errors) if e), None)
+    detail = f" ({error})" if error else ""
+    return (
+        f"Fake Mode: the query failed{detail}, so there is nothing to show. If the Telemetry Database "
+        "has not been generated yet, run: uv run python -m flood_defender.generator data/telemetry.db"
+    )
 
 
 def _result_tables(messages: list[dict]) -> list[str]:

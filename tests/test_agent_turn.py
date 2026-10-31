@@ -24,7 +24,7 @@ def top_ports_script():
 
 
 async def test_question_streams_text_and_yields_table_display_with_rows(make_agent):
-    agent = make_agent(top_ports_script())
+    agent = await make_agent(top_ports_script())
     events = await collect(agent, "top destination ports by bytes?")
 
     text = "".join(e.text for e in events if isinstance(e, TextDelta))
@@ -42,7 +42,7 @@ async def test_question_streams_text_and_yields_table_display_with_rows(make_age
 
 async def test_run_query_returns_only_query_metadata(make_agent):
     llm = top_ports_script()
-    await collect(make_agent(llm), "q")
+    await collect(await make_agent(llm), "q")
     meta = last_tool_result(llm.calls[1])
     assert set(meta) == {"success", "result_table", "columns", "row_count"}
     assert meta["success"] is True
@@ -55,7 +55,7 @@ async def test_result_table_lives_in_results_db_with_tool_chosen_name(make_agent
         [tool_call("run_query", sql=TOP_PORTS_SQL, title="evil_name; DROP TABLE flows")],
         [TextChunk("done")],
     )
-    await collect(make_agent(llm), "q")
+    await collect(await make_agent(llm), "q")
     name = last_tool_result(llm.calls[1])["result_table"]
     assert name.startswith("rt_") and "evil" not in name
 
@@ -79,7 +79,7 @@ async def test_result_table_lives_in_results_db_with_tool_chosen_name(make_agent
 )
 async def test_unsafe_sql_is_rejected_and_telemetry_untouched(make_agent, telemetry_db, sql):
     llm = ScriptedLLM([tool_call("run_query", sql=sql, title="t")], [TextChunk("ok")])
-    await collect(make_agent(llm), "q")
+    await collect(await make_agent(llm), "q")
     meta = last_tool_result(llm.calls[1])
     assert meta["success"] is False
     assert all_telemetry_values(telemetry_db) >= {"172.30.41.7"}
@@ -89,7 +89,7 @@ async def test_failed_query_error_is_returned_without_data(make_agent):
     llm = ScriptedLLM(
         [tool_call("run_query", sql="SELECT nope FROM flows", title="t")], [TextChunk("sorry")]
     )
-    await collect(make_agent(llm), "q")
+    await collect(await make_agent(llm), "q")
     meta = last_tool_result(llm.calls[1])
     assert meta["success"] is False
     assert "error" in meta
@@ -97,13 +97,13 @@ async def test_failed_query_error_is_returned_without_data(make_agent):
 
 async def test_only_run_query_show_table_and_show_chart_are_llm_tools(make_agent):
     llm = ScriptedLLM([TextChunk("hi")])
-    await collect(make_agent(llm), "hello")
+    await collect(await make_agent(llm), "hello")
     assert sorted(llm.tools_seen_names) == ["run_query", "show_chart", "show_table"]
 
 
 async def test_system_prompt_contains_semantic_layer_and_now(make_agent):
     llm = ScriptedLLM([TextChunk("hi")])
-    await collect(make_agent(llm), "hello")
+    await collect(await make_agent(llm), "hello")
     system = llm.calls[0][0]
     assert system["role"] == "system"
     assert "etime" in system["content"] and "1600000100000" in system["content"]
@@ -111,7 +111,7 @@ async def test_system_prompt_contains_semantic_layer_and_now(make_agent):
 
 async def test_second_turn_keeps_conversation_history(make_agent):
     llm = ScriptedLLM([TextChunk("one")], [TextChunk("two")])
-    agent = make_agent(llm)
+    agent = await make_agent(llm)
     conv = Conversation()
     await collect(agent, "first", conv)
     await collect(agent, "second", conv)
@@ -138,7 +138,7 @@ async def test_no_telemetry_value_ever_reaches_the_llm(make_agent, telemetry_db)
     ]
     values = {v for v in all_telemetry_values(telemetry_db) if len(v) >= 4}
     for llm in scripts:
-        await collect(make_agent(llm), "anything")
+        await collect(await make_agent(llm), "anything")
         # Everything the Agent put into the conversation (system prompt, tool
         # results) must be value-free. Assistant messages are the LLM's own words.
         for call in llm.calls:

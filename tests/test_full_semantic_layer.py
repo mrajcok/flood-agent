@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from flood_defender.agent import Agent
 from flood_defender.llm import TextChunk
 from flood_defender.semantic_layer import SemanticLayer
@@ -11,13 +13,25 @@ from conftest import ScriptedLLM, all_telemetry_values, collect, config_for_test
 REAL = Path(__file__).parent.parent / "semantic_layer.yaml"
 
 
-def real_layer_agent(llm, tmp_path, telemetry_db):
-    return Agent(config_for_test(tmp_path, telemetry_db, REAL), llm)
+@pytest.fixture
+async def real_layer_agent(tmp_path, telemetry_db):
+    """Factory for started Agents on the real Semantic Layer; closed at teardown."""
+    agents = []
+
+    async def _make(llm, tmp_path=tmp_path, telemetry_db=telemetry_db):
+        agent = Agent(config_for_test(tmp_path, telemetry_db, REAL), llm)
+        await agent.start()
+        agents.append(agent)
+        return agent
+
+    yield _make
+    for agent in agents:
+        await agent.aclose()
 
 
-async def test_system_prompt_carries_full_semantic_layer_and_no_telemetry(tmp_path, telemetry_db):
+async def test_system_prompt_carries_full_semantic_layer_and_no_telemetry(real_layer_agent, telemetry_db):
     llm = ScriptedLLM([TextChunk("ok")])
-    agent = real_layer_agent(llm, tmp_path, telemetry_db)
+    agent = await real_layer_agent(llm)
     await collect(agent, "SYN packets from 10.1.0.0/16 in the last hour?")
     system = llm.calls[0][0]
     assert system["role"] == "system"
@@ -45,7 +59,7 @@ async def test_in_cidr_works_in_llm_generated_query_via_mcp(make_agent):
         "WHERE in_cidr(sip, '172.30.41.0/24') AND NOT in_cidr(sip, '10.0.0.0/8') GROUP BY dport"
     )
     llm = ScriptedLLM([tool_call("run_query", sql=sql, title="cidr")], [TextChunk("done")])
-    agent = make_agent(llm)
+    agent = await make_agent(llm)
     await collect(agent, "traffic from 172.30.41.0/24")
     meta = last_tool_result(llm.calls[1])
     assert meta["success"] is True and meta["row_count"] == 1

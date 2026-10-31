@@ -2,14 +2,18 @@
 
 import copy
 import json
+import os
 import sqlite3
+from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
 from flood_defender.agent import Agent, AgentConfig, Conversation
 from flood_defender.config import Settings
+from flood_defender.web import create_app
 from flood_defender.llm import TextChunk, ToolCallChunk, UsageChunk
 
 SCHEMA = """
@@ -128,11 +132,53 @@ def query_limits() -> dict:
 
 
 @pytest.fixture
-def make_agent(tmp_path, telemetry_db, semantic_layer_path):
-    def _make(llm, **overrides) -> Agent:
+def build_agent(tmp_path, telemetry_db, semantic_layer_path):
+    """Factory for an Agent that is NOT started (web tests: the app lifespan starts it)."""
+
+    def _build(llm, **overrides) -> Agent:
         return Agent(config_for_test(tmp_path, telemetry_db, semantic_layer_path, **overrides), llm)
 
-    return _make
+    return _build
+
+
+@pytest.fixture
+async def make_agent(build_agent):
+    """Async factory: `agent = await make_agent(llm)`. Each Agent is started, and closed at teardown."""
+    agents: list[Agent] = []
+
+    async def _make(llm, **overrides) -> Agent:
+        agent = build_agent(llm, **overrides)
+        await agent.start()
+        agents.append(agent)
+        return agent
+
+    yield _make
+    for agent in agents:
+        await agent.aclose()
+
+
+@pytest.fixture
+def web_client():
+    """`web_client(agent)` -> a TestClient used as a context manager, so the app lifespan runs
+    (starting the Agent's MCP server) and is left again at teardown."""
+    with ExitStack() as stack:
+        yield lambda agent: stack.enter_context(TestClient(create_app(agent)))
+
+
+def mcp_children() -> list[int]:
+    me, found = os.getpid(), []
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        try:
+            with open(f"/proc/{pid}/stat") as f:
+                ppid = int(f.read().rsplit(")", 1)[1].split()[1])
+            if ppid != me:
+                continue
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                if b"flood_defender.mcp_server" in f.read():
+                    found.append(int(pid))
+        except (OSError, IndexError, ValueError):
+            continue  # process vanished
+    return found
 
 
 async def collect(agent: Agent, message: str, conversation: Conversation | None = None):

@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from flood_defender.queries import InvalidSort
-from flood_defender.agent import Agent, Conversation, DisplayEvent, TextDelta, TurnEnd, resolve_chart_data
+from flood_defender.agent import Agent, Conversation, DisplayEvent, TextDelta, TraceReady, TurnEnd, resolve_chart_data
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
@@ -51,6 +51,8 @@ def create_app(agent: Agent) -> FastAPI:
                         "csv_url": f"/api/results/{item['result_table']}/csv",
                     }
                 )
+            elif item["type"] == "trace":
+                items.append(item)
             else:
                 m = item["message"]
                 if m["role"] in ("user", "assistant") and m.get("content"):
@@ -113,6 +115,8 @@ def create_app(agent: Agent) -> FastAPI:
                             columns=ev.columns,
                         )
                         yield _sse("display", html)
+                    elif isinstance(ev, TraceReady):
+                        yield _sse("trace", TEMPLATES.get_template("trace.html").render(trace=ev.trace))
                     elif isinstance(ev, TurnEnd):
                         break
             except Exception as e:  # keep the stream well-formed for the browser

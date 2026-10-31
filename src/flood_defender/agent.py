@@ -17,7 +17,8 @@ from mcp.types import TextContent
 
 from flood_defender import flagging, queries
 from flood_defender.llm import LLMClient, LLMError, TextChunk, ToolCallChunk, UsageChunk
-from flood_defender.mcp_connection import McpConnection
+from flood_defender.mcp_connection import McpConnection, Transport, stdio_transport
+from flood_defender.mcp_server import ServerSettings
 from flood_defender.semantic_layer import SemanticLayer
 from flood_defender.store import ConversationStore
 from flood_defender.trace import TraceBuilder
@@ -191,7 +192,7 @@ class Agent:
         CSV export or Conversation listing."""
         if self._connection is not None:
             raise RuntimeError("Agent already started")
-        connection = McpConnection(self._server_params())
+        connection = McpConnection(self._transport())
         await connection.start()
         self._connection = connection
 
@@ -202,7 +203,7 @@ class Agent:
             if connection is None:
                 raise RuntimeError("Agent not started")
             if not connection.alive:
-                replacement = McpConnection(self._server_params())
+                replacement = McpConnection(self._transport())
                 await connection.aclose()  # reap the dead one
                 await replacement.start()
                 self._connection = replacement
@@ -229,21 +230,26 @@ class Agent:
     async def __aexit__(self, *exc) -> None:
         await self.aclose()
 
+    def _server_settings(self) -> ServerSettings:
+        # Static settings only. The Conversation id travels in each call's `_meta`, not here
+        # and not as a tool argument, so the LLM can't name another Conversation.
+        return ServerSettings(
+            telemetry_db=self.config.telemetry_db,
+            results_db=self.config.results_db,
+            app_db=self.store.path,
+            query_timeout_s=self.config.query_timeout_s,
+            max_result_rows=self.config.max_result_rows,
+            chart_row_cap=self.config.chart_row_cap,
+        )
+
     def _server_params(self) -> StdioServerParameters:
         return StdioServerParameters(
-            command=sys.executable,
-            args=["-m", "flood_defender.mcp_server"],
-            # Static settings only. The Conversation id travels in each call's `_meta`, not here
-            # and not as a tool argument, so the LLM can't name another Conversation.
-            env={
-                "TELEMETRY_DB": str(self.config.telemetry_db),
-                "RESULTS_DB": str(self.config.results_db),
-                "APP_DB": str(self.store.path),
-                "CHART_ROW_CAP": str(self.config.chart_row_cap),
-                "QUERY_TIMEOUT_S": str(self.config.query_timeout_s),
-                "MAX_RESULT_ROWS": str(self.config.max_result_rows),
-            },
+            command=sys.executable, args=["-m", "flood_defender.mcp_server"], env=self._server_settings().to_env()
         )
+
+    def _transport(self) -> Transport:
+        """How a new connection reaches its server: a stdio subprocess (tests swap in an in-process one)."""
+        return stdio_transport(self._server_params())
 
     def open_conversation(self, conversation_id: str) -> Conversation:
         """Load a saved Conversation (KeyError if unknown)."""

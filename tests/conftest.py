@@ -3,6 +3,7 @@
 import copy
 import json
 import os
+import shutil
 import sqlite3
 from contextlib import ExitStack
 from dataclasses import replace
@@ -14,6 +15,7 @@ from fastapi.testclient import TestClient
 from flood_defender.agent import Agent, AgentConfig, Conversation
 from flood_defender.config import Settings
 from flood_defender.llm import TextChunk, ToolCallChunk, UsageChunk
+from flood_defender.mcp_server import in_process_transport
 from flood_defender.web import create_app
 
 SCHEMA = """
@@ -49,15 +51,21 @@ tables:
 """
 
 
-@pytest.fixture
-def telemetry_db(tmp_path: Path) -> Path:
-    path = tmp_path / "telemetry.db"
+@pytest.fixture(scope="session")
+def telemetry_db_template(tmp_path_factory) -> Path:
+    path = tmp_path_factory.mktemp("template") / "telemetry.db"
     con = sqlite3.connect(path)
     con.executescript(SCHEMA)
     con.executemany("INSERT INTO flows VALUES (?,?,?,?,?,?,?,?,?,?,?)", FLOWS)
     con.commit()
     con.close()
     return path
+
+
+@pytest.fixture
+def telemetry_db(tmp_path: Path, telemetry_db_template: Path) -> Path:
+    """A per-test copy of the session's test Telemetry Database."""
+    return Path(shutil.copy(telemetry_db_template, tmp_path / "telemetry.db"))
 
 
 def all_telemetry_values(path: Path) -> set[str]:
@@ -102,6 +110,14 @@ def semantic_layer_path(tmp_path: Path) -> Path:
     p = tmp_path / "semantic_layer.yaml"
     p.write_text(TEST_SEMANTIC_LAYER)
     return p
+
+
+@pytest.fixture(autouse=True)
+def in_process_mcp_server(request, monkeypatch):
+    """Agents run their MCP server in this process (no 0.4 s interpreter start per server).
+    Tests marked `subprocess` keep the real stdio subprocess: process lifecycle, launch env."""
+    if request.node.get_closest_marker("subprocess") is None:
+        monkeypatch.setattr(Agent, "_transport", lambda self: lambda: in_process_transport(self._server_settings()))
 
 
 @pytest.fixture(autouse=True)

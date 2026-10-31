@@ -4,6 +4,7 @@ import json
 import os
 import sys
 
+import pytest
 from conftest import ScriptedLLM, TextChunk, collect, last_tool_result, tool_call
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -28,6 +29,7 @@ def _server_children() -> list[int]:
     return found
 
 
+@pytest.mark.subprocess
 async def test_launch_environment_has_no_conversation_id(make_agent):
     seen = {}
 
@@ -42,6 +44,7 @@ async def test_launch_environment_has_no_conversation_id(make_agent):
     assert b"CONVERSATION_ID" not in seen["env"]
 
 
+@pytest.mark.subprocess
 async def test_no_tool_schema_mentions_a_conversation_id(make_agent):
     seen = {}
 
@@ -80,6 +83,7 @@ async def _raw_calls(agent, calls):
     return out
 
 
+@pytest.mark.subprocess
 async def test_tool_calls_see_only_tables_of_the_meta_conversation(make_agent):
     results = []
     llm = ScriptedLLM(

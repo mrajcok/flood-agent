@@ -10,7 +10,7 @@ from flood_defender.agent import Conversation
 SLOW_SQL = (
     "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c) SELECT count(*) AS n FROM c"
 )
-TIMEOUT_S = 3
+TIMEOUT_S = 1.0
 
 
 class RoutedLLM(ScriptedLLM):
@@ -44,9 +44,9 @@ async def test_slow_query_does_not_block_other_conversations(make_agent):
         finished[message] = time.monotonic() - start
 
     slow = asyncio.create_task(turn("slow"))
-    await asyncio.sleep(0.5)  # let the slow query start
+    await asyncio.sleep(0.2)  # let the slow query start
     await turn("fast")
     assert not slow.done(), "the slow query should still be running"
-    assert finished["fast"] < TIMEOUT_S - 1
+    assert finished["fast"] < TIMEOUT_S / 2
     await slow
-    assert finished["slow"] >= TIMEOUT_S - 0.5
+    assert finished["slow"] >= TIMEOUT_S * 0.8

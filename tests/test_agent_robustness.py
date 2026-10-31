@@ -1,5 +1,6 @@
 """Agent turn robustness: bad LLM tool arguments, partial failures, atomic history, MCP
-subprocess teardown, Result Table ownership in show_*. Real MCP subprocess, scripted LLM."""
+subprocess teardown, Result Table ownership in show_*. Scripted LLM; tests marked `subprocess`
+run a real MCP server process, the rest an in-process one."""
 
 import asyncio
 import json
@@ -148,6 +149,7 @@ async def test_steps_exhausted_tells_the_user_and_saves_the_trace(make_agent):
 # --- item 3: no orphaned MCP subprocess ---------------------------------------------------------
 
 
+@pytest.mark.subprocess
 async def test_one_mcp_server_serves_several_turns_across_two_conversations(build_agent):
     def script():
         return ScriptedLLM([tool_call("run_query", "c1", sql=SQL, title="t")], [TextChunk("done")])
@@ -174,6 +176,7 @@ async def test_run_turn_on_an_agent_that_was_not_started_raises_a_clear_error(bu
         await collect(agent, "q")
 
 
+@pytest.mark.subprocess
 async def test_agent_as_async_context_manager_starts_and_stops_the_server(build_agent):
     async with build_agent(ScriptedLLM([TextChunk("x")])) as agent:
         assert len(mcp_children()) == 1
@@ -181,6 +184,7 @@ async def test_agent_as_async_context_manager_starts_and_stops_the_server(build_
     assert mcp_children() == []
 
 
+@pytest.mark.subprocess
 async def test_no_mcp_subprocess_left_after_close_following_a_failed_turn(build_agent):
     def boom(messages):
         raise RuntimeError("x")
@@ -192,6 +196,7 @@ async def test_no_mcp_subprocess_left_after_close_following_a_failed_turn(build_
     assert mcp_children() == []
 
 
+@pytest.mark.subprocess
 async def test_consumer_stopping_early_leaves_the_server_running_and_the_next_turn_works(build_agent):
     llm = ScriptedLLM([TextChunk("partial"), tool_call("run_query", "c1", sql=SQL, title="t")], [TextChunk("x")])
     agent = build_agent(llm)
@@ -231,11 +236,15 @@ def kill_mcp_servers():
         time.sleep(0.02)
 
 
-async def kill_mcp_servers_and_settle():
+async def kill_mcp_servers_and_settle(agent):
+    """Kill the server and wait until the Agent's connection has noticed, as it would between real turns."""
     kill_mcp_servers()
-    await asyncio.sleep(0.3)  # let the client notice the exit, as it would between real turns
+    deadline = asyncio.get_running_loop().time() + 5
+    while agent._connection.alive and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.01)
 
 
+@pytest.mark.subprocess
 async def test_next_turn_succeeds_on_a_replacement_server_after_the_server_was_killed(build_agent):
     llm = ScriptedLLM([TextChunk("one")], [tool_call("run_query", "c1", sql=SQL, title="t")], [TextChunk("two")])
     agent = build_agent(llm)
@@ -243,7 +252,7 @@ async def test_next_turn_succeeds_on_a_replacement_server_after_the_server_was_k
     try:
         await collect(agent, "q1")
         (old,) = mcp_children()
-        await kill_mcp_servers_and_settle()
+        await kill_mcp_servers_and_settle(agent)
         events = await collect(agent, "q2")
         assert isinstance(events[-1], TurnEnd) and text_of(events) == "two"
         assert last_tool_result(llm.calls[-1])["success"] is True
@@ -254,6 +263,7 @@ async def test_next_turn_succeeds_on_a_replacement_server_after_the_server_was_k
     assert mcp_children() == []
 
 
+@pytest.mark.subprocess
 async def test_server_dying_mid_turn_is_a_tool_error_and_the_turn_still_ends_cleanly(build_agent):
     def kill_then_call(messages):
         kill_mcp_servers()
@@ -275,6 +285,7 @@ async def test_server_dying_mid_turn_is_a_tool_error_and_the_turn_still_ends_cle
     assert mcp_children() == []
 
 
+@pytest.mark.subprocess
 async def test_failed_restart_is_a_turn_error_with_an_error_trace_entry(build_agent, monkeypatch):
     import sys
 
@@ -284,7 +295,7 @@ async def test_failed_restart_is_a_turn_error_with_an_error_trace_entry(build_ag
     await agent.start()
     try:
         await collect(agent, "q1")
-        await kill_mcp_servers_and_settle()
+        await kill_mcp_servers_and_settle(agent)
         monkeypatch.setattr(
             agent, "_server_params", lambda: StdioServerParameters(command=sys.executable, args=["-c", "raise SystemExit(1)"])
         )
@@ -340,9 +351,12 @@ async def test_show_table_still_works_for_own_table(make_agent):
 
 # --- cancellation and lifecycle ------------------------------------------------------------------
 
-HANGING_SERVER = ["-c", "import time; time.sleep(60)  # flood_defender.mcp_server"]
+# Never answers `initialize`; exits when its stdin closes, as a real server does, so teardown
+# doesn't wait out the client's 2 s grace period before killing it.
+HANGING_SERVER = ["-c", "import sys; sys.stdin.read()  # flood_defender.mcp_server"]
 
 
+@pytest.mark.subprocess
 async def test_cancelling_a_turn_while_a_replacement_server_starts_leaves_no_child(build_agent, monkeypatch):
     import sys
 
@@ -352,7 +366,7 @@ async def test_cancelling_a_turn_while_a_replacement_server_starts_leaves_no_chi
     await agent.start()
     try:
         await collect(agent, "q1")
-        await kill_mcp_servers_and_settle()
+        await kill_mcp_servers_and_settle(agent)
         monkeypatch.setattr(
             agent, "_server_params", lambda: StdioServerParameters(command=sys.executable, args=HANGING_SERVER)
         )
@@ -369,14 +383,15 @@ async def test_cancelling_a_turn_while_a_replacement_server_starts_leaves_no_chi
     assert mcp_children() == []
 
 
+@pytest.mark.subprocess
 async def test_cancelling_connection_start_reaps_the_subprocess():
     import sys
 
     from mcp import StdioServerParameters
 
-    from flood_defender.mcp_connection import McpConnection
+    from flood_defender.mcp_connection import McpConnection, stdio_transport
 
-    conn = McpConnection(StdioServerParameters(command=sys.executable, args=HANGING_SERVER))
+    conn = McpConnection(stdio_transport(StdioServerParameters(command=sys.executable, args=HANGING_SERVER)))
     task = asyncio.create_task(conn.start())
     deadline = asyncio.get_running_loop().time() + 10
     while not mcp_children() and asyncio.get_running_loop().time() < deadline:
@@ -386,11 +401,12 @@ async def test_cancelling_connection_start_reaps_the_subprocess():
     assert mcp_children() == []
 
 
+@pytest.mark.subprocess
 async def test_connection_start_after_aclose_or_twice_fails_clearly(build_agent):
     from flood_defender.mcp_connection import McpConnection
 
     agent = build_agent(ScriptedLLM())
-    conn = McpConnection(agent._server_params())
+    conn = McpConnection(agent._transport())
     await conn.start()
     with pytest.raises(RuntimeError, match="already started"):
         await conn.start()
@@ -400,6 +416,7 @@ async def test_connection_start_after_aclose_or_twice_fails_clearly(build_agent)
     assert mcp_children() == []
 
 
+@pytest.mark.subprocess
 async def test_agent_aclose_cancels_and_awaits_in_flight_turns(build_agent):
     started = asyncio.Event()
 

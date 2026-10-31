@@ -60,6 +60,7 @@ def test_reopening_a_conversation_sweeps_expired_tables_once_not_per_display(bui
     assert len(sweeps) == 1
 
 
+@pytest.mark.subprocess
 def test_entering_the_client_starts_one_mcp_server_and_leaving_it_stops_it(build_agent):
     llm = ScriptedLLM([TextChunk("Hello.")])
     assert mcp_children() == []
@@ -72,6 +73,7 @@ def test_entering_the_client_starts_one_mcp_server_and_leaving_it_stops_it(build
     assert mcp_children() == []
 
 
+@pytest.mark.subprocess
 def test_app_startup_fails_when_the_mcp_server_cannot_start(build_agent, monkeypatch):
     agent = build_agent(ScriptedLLM())
     monkeypatch.setattr("flood_defender.agent.sys.executable", "/nonexistent/python")

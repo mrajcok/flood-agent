@@ -53,6 +53,20 @@ tables:
 """
 
 
+def pytest_addoption(parser):
+    parser.addoption("--network", action="store_true", help="also run tests marked `network` (need internet access)")
+
+
+def pytest_collection_modifyitems(config, items):
+    """The default run stays offline whatever -m expression is given; --network opts in."""
+    if config.getoption("--network"):
+        return
+    skip = pytest.mark.skip(reason="needs internet access; run with --network")
+    for item in items:
+        if "network" in item.keywords:
+            item.add_marker(skip)
+
+
 @pytest.fixture(scope="session")
 def telemetry_db_template(tmp_path_factory) -> Path:
     path = tmp_path_factory.mktemp("template") / "telemetry.db"

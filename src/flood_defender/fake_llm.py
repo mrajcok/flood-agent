@@ -24,8 +24,18 @@ SCRIPT_ENDED = "Fake Mode: script ended."
 _PLACEHOLDER = re.compile(r"\{result_table(?::(-\d+))?\}")
 
 
-class NoResultTable(Exception):
-    """A placeholder (or a follow-up's parent) has no successful Result Table to draw on."""
+class ParentNotRun(Exception):
+    """A follow-up was picked before its parent Canned Prompt ran in this Conversation."""
+
+    def __init__(self, parent: "CannedPrompt"):
+        self.parent = parent
+
+
+class QueryFailed(Exception):
+    """The query a placeholder depends on failed, so its Result Table never existed."""
+
+    def __init__(self, error: str | None):
+        self.error = error
 
 
 @dataclass(frozen=True)
@@ -92,8 +102,11 @@ def parent_of(canned: CannedPrompt | None, canned_prompts: list[CannedPrompt]) -
 
 
 class FakeClient:
-    def __init__(self, canned_prompts: list[CannedPrompt], chunk_delay_s: float = CHUNK_DELAY_S):
-        self.canned_prompts, self.chunk_delay_s = canned_prompts, chunk_delay_s
+    def __init__(
+        self, canned_prompts: list[CannedPrompt], chunk_delay_s: float = CHUNK_DELAY_S, telemetry_db: Path | None = None
+    ):
+        """`telemetry_db` is only named in the reply that suggests generating the data."""
+        self.canned_prompts, self.chunk_delay_s, self.telemetry_db = canned_prompts, chunk_delay_s, telemetry_db
 
     async def stream_chat(self, messages: list[dict], tools: list[dict]) -> AsyncIterator[Chunk]:
         last_user = max(i for i, m in enumerate(messages) if m["role"] == "user")
@@ -105,14 +118,13 @@ class FakeClient:
             step = canned.steps[step_index]
         else:
             step = Step(text=SCRIPT_ENDED)
-        try:
+        try:  # don't send a broken call: say why there is nothing to show
             scope = self._scope(canned, messages, last_user)
             calls = [(c.name, self._arguments(c, scope)) for c in step.tool_calls]
-        except NoResultTable:  # ask for the parent instead of sending a broken call
-            parent = parent_of(canned, self.canned_prompts)
-            what = f"*{parent.prompt}*" if parent else "an earlier prompt"
-            step = Step(text=f"Fake Mode: run {what} first in this Conversation")
-            calls = []
+        except ParentNotRun as e:
+            step, calls = Step(text=_run_parent_first_reply(e.parent)), []
+        except QueryFailed as e:
+            step, calls = Step(text=self._query_failed_reply(e.error)), []
         async for text in self._stream(step.text):
             yield TextChunk(text)
         for n, (name, arguments) in enumerate(calls):
@@ -122,20 +134,24 @@ class FakeClient:
         yield UsageChunk(prompt_tokens=0, completion_tokens=0, cost=0)
 
     def _scope(self, canned: CannedPrompt | None, messages: list[dict], last_user: int) -> list[dict]:
-        """The messages placeholders resolve from. A follow-up draws only on what came after its
-        parent's latest run in this Conversation; no such run with a Result Table means NoResultTable."""
+        """The messages placeholders resolve from: this turn's own queries, or for a follow-up,
+        everything from its parent's latest run in this Conversation."""
         parent = parent_of(canned, self.canned_prompts)
-        if canned is None or canned.after is None:
-            return messages
         if parent is None:
-            raise NoResultTable
+            return messages[last_user:]
         ran = [i for i, m in enumerate(messages[:last_user]) if m["role"] == "user" and m["content"] == parent.prompt]
         if not ran:
-            raise NoResultTable
-        scope = messages[ran[-1] :]
-        if not _result_tables(scope):
-            raise NoResultTable
-        return scope
+            raise ParentNotRun(parent)
+        return messages[ran[-1] :]
+
+    def _query_failed_reply(self, error: str | None) -> str:
+        """Quotes the (value-free) Query Metadata error; missing data is the usual cause in Fake Mode."""
+        detail = f" ({error})" if error else ""
+        path = self.telemetry_db or "<TELEMETRY_DB path>"
+        return (
+            f"Fake Mode: the query failed{detail}, so there is nothing to show. If the Telemetry Database "
+            f"has not been generated yet, run: uv run python -m flood_defender.generator {path}"
+        )
 
     def _arguments(self, call: Call, messages: list[dict]) -> str:
         if call.raw_arguments is not None:
@@ -164,20 +180,29 @@ class FakeClient:
         return node
 
 
-def _result_tables(messages: list[dict]) -> list[str]:
-    """Successful run_query Result Table names in the message history, oldest first."""
-    names = []
-    for m in messages:
-        if m["role"] == "tool":
-            meta = json.loads(m["content"])
-            if meta.get("success") and "result_table" in meta:
-                names.append(meta["result_table"])
-    return names
+def _run_parent_first_reply(parent: CannedPrompt) -> str:
+    return f"Fake Mode: run *{parent.prompt}* first in this Conversation"
+
+
+def _run_query_results(messages: list[dict]) -> list[dict]:
+    """Query Metadata of every run_query result in `messages`, oldest first."""
+    ids = {
+        tc["id"]
+        for m in messages
+        if m["role"] == "assistant"
+        for tc in m.get("tool_calls") or []
+        if tc["function"]["name"] == "run_query"
+    }
+    return [json.loads(m["content"]) for m in messages if m["role"] == "tool" and m.get("tool_call_id") in ids]
 
 
 def _result_table(messages: list[dict], index: int) -> str:
-    """The Nth-latest (-1 = latest) successful run_query Result Table in the message history."""
-    names = _result_tables(messages)
+    """The Nth-latest (-1 = latest) successful run_query Result Table in `messages`. If the latest
+    query failed, a placeholder must not fall back to an older Result Table: that is QueryFailed."""
+    results = _run_query_results(messages)
+    if results and not results[-1].get("success"):
+        raise QueryFailed(results[-1].get("error"))
+    names = [r["result_table"] for r in results if r.get("success") and "result_table" in r]
     if len(names) < -index:
-        raise NoResultTable("no earlier Result Table in this Conversation")
+        raise QueryFailed(None)
     return names[index]

@@ -128,7 +128,7 @@ class Settings(BaseSettings):
         """The one place that turns `llm_backend` into a client and model name."""
         if self.llm_backend == "fake":
             canned = load_canned_prompts()
-            return LLMBackend(FakeClient(canned), "fake", canned)
+            return LLMBackend(FakeClient(canned, telemetry_db=self.telemetry_db), "fake", canned)
         return LLMBackend(OpenRouterClient(self.require_api_key(), self.openrouter_model), self.openrouter_model)
 
     def agent_config(self, model: str | None = None) -> AgentConfig:

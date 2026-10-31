@@ -6,7 +6,7 @@ import pytest
 from conftest import all_telemetry_values, collect
 
 from flood_defender.__main__ import build_app
-from flood_defender.agent import Conversation, DisplayEvent, TextDelta, TraceReady
+from flood_defender.agent import Conversation, DisplayEvent, TextDelta, TraceReady, TurnError
 from flood_defender.config import Settings
 from flood_defender.fake_llm import FakeClient, load_canned_prompts
 
@@ -27,7 +27,7 @@ class Recorder:
 @pytest.mark.parametrize("canned", CANNED, ids=lambda c: c.id)
 async def test_every_canned_prompt_produces_its_declared_outcome(canned, make_agent, telemetry_db):
     llm = Recorder(FakeClient(CANNED))
-    agent = await make_agent(llm, model="fake")
+    agent = await make_agent(llm, model="fake", max_result_rows=20_000)  # above the chart cap, yet small enough to trip fast
     conversation = Conversation()
     parent = next((c for c in CANNED if c.id == canned.after), None)
     if parent:
@@ -39,7 +39,14 @@ async def test_every_canned_prompt_produces_its_declared_outcome(canned, make_ag
     trace = next(e.trace for e in events if isinstance(e, TraceReady))
     assert trace["model"] == "fake"
     totals = trace["totals"]
-    assert (totals["prompt_tokens"], totals["completion_tokens"], totals["cost"]) == (0, 0, 0)
+    assert (totals["prompt_tokens"], totals["completion_tokens"], totals["cost"] or 0) == (0, 0, 0)
+    failed = [
+        e for e in trace["entries"] if e["kind"] == "tool_call" and not json.loads(e["query_metadata"]).get("success")
+    ]
+    assert len(failed) == canned.expect.get("failed_tool_calls", 0)
+    text = "".join(e.text for e in events if isinstance(e, TextDelta))
+    assert canned.expect.get("notice", "") in text
+    assert any(isinstance(e, TurnError) for e in events) == canned.expect.get("turn_error", False)
     values = {v for v in all_telemetry_values(telemetry_db) if len(v) >= 4}
     assert not any(v in call for call in llm.calls for v in values)
 
@@ -82,3 +89,17 @@ def test_fake_backend_builds_without_an_api_key():
 def test_openrouter_backend_still_requires_an_api_key():
     with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
         build_app(Settings(llm_backend="openrouter"))  # pyright: ignore[reportCallIssue]
+
+
+def test_picker_marks_prompts_that_fail_on_purpose(build_agent, web_client):
+    html = web_client(build_agent(FakeClient(CANNED), model="fake"), canned_prompts=CANNED).get("/").text
+
+    marked = [c for c in CANNED if c.fails_on_purpose]
+    assert marked and len(marked) < len(CANNED)
+    assert html.count("fails on purpose") == len(marked)
+
+    def row(c):
+        return html.split(c.prompt, 1)[1].split("</li>", 1)[0]
+
+    assert all("fails on purpose" in row(c) for c in marked)
+    assert not any("fails on purpose" in row(c) for c in CANNED if not c.fails_on_purpose)

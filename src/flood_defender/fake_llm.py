@@ -15,7 +15,7 @@ from typing import AsyncIterator
 
 import yaml
 
-from flood_defender.llm import Chunk, TextChunk, ToolCallChunk, UsageChunk
+from flood_defender.llm import Chunk, LLMError, TextChunk, ToolCallChunk, UsageChunk
 
 CANNED_PROMPTS_FILE = Path(__file__).with_name("canned_prompts.yaml")
 CHUNK_SIZE = 8
@@ -30,6 +30,10 @@ class CannedPrompt:
     steps: list[dict]
     expect: dict = field(default_factory=dict)
     after: str | None = None
+
+    @property
+    def fails_on_purpose(self) -> bool:
+        return bool(self.expect.get("failed_tool_calls") or self.expect.get("notice"))
 
 
 def load_canned_prompts(path: Path = CANNED_PROMPTS_FILE) -> list[CannedPrompt]:
@@ -52,8 +56,13 @@ class FakeClient:
         async for text in self._stream(step.get("text", "")):
             yield TextChunk(text)
         for n, call in enumerate(step.get("tool_calls", [])):
+            if "raw_arguments" in call:  # deliberately malformed, sent as-is
+                yield ToolCallChunk(f"fake-{step_index}-{n}", call["name"], call["raw_arguments"])
+                continue
             args = self._resolve(call.get("args", {}), messages)
             yield ToolCallChunk(f"fake-{step_index}-{n}", call["name"], json.dumps(args))
+        if "error" in step:
+            raise LLMError(step["error"])
         yield UsageChunk(prompt_tokens=0, completion_tokens=0, cost=0)
 
     async def _stream(self, text: str) -> AsyncIterator[str]:

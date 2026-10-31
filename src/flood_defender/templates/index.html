@@ -33,6 +33,7 @@
     form { display: flex; gap: .5rem; margin-top: 1rem; }
     .badge { font-size: .5em; vertical-align: middle; padding: .15rem .5rem; background: #fde68a; border-radius: .25rem; }
     .canned { margin-top: 1rem; font-size: .9rem; }
+    .canned .fails { color: #a40; }
     .canned ul { list-style: none; padding: 0; margin: .25rem 0; }
     .canned button { background: none; border: 0; padding: .15rem 0; color: #06c; cursor: pointer; text-align: left; }
     input[name=message] { flex: 1; padding: .5rem; }
@@ -62,7 +63,7 @@
     <ul>
     {% for c in canned_prompts %}
       <li><button type="button" hx-post="/chat" hx-include="#conversation_id" hx-vals='{{ {"message": c.prompt} | tojson }}'
-        hx-target="#chat" hx-swap="beforeend">{{ c.prompt }}</button></li>
+        hx-target="#chat" hx-swap="beforeend">{{ c.prompt }}</button>{% if c.fails_on_purpose %} <small class="fails">fails on purpose</small>{% endif %}</li>
     {% endfor %}
     </ul>
   </div>

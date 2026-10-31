@@ -21,6 +21,7 @@ import anyio.to_thread
 from mcp.server.fastmcp import Context, FastMCP
 
 from flood_defender import queries
+from flood_defender.mcp_protocol import META_CONVERSATION_ID
 
 mcp = FastMCP("flood-defender")
 
@@ -40,14 +41,9 @@ def _paths() -> tuple[Path, Path]:
     return Path(os.environ["TELEMETRY_DB"]), Path(os.environ["RESULTS_DB"])
 
 
-META_CONVERSATION_ID = "flood_defender/conversation_id"
-
-
 def _conversation_id(ctx: Context) -> str | None:
     meta = ctx.request_context.meta
     value = getattr(meta, META_CONVERSATION_ID, None) if meta else None
-    if value is None and meta is not None:
-        value = (meta.model_extra or {}).get(META_CONVERSATION_ID)
     return value if isinstance(value, str) and value else None
 
 

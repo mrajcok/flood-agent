@@ -20,7 +20,7 @@ from flood_defender.llm import Chunk, TextChunk, ToolCallChunk, UsageChunk
 CANNED_PROMPTS_FILE = Path(__file__).with_name("canned_prompts.yaml")
 CHUNK_SIZE = 8
 CHUNK_DELAY_S = 0.02
-_PLACEHOLDER = re.compile(r"^\{result_table\}$")
+_PLACEHOLDER = re.compile(r"\{result_table(?::(-\d+))?\}")
 
 
 @dataclass
@@ -66,20 +66,26 @@ class FakeClient:
         listing = "\n".join(f"- {c.prompt}" for c in self.canned_prompts)
         return f"I'm in Fake Mode: no LLM is running. Pick one of the Canned Prompts:\n{listing}"
 
-    def _resolve(self, args: dict, messages: list[dict]) -> dict:
-        """Replace `{result_table}` with the latest successful run_query Result Table."""
-        out = {}
-        for key, value in args.items():
-            if isinstance(value, str) and _PLACEHOLDER.match(value):
-                value = _latest_result_table(messages)
-            out[key] = value
-        return out
+    def _resolve(self, node, messages: list[dict]):
+        """Fill `{result_table}` / `{result_table:-2}` anywhere inside the arguments (nested
+        dicts, lists, strings) from Query Metadata in earlier tool results."""
+        if isinstance(node, str):
+            return _PLACEHOLDER.sub(lambda m: _result_table(messages, int(m[1] or -1)), node)
+        if isinstance(node, dict):
+            return {k: self._resolve(v, messages) for k, v in node.items()}
+        if isinstance(node, list):
+            return [self._resolve(v, messages) for v in node]
+        return node
 
 
-def _latest_result_table(messages: list[dict]) -> str:
-    for m in reversed(messages):
+def _result_table(messages: list[dict], index: int) -> str:
+    """The Nth-latest (-1 = latest) successful run_query Result Table in the message history."""
+    names = []
+    for m in messages:
         if m["role"] == "tool":
             meta = json.loads(m["content"])
             if meta.get("success") and "result_table" in meta:
-                return meta["result_table"]
-    raise ValueError("no earlier Result Table in this Conversation")
+                names.append(meta["result_table"])
+    if len(names) < -index:
+        raise ValueError("no earlier Result Table in this Conversation")
+    return names[index]

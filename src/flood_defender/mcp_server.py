@@ -26,7 +26,11 @@ def run_query(sql: str, title: str) -> str:
     """Run a single read-only SELECT over the Telemetry Database. The output is stored in
     a new Result Table (named by the tool). Returns only Query Metadata, never rows."""
     telemetry, results = _paths()
-    return json.dumps(queries.run_query(telemetry, results, sql))
+    timeout = float(os.environ.get("QUERY_TIMEOUT_S", queries.DEFAULT_QUERY_TIMEOUT_S))
+    max_rows = int(os.environ.get("MAX_RESULT_ROWS", queries.DEFAULT_MAX_ROWS))
+    # A failed result may carry `raw_error`; the Agent strips it (keeping it for the Trace)
+    # before anything is sent to the LLM.
+    return json.dumps(queries.run_query(telemetry, results, sql, timeout, max_rows))
 
 
 @mcp.tool()

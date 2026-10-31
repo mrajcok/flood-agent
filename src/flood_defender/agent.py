@@ -17,6 +17,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from flood_defender import flagging, queries
+from flood_defender.mcp_server import META_CONVERSATION_ID
 from flood_defender.llm import LLMClient, LLMError, TextChunk, ToolCallChunk, UsageChunk
 from flood_defender.semantic_layer import SemanticLayer
 from flood_defender.store import ConversationStore
@@ -311,14 +312,12 @@ class Agent:
         params = StdioServerParameters(
             command=sys.executable,
             args=["-m", "flood_defender.mcp_server"],
-            # Passed at launch, not as tool arguments, so the LLM can't choose them. In particular
-            # CONVERSATION_ID limits which Result Tables a query may read, and a tool argument
-            # would let the LLM name another Conversation.
+            # Static settings only. The Conversation id travels in each call's `_meta`, not here
+            # and not as a tool argument, so the LLM can't name another Conversation.
             env={
                 "TELEMETRY_DB": str(self.config.telemetry_db),
                 "RESULTS_DB": str(self.config.results_db),
                 "APP_DB": str(self.store.path),
-                "CONVERSATION_ID": conversation.id,
                 "CHART_ROW_CAP": str(self.config.chart_row_cap),
                 "QUERY_TIMEOUT_S": str(self.config.query_timeout_s),
                 "MAX_RESULT_ROWS": str(self.config.max_result_rows),
@@ -363,7 +362,7 @@ class Agent:
                 items: list[tuple[dict, list[tuple]]] = [(assistant, [])]
                 for c in calls:
                     call_started = time.monotonic()
-                    content, args, executed_sql, failed = await self._run_tool(session, c, queue, trace)
+                    content, args, executed_sql, failed = await self._run_tool(session, c, queue, trace, conversation.id)
                     failed_attempts += failed
                     trace.tool_call(c.name, args, content, call_started, executed_sql)
                     self._trace_result_table(trace, content)
@@ -386,7 +385,7 @@ class Agent:
         self._record(conversation, turn_id, {"role": "assistant", "content": message})
         await queue.put(TextDelta(message))
 
-    async def _run_tool(self, session, c: ToolCallChunk, queue, trace: TraceBuilder):
+    async def _run_tool(self, session, c: ToolCallChunk, queue, trace: TraceBuilder, conversation_id: str):
         """Execute one LLM tool call. Returns (content, args, executed_sql, failed 0/1).
 
         Never raises for problems the LLM caused (bad JSON, missing `sql`) or tool failures: it
@@ -408,7 +407,7 @@ class Agent:
             else:
                 args = parsed
                 try:
-                    result = await session.call_tool(c.name, args)
+                    result = await session.call_tool(c.name, args, meta={META_CONVERSATION_ID: conversation_id})
                     content = "".join(b.text for b in result.content if hasattr(b, "text"))
                     if result.isError:
                         content = _fail(content[:500] or "The tool call was rejected.")

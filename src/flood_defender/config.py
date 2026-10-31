@@ -1,7 +1,7 @@
 """Settings, layered from defaults.toml, then a .env file, then the real environment.
 
-CONVERSATION_ID is deliberately not a setting: the Agent sets it per turn for the MCP
-server, and it scopes which Result Tables a query may read.
+The Conversation id is deliberately not a setting: the Agent sends it with every MCP tool
+call (in request `_meta`), and it scopes which Result Tables a call may use.
 """
 
 import tomllib

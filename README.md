@@ -23,6 +23,26 @@ cp .env.example .env     # then set OPENROUTER_API_KEY in .env (never commit it)
 uv run python -m flood_defender                    # http://127.0.0.1:8000
 ```
 
+### Fake Mode (no LLM, no key)
+
+Fake Mode replaces only the LLM with a scripted stand-in, so you can try the MCP tools, table
+and chart Displays, Traces, saved Conversations and CSV export without an OpenRouter key and
+without any cost or model latency. Generate the data first (default seed, as in Setup), then:
+
+```
+LLM_BACKEND=fake uv run python -m flood_defender   # or set LLM_BACKEND=fake in .env
+```
+
+The page shows a "Fake Mode — no LLM" badge and a list of Canned Prompts above the chat
+input; click one to send it. Follow-ups are indented under the prompt they build on (run the
+parent first in the same Conversation), and entries marked "fails on purpose" exercise error
+paths (bad SQL, row and chart caps, malformed tool calls, an LLM stream error). Any other
+message gets a reply listing the Canned Prompts. Traces show the model as `fake` and $0.00.
+
+To keep fake Conversations out of your real ones, also set `APP_DB=data/fake.db`. Canned
+Prompts live in `src/flood_defender/canned_prompts.yaml` (format in its header); `pytest`
+runs every one and checks its declared outcome.
+
 ## Settings
 
 Every setting has a default in `src/flood_defender/defaults.toml`, the only place defaults
@@ -84,6 +104,7 @@ after the data reference is resolved.
 
 - `agent.py` - `Agent.run_turn(conversation, message)` yields `TextDelta`, `DisplayEvent`, `TurnEnd`.
 - `llm.py` - `LLMClient` protocol and the OpenRouter implementation.
+- `fake_llm.py` + `canned_prompts.yaml` - the Fake Mode `LLMClient` and its Canned Prompts.
 - `mcp_server.py` - stdio MCP server; the only LLM tools are `run_query`, `show_table` and `show_chart`.
 - `queries.py` - read-only Telemetry Database access, CTAS into the results DB, internal row access.
 - `web.py` + `templates/` - FastAPI, Jinja, htmx (SSE), Alpine table and chart components.

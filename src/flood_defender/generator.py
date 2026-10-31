@@ -164,7 +164,7 @@ def _write_window(path: Path, start: int, end: int) -> None:
 
 
 def main(argv=None) -> None:
-    p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    p = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     p.add_argument("db", nargs="?", default="data/telemetry.db")
     p.add_argument("--semantic-layer", default="semantic_layer.yaml")
     p.add_argument("--seed", type=int, default=1)

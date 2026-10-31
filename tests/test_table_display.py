@@ -7,10 +7,9 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from conftest import ScriptedLLM, query_limits
 
 from flood_defender import queries
-
-from conftest import ScriptedLLM, query_limits
 
 LAYER = """\
 dialect: sqlite

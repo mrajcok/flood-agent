@@ -11,7 +11,6 @@ import uuid
 from contextlib import asynccontextmanager
 from html import escape
 from pathlib import Path
-
 from typing import Literal
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
@@ -19,8 +18,18 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from flood_defender.agent import (
+    Agent,
+    Conversation,
+    DisplayEvent,
+    FlagEvent,
+    ResultTableExpired,
+    TextDelta,
+    TraceReady,
+    TurnEnd,
+    resolve_chart_data,
+)
 from flood_defender.queries import InvalidSort
-from flood_defender.agent import Agent, Conversation, DisplayEvent, FlagEvent, ResultTableExpired, TextDelta, TraceReady, TurnEnd, resolve_chart_data
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 

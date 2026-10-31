@@ -1,14 +1,12 @@
 """Agent turn tests: real MCP subprocess, real SQLite files, scripted fake LLM."""
 
-import json
 import sqlite3
 
 import pytest
+from conftest import ScriptedLLM, all_telemetry_values, collect, last_tool_result, tool_call
 
 from flood_defender.agent import Conversation, DisplayEvent, TextDelta, TurnEnd
 from flood_defender.llm import TextChunk
-
-from conftest import ScriptedLLM, all_telemetry_values, collect, last_tool_result, tool_call
 
 TOP_PORTS_SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
 

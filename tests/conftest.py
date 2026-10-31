@@ -13,8 +13,8 @@ from fastapi.testclient import TestClient
 
 from flood_defender.agent import Agent, AgentConfig, Conversation
 from flood_defender.config import Settings
-from flood_defender.web import create_app
 from flood_defender.llm import TextChunk, ToolCallChunk, UsageChunk
+from flood_defender.web import create_app
 
 SCHEMA = """
 CREATE TABLE flows (

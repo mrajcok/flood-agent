@@ -5,12 +5,11 @@ import asyncio
 import json
 
 import pytest
+from conftest import ScriptedLLM, collect, last_tool_result, mcp_children, tool_call
 
 import flood_defender.agent as agent_mod
 from flood_defender.agent import Conversation, DisplayEvent, TextDelta, TraceReady, TurnEnd, TurnError
 from flood_defender.llm import LLMError, TextChunk, ToolCallChunk
-
-from conftest import ScriptedLLM, collect, mcp_children, last_tool_result, tool_call
 
 SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
 

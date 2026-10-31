@@ -2,10 +2,9 @@
 
 import json
 
+from conftest import ScriptedLLM, last_tool_result, tool_call
 
 from flood_defender.llm import TextChunk
-
-from conftest import ScriptedLLM, last_tool_result, tool_call
 
 
 def test_chart_display_is_streamed_and_rows_served_from_chart_endpoint(build_agent, web_client):

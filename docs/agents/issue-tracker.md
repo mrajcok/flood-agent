@@ -12,6 +12,12 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 - **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
 - **Close**: `gh issue close <number> --comment "..."`
 
+## Landing work
+
+Work lands in `main` through a PR from its integration branch, merged with a merge commit (not squash, so stacked branches stay clean). The PR body carries `Closes #<n>` for the spec and each ticket; resolve issues by merging that PR, not with `gh issue close`. Open the PR as a draft after the first merge into the integration branch.
+
+After the merge: `git checkout main && git pull --ff-only`, then delete the merged ticket and integration branches.
+
 Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
 
 ## Pull requests as a triage surface

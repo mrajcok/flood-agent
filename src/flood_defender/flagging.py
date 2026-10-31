@@ -8,8 +8,8 @@ Tokens
 - IP: dotted IPv4, each octet 0-255, not glued to a word character or other dotted digits
   (so `v1.2.3.4` and `1.2.3.4.5` are ignored). A CIDR suffix is ignored; only the address counts.
 - Number: digits optionally with thousands commas and a decimal part, optionally followed by a
-  magnitude suffix (K/M/G/T with an optional unit such as B, bps, pps, MiB; or the words
-  thousand/million/billion/trillion). Its value (suffix applied) must be >= LARGE_NUMBER. Numbers
+  magnitude suffix (K/M/G/T glued to the number, with an optional unit such as B, bps, pps, MiB,
+  or spaced from it only when a unit follows; or the words thousand/million/billion/trillion). Its value (suffix applied) must be >= LARGE_NUMBER. Numbers
   are compared by value, so `1,000,000`, `1000000` and `1M` are the same number.
 
 Allowed context: every number and IP found anywhere in the texts passed in (no minimum size, no
@@ -32,11 +32,14 @@ LARGE_NUMBER = Decimal(10_000)
 _IP = re.compile(r"(?<![\w.])((?:\d{1,3}\.){3}\d{1,3})(?!\w|\.\d)")
 _MAG = {"k": 10**3, "m": 10**6, "g": 10**9, "t": 10**12,
         "thousand": 10**3, "million": 10**6, "billion": 10**9, "trillion": 10**12}
+_UNIT = r"(?:i?[Bb](?:ps|/s)?|pps)"
+# A single-letter magnitude (K/M/G/T) must be glued to the number ("20M", "5Gbps"); with a space
+# it needs a unit ("3 Gbps", "2 TB") so prose like "20 m long" or "top 10 T" is not read as a value.
 _NUMBER = re.compile(
     r"(?P<int>\d{1,3}(?:,\d{3})+|\d+)(?P<frac>\.\d+)?"
-    r"(?P<suffix>\s?(?:(?P<word>thousand|million|billion|trillion)\b"
-    r"|(?P<letter>[KMGTkmgt])(?:i?[Bb](?:ps|/s)?|pps)?\b"
-    r"|(?:[Bb]ps|pps)\b))?"
+    r"(?P<suffix>\s?(?P<word>thousand|million|billion|trillion)\b"
+    r"|(?P<sp>\s)?(?P<letter>[KMGTkmgt])(?(sp)" + _UNIT + "|" + _UNIT + r"?)\b"
+    r"|\s?(?:[Bb]ps|pps)\b)?"
 )
 
 

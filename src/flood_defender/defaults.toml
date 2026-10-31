@@ -1,0 +1,22 @@
+# Default value of every setting. This file is the single source of truth: the code
+# has no fallbacks, and .env.example is generated from it (see flood_defender.config).
+# Override any key with a .env file or an environment variable of the same name in
+# upper case (QUERY_TIMEOUT_S, ...). The real environment wins over .env.
+# openrouter_api_key has no default; it is a secret and belongs in .env.
+
+openrouter_model = "anthropic/claude-sonnet-5.5"
+
+telemetry_db = "data/telemetry.db"
+results_db = "data/results.db"
+app_db = "data/app.db"
+semantic_layer = "semantic_layer.yaml"
+
+result_ttl_hours = 24
+query_timeout_s = 30
+max_result_rows = 1_000_000
+chart_row_cap = 10_000
+max_failed_attempts = 3
+max_llm_steps = 10
+
+host = "127.0.0.1"
+port = 8000

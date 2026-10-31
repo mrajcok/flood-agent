@@ -1,0 +1,4 @@
+{# Flag note for values in the reply that the LLM could not have known. Autoescaped. #}
+<div class="flag-note" role="note"><strong>Unverified values:</strong>
+  {% for f in flags %}<code>{{ f.token }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+  &mdash; not found in your messages or the Semantic Layer, and the assistant never sees telemetry data, so these may be invented. Check the tables and charts instead.</div>

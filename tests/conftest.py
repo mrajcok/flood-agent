@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from flood_defender.agent import Agent, AgentConfig, Conversation
-from flood_defender.llm import TextChunk, ToolCallChunk
+from flood_defender.llm import TextChunk, ToolCallChunk, UsageChunk
 
 SCHEMA = """
 CREATE TABLE flows (
@@ -77,6 +77,7 @@ class ScriptedLLM:
         chunks = step(messages) if callable(step) else step
         for c in chunks:
             yield c
+        yield UsageChunk(prompt_tokens=100, completion_tokens=20, cost=0.0012)
 
     def all_sent_text(self) -> str:
         return json.dumps(self.calls)

@@ -17,9 +17,10 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from flood_defender import queries
-from flood_defender.llm import LLMClient, TextChunk, ToolCallChunk
+from flood_defender.llm import LLMClient, TextChunk, ToolCallChunk, UsageChunk
 from flood_defender.semantic_layer import SemanticLayer
 from flood_defender.store import ConversationStore
+from flood_defender.trace import TraceBuilder
 
 MAX_LLM_STEPS = 10
 
@@ -77,11 +78,18 @@ class TraceEntry:
 
 
 @dataclass
+class TraceReady:
+    """The finished Trace for the turn (already persisted); for the UI only, never for the LLM."""
+
+    trace: dict
+
+
+@dataclass
 class TurnEnd:
     pass
 
 
-Event = TextDelta | DisplayEvent | TraceEntry | TurnEnd
+Event = TextDelta | DisplayEvent | TraceEntry | TraceReady | TurnEnd
 
 GIVE_UP_MESSAGE = (
     "Sorry, I couldn't build a working query for that after several attempts. "
@@ -218,16 +226,22 @@ class Agent:
 
             self._record(conversation, turn_id, {"role": "user", "content": user_message})
             failed_attempts = 0
+            trace = TraceBuilder(self.config.model)
             for _ in range(MAX_LLM_STEPS):
-                messages = [{"role": "system", "content": self.semantic_layer.system_prompt(self.store.live_result_tables(conversation.id))}]
+                system_prompt = self.semantic_layer.system_prompt(self.store.live_result_tables(conversation.id))
+                messages = [{"role": "system", "content": system_prompt}]
                 messages += conversation.messages
-                text, calls = "", []
+                text, calls, usage = "", [], None
+                step_started = time.monotonic()
                 async for chunk in self.llm.stream_chat(messages, tools):
                     if isinstance(chunk, TextChunk):
                         text += chunk.text
                         await queue.put(TextDelta(chunk.text))
                     elif isinstance(chunk, ToolCallChunk):
                         calls.append(chunk)
+                    elif isinstance(chunk, UsageChunk):
+                        usage = chunk
+                trace.llm_step(system_prompt, text, calls, usage, step_started)
                 assistant: dict = {"role": "assistant", "content": text}
                 if calls:
                     assistant["tool_calls"] = [
@@ -243,22 +257,55 @@ class Agent:
                     break
                 for c in calls:
                     args = json.loads(c.arguments or "{}")
+                    call_started = time.monotonic()
                     result = await session.call_tool(c.name, args)
                     content = "".join(b.text for b in result.content if hasattr(b, "text"))
+                    executed_sql = None
                     if c.name == "run_query":
-                        content, failed = await self._split_query_error(content, args, queue)
+                        content, executed_sql = self._strip_executed_sql(content)
+                        content, failed = await self._split_query_error(content, args, queue, trace)
                         failed_attempts += failed
                     message_id = self._record(
                         conversation, turn_id, {"role": "tool", "tool_call_id": c.id, "content": content}
                     )
-                    await self._emit_display(conversation, turn_id, message_id, content, queue, c.arguments, user_message)
+                    trace.tool_call(c.name, args, content, call_started, executed_sql)
+                    self._trace_result_table(trace, content)
+                    await self._emit_display(
+                        conversation, turn_id, message_id, content, queue, c.arguments, user_message, trace
+                    )
                 if failed_attempts >= self.config.max_failed_attempts:
                     self._record(conversation, turn_id, {"role": "assistant", "content": GIVE_UP_MESSAGE})
                     await queue.put(TextDelta(GIVE_UP_MESSAGE))
                     break
+            finished = trace.finish()
+            self.store.save_trace(turn_id, finished)
+            await queue.put(TraceReady(finished))
             await queue.put(TurnEnd())
 
-    async def _split_query_error(self, content: str, args: dict, queue) -> tuple[str, int]:
+    @staticmethod
+    def _strip_executed_sql(content: str) -> tuple[str, str | None]:
+        """The CTAS actually executed is for the Trace only; remove it from the LLM's metadata."""
+        try:
+            meta = json.loads(content)
+        except ValueError:
+            return content, None
+        if not isinstance(meta, dict) or "executed_sql" not in meta:
+            return content, None
+        executed = meta.pop("executed_sql")
+        return json.dumps(meta), executed
+
+    @staticmethod
+    def _trace_result_table(trace: TraceBuilder, content: str) -> None:
+        try:
+            meta = json.loads(content)
+        except ValueError:
+            return
+        if isinstance(meta, dict) and meta.get("success") and "display" not in meta and meta.get("result_table"):
+            trace.result_table(meta["result_table"], meta.get("row_count"), meta.get("columns"))
+
+    async def _split_query_error(
+        self, content: str, args: dict, queue, trace: TraceBuilder | None = None
+    ) -> tuple[str, int]:
         """Strip the raw SQLite error from run_query output before the LLM sees it, and
         emit it (with the sanitised error) as a Trace entry. Returns (content, failed 0/1)."""
         try:
@@ -269,6 +316,8 @@ class Agent:
             return content, 0
         raw = meta.pop("raw_error", None)
         await queue.put(TraceEntry("query_error", args.get("sql"), raw, meta.get("error")))
+        if trace:
+            trace.add("query_error", sql=args.get("sql"), raw_error=raw, sanitized_error=meta.get("error"))
         return json.dumps(meta), 1
 
     def _record(self, conversation: Conversation, turn_id: int, message: dict) -> int:
@@ -277,7 +326,7 @@ class Agent:
 
     async def _emit_display(
         self, conversation: Conversation, turn_id: int, message_id: int, tool_content: str, queue: asyncio.Queue,
-        call_arguments: str = "{}", request: str = "",
+        call_arguments: str = "{}", request: str = "", trace: TraceBuilder | None = None,
     ):
         try:
             payload = json.loads(tool_content)
@@ -304,9 +353,10 @@ class Agent:
                 self.store.add_display(
                     conversation.id, turn_id, message_id, "chart", table, {"spec": source}
                 )
-            await queue.put(
-                DisplayEvent("chart", table, spec=resolve_chart_data(source, table), source_spec=source)
-            )
+            resolved = resolve_chart_data(source, table)
+            if trace:
+                trace.add("chart_spec", result_table=table, source_spec=source, spec=resolved)
+            await queue.put(DisplayEvent("chart", table, spec=resolved, source_spec=source))
             return
         if owned:
             self.store.add_display(

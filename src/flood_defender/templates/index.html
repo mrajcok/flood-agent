@@ -25,6 +25,10 @@
     th, td { border: 1px solid #ccc; padding: .25rem .5rem; text-align: left; }
     .pager { display: flex; gap: .75rem; align-items: center; font-size: .9rem; }
     th { user-select: none; }
+    .trace { margin: .5rem 0; font-size: .85rem; color: #444; }
+    .trace summary { cursor: pointer; }
+    .trace pre { white-space: pre-wrap; word-break: break-word; background: #f6f6f6; padding: .4rem; margin: .2rem 0; }
+    .trace h4 { margin: .6rem 0 .2rem; }
     form { display: flex; gap: .5rem; margin-top: 1rem; }
     input[name=message] { flex: 1; padding: .5rem; }
   </style>
@@ -38,6 +42,7 @@
     {% for item in items %}
       {% if item.type == "user" %}<div class="user">{{ item.text }}</div>
       {% elif item.type == "assistant" %}<div class="reply">{{ item.text }}</div>
+      {% elif item.type == "trace" %}{% with trace=item.trace %}{% include "trace.html" %}{% endwith %}
       {% elif item.type == "display" and item.expired %}<p class="expired"><em>expired</em> (this result has been deleted)</p>
       {% elif item.type == "display" and item.kind == "table" %}
         {% with rows_url=item.rows_url, csv_url=item.csv_url, result_table=item.result_table, columns=item.columns %}{% include "display_table.html" %}{% endwith %}

@@ -126,6 +126,9 @@ class ConversationStore:
             conversation_id,
         )
 
+    def save_trace(self, turn_id: int, trace: dict) -> None:
+        self._write("UPDATE turns SET trace=? WHERE id=?", (json.dumps(trace).encode("utf-8"), turn_id))
+
     def add_message(self, conversation_id: str, turn_id: int, message: dict) -> int:
         return self._write(
             "INSERT INTO messages(conversation_id, turn_id, body) VALUES (?,?,?)",
@@ -209,6 +212,12 @@ class ConversationStore:
                 "SELECT id, after_message_id, kind, result_table, definition FROM displays "
                 "WHERE conversation_id=? ORDER BY id", (conversation_id,)
             ).fetchall()
+            traces = {r["id"]: r["trace"] for r in con.execute(
+                "SELECT id, trace FROM turns WHERE conversation_id=? AND trace IS NOT NULL", (conversation_id,))}
+            last_of_turn = {r["turn_id"]: r["last"] for r in con.execute(
+                "SELECT turn_id, MAX(id) AS last FROM messages WHERE conversation_id=? GROUP BY turn_id",
+                (conversation_id,))}
+        trace_after = {last_of_turn[t]: json.loads(b) for t, b in traces.items() if t in last_of_turn}
         out: list[dict] = []
         for m in msgs:
             out.append({"type": "message", "message": json.loads(m["body"])})
@@ -216,4 +225,6 @@ class ConversationStore:
                 if d["after_message_id"] == m["id"]:
                     out.append({"type": "display", "kind": d["kind"], "result_table": d["result_table"],
                                 **json.loads(d["definition"])})
+            if m["id"] in trace_after:
+                out.append({"type": "trace", "trace": trace_after[m["id"]]})
         return out

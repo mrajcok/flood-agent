@@ -48,11 +48,17 @@ class LLMClient(Protocol):
     def stream_chat(self, messages: list[dict], tools: list[dict]) -> AsyncIterator[Chunk]: ...
 
 
+class LLMError(Exception):
+    """The provider reported an error, or the response stream was cut short or malformed.
+    The message is safe to show the user."""
+
+
 class OpenRouterClient:
     """OpenAI-compatible streaming chat completions with tool calling."""
 
-    def __init__(self, api_key: str, model: str, url: str = OPENROUTER_URL):
-        self.api_key, self.model, self.url = api_key, model, url
+    def __init__(self, api_key: str, model: str, url: str = OPENROUTER_URL,
+                 transport: httpx.AsyncBaseTransport | None = None):
+        self.api_key, self.model, self.url, self.transport = api_key, model, url, transport
 
     @classmethod
     def from_env(cls) -> "OpenRouterClient":
@@ -67,7 +73,8 @@ class OpenRouterClient:
         headers = {"Authorization": f"Bearer {self.api_key}"}
         pending: dict[int, dict] = {}
         usage = None
-        async with httpx.AsyncClient(timeout=120) as client:
+        complete = False  # saw [DONE] or a finish reason
+        async with httpx.AsyncClient(timeout=120, transport=self.transport) as client:
             async with client.stream("POST", self.url, json=body, headers=headers) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
@@ -75,14 +82,24 @@ class OpenRouterClient:
                         continue
                     payload = line[5:].strip()
                     if payload == "[DONE]":
+                        complete = True
                         break
-                    obj = json.loads(payload)
+                    try:
+                        obj = json.loads(payload)
+                    except ValueError:
+                        raise LLMError("The model provider sent a malformed response.") from None
+                    if obj.get("error"):
+                        raise LLMError(_describe_error(obj["error"]))
                     if obj.get("usage"):
                         u = obj["usage"]
                         usage = UsageChunk(u.get("prompt_tokens", 0), u.get("completion_tokens", 0), u.get("cost"))
                     choices = obj.get("choices") or []
                     if not choices:
                         continue
+                    if choices[0].get("finish_reason") == "error":
+                        raise LLMError("The model provider ended the response with an error.")
+                    if choices[0].get("finish_reason"):
+                        complete = True
                     delta = choices[0].get("delta", {})
                     if delta.get("content"):
                         yield TextChunk(delta["content"])
@@ -92,7 +109,24 @@ class OpenRouterClient:
                         fn = tc.get("function", {})
                         slot["name"] = fn.get("name") or slot["name"]
                         slot["args"] += fn.get("arguments") or ""
+        if not complete:
+            raise LLMError("The model's response ended before it was complete. Please try again.")
         for _, slot in sorted(pending.items()):
+            if not slot["id"] or not slot["name"] or not _is_json(slot["args"] or "{}"):
+                raise LLMError("The model's response was cut off in the middle of a tool call. Please try again.")
             yield ToolCallChunk(slot["id"], slot["name"], slot["args"] or "{}")
         if usage:
             yield usage
+
+
+def _is_json(s: str) -> bool:
+    try:
+        json.loads(s)
+    except ValueError:
+        return False
+    return True
+
+
+def _describe_error(err) -> str:
+    msg = err.get("message") if isinstance(err, dict) else err
+    return f"The model provider reported an error: {str(msg)[:300]}" if msg else "The model provider reported an error."

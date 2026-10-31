@@ -7,6 +7,9 @@
   <script src="https://unpkg.com/htmx.org@2.0.4"></script>
   <script src="https://unpkg.com/htmx-ext-sse@2.2.2/dist/sse.js"></script>
   <script defer src="https://unpkg.com/alpinejs@3.14.8/dist/cdn.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vega@5.30.0"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vega-lite@5.21.0"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vega-embed@6.26.0"></script>
   <style>
     body { font-family: system-ui, sans-serif; max-width: 60rem; margin: 0 auto; padding: 1rem; }
     .user { font-weight: 600; margin-top: 1.25rem; }
@@ -34,6 +37,8 @@
       {% elif item.type == "assistant" %}<div class="reply">{{ item.text }}</div>
       {% elif item.type == "display" and item.kind == "table" %}
         {% with rows_url=item.rows_url, result_table=item.result_table, columns=item.columns %}{% include "display_table.html" %}{% endwith %}
+      {% elif item.type == "display" and item.kind == "chart" %}
+        {% with spec_json=item.spec_json %}{% include "display_chart.html" %}{% endwith %}
       {% endif %}
     {% endfor %}
   </div>

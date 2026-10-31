@@ -35,6 +35,21 @@ Tests run at the Agent turn seam: a real MCP server subprocess and real SQLite f
 with only the OpenRouter client replaced by a scripted fake (`tests/conftest.py`).
 No network or credentials needed.
 
+## Table Displays
+
+Tables are paginated (50 rows/page, max 500) and sortable on any column by the Agent:
+`GET /api/results/<rt>/rows?page=&page_size=&sort=<col>&dir=asc|desc` re-queries the
+Result Table; `sort` must exactly match a column of that Result Table or the request is a
+400. `GET /api/results/<rt>/csv` streams the full Result Table (raw values, formula-leading
+text prefixed with `'`). Both are Agent endpoints, not LLM tools.
+
+Formatting comes from Semantic Layer column metadata (`tables.flows.columns.<col>`):
+`enum` -> names (proto), `enum_bits` -> flag letters (S, SA, FPA), `unit: bytes` -> decimal
+KB/MB/GB/TB, `unit: epoch ms ...` -> UTC timestamps (never local time). A Result Table
+column is matched to its source column by **identical name** (`proto`, `bytes`, `etime`);
+aliased or derived columns (`SUM(bytes) AS total_bytes`) are shown plain. Pure formatting
+functions live in `static/format.js` (tested with `node --test` via pytest).
+
 ## Layout
 
 - `agent.py` - `Agent.run_turn(conversation, message)` yields `TextDelta`, `DisplayEvent`, `TurnEnd`.

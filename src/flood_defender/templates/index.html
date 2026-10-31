@@ -6,6 +6,7 @@
   <title>Flood Defender</title>
   <script src="https://unpkg.com/htmx.org@2.0.4"></script>
   <script src="https://unpkg.com/htmx-ext-sse@2.2.2/dist/sse.js"></script>
+  <script src="/static/format.js"></script>
   <script defer src="https://unpkg.com/alpinejs@3.14.8/dist/cdn.min.js"></script>
   <style>
     body { font-family: system-ui, sans-serif; max-width: 60rem; margin: 0 auto; padding: 1rem; }
@@ -13,6 +14,8 @@
     .reply { white-space: pre-wrap; }
     table { border-collapse: collapse; margin: .5rem 0; }
     th, td { border: 1px solid #ccc; padding: .25rem .5rem; text-align: left; }
+    .pager { display: flex; gap: .75rem; align-items: center; font-size: .9rem; }
+    th { user-select: none; }
     form { display: flex; gap: .5rem; margin-top: 1rem; }
     input[name=message] { flex: 1; padding: .5rem; }
   </style>

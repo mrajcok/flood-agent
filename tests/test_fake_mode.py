@@ -91,6 +91,37 @@ def test_openrouter_backend_still_requires_an_api_key():
         build_app(Settings(llm_backend="openrouter"))  # pyright: ignore[reportCallIssue]
 
 
+async def test_a_follow_up_picked_first_replies_to_run_its_parent_and_makes_no_tool_call(make_agent):
+    follow_up = next(c for c in CANNED if c.after)
+    parent = next(c for c in CANNED if c.id == follow_up.after)
+    agent = await make_agent(FakeClient(CANNED), model="fake")
+
+    events = await collect(agent, follow_up.prompt)
+
+    text = "".join(e.text for e in events if isinstance(e, TextDelta))
+    assert f"Fake mode: run {parent.prompt} first in this Conversation" in text
+    assert not [e for e in events if isinstance(e, DisplayEvent)]
+
+
+def test_a_dangling_after_is_a_load_error(tmp_path):
+    path = tmp_path / "canned.yaml"
+    path.write_text("- {id: a, prompt: A, steps: [], after: missing}\n")
+
+    with pytest.raises(ValueError, match="missing"):
+        load_canned_prompts(path)
+
+
+def test_picker_indents_follow_ups_under_their_parent(build_agent, web_client):
+    follow_up = next(c for c in CANNED if c.after)
+    client = web_client(build_agent(FakeClient(CANNED), model="fake"), canned_prompts=CANNED)
+
+    html = client.get("/").text
+
+    assert html.count('class="follow-up"') == sum(1 for c in CANNED if c.after)
+    parent_at = html.index(next(c for c in CANNED if c.id == follow_up.after).prompt)
+    assert parent_at < html.index('class="follow-up"')
+
+
 def test_picker_marks_prompts_that_fail_on_purpose(build_agent, web_client):
     html = web_client(build_agent(FakeClient(CANNED), model="fake"), canned_prompts=CANNED).get("/").text
 

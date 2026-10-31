@@ -4,6 +4,7 @@
 #   id      stable slug
 #   prompt  the exact user message: shown in the picker and matched exactly by the fake
 #   steps   one per simulated LLM call: `text` (streamed) and/or `tool_calls` (name + args)
+#   after   optional id of a parent Canned Prompt: the follow-up is listed indented under it and needs its Result Table
 #   expect  the declared outcome the test suite checks (`displays`: Display kinds in order)
 #   Failure-path entries add to `expect`: `failed_tool_calls` (count), `notice` (text the reply must
 #   contain), `turn_error` (the turn ends in an error). The picker marks entries that declare
@@ -135,6 +136,23 @@
     - text: "Here are both tables."
   expect:
     displays: [table, table]
+
+- id: chart-top-destinations
+  prompt: Now chart those bytes by destination IP.
+  after: top-destinations
+  steps:
+    - tool_calls:
+        - name: show_chart
+          args:
+            vega_lite_spec:
+              data: {name: "{result_table}"}
+              mark: bar
+              encoding:
+                x: {field: dip, type: nominal, sort: null, title: Destination IP}
+                y: {field: total_bytes, type: quantitative, title: Bytes}
+    - text: "Here is the previous result as a chart."
+  expect:
+    displays: [chart]
 
 - id: invalid-sql-retry
   prompt: "Fail on purpose: run a query with a typo, then retry."

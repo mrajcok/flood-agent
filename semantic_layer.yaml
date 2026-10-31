@@ -1,0 +1,29 @@
+dialect: sqlite
+# The generator (a later ticket) will write the dataset window. "now" = window_end.
+window_start: 1767225600000
+window_end: 1767229200000
+time_key: etime
+time_key_rule: Always filter time ranges on etime (the Time Key); it is indexed and, in Ocient, the partition key.
+tables:
+  flows:
+    description: One row per Flow Record (NetFlow/IPFIX summary of traffic between two endpoints).
+    columns:
+      sip: {type: TEXT, description: Source IPv4 address, dotted decimal, example: "192.0.2.10"}
+      dip: {type: TEXT, description: Destination IPv4 address, dotted decimal, example: "198.51.100.20"}
+      sport: {type: INTEGER, description: Source port, example: 51000}
+      dport: {type: INTEGER, description: Destination port, example: 443}
+      proto:
+        type: INTEGER
+        description: IANA protocol number
+        example: 6
+        enum: {6: TCP, 17: UDP, 1: ICMP}
+      tcp_flags:
+        type: INTEGER
+        description: TCP flags bitmask OR'd over the flow
+        example: 18
+        enum_bits: {1: FIN, 2: SYN, 4: RST, 8: PSH, 16: ACK, 32: URG}
+      circuit: {type: TEXT, description: Opaque 12-character Circuit identifier, example: "AB12CD34EF56"}
+      stime: {type: INTEGER, unit: epoch ms UTC, description: Flow start time, example: 1767225600000}
+      etime: {type: INTEGER, unit: epoch ms UTC, description: Flow end time (the Time Key), example: 1767225601000}
+      bytes: {type: INTEGER, unit: bytes, description: Total bytes in the flow, example: 1500}
+      pkts: {type: INTEGER, unit: packets, description: Total packets in the flow, example: 3}

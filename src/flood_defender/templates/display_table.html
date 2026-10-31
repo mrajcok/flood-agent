@@ -1,0 +1,17 @@
+<div class="display" data-rows-url="{{ rows_url }}"
+     x-data="{ columns: [], rows: [], loaded: false, error: false,
+               async init() {
+                 try {
+                   const r = await fetch($el.dataset.rowsUrl);
+                   if (!r.ok) throw new Error(r.status);
+                   const d = await r.json();
+                   this.columns = d.columns; this.rows = d.rows; this.loaded = true;
+                 } catch (e) { this.error = true; }
+               } }">
+  <p x-show="!loaded && !error">Loading {{ result_table }}...</p>
+  <p x-show="error" x-cloak>Could not load table.</p>
+  <table x-show="loaded" x-cloak>
+    <thead><tr><template x-for="c in columns" :key="c"><th x-text="c"></th></template></tr></thead>
+    <tbody><template x-for="(row, i) in rows" :key="i"><tr><template x-for="(v, j) in row" :key="j"><td x-text="v"></td></template></tr></template></tbody>
+  </table>
+</div>

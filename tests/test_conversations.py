@@ -225,3 +225,19 @@ def test_each_prompt_and_its_response_collapse_under_the_prompt(build_agent, web
     assert turns[0].startswith('<summary class="user">first question</summary>') and "reply-alpha" in turns[0]
     assert "reply-beta" not in turns[0] and "second question" not in turns[0]
     assert turns[1].startswith('<summary class="user">second question</summary>') and "reply-beta" in turns[1]
+
+
+def test_the_open_session_is_highlighted_in_the_sidebar(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("a")], [TextChunk("b")])))
+    first, _ = ask(client, "one")
+    second, _ = ask(client, "two")
+
+    def current(page):
+        return re.findall(r'<li[^>]*class="current"[^>]*>\s*<a href="/c/([0-9a-f]+)"', page)
+
+    assert current(client.get(f"/c/{first}").text) == [first]
+    assert current(client.get(f"/c/{second}").text) == [second]
+    assert current(client.get("/").text) == []
+    # the sidebar sent after a prompt is submitted marks that session too
+    posted = client.post("/chat", data={"message": "three", "conversation_id": first}).text
+    assert current(posted) == [first]

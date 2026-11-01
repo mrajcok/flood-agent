@@ -185,6 +185,17 @@ def test_each_session_has_a_menu_offering_rename_and_delete(build_agent, web_cli
     assert f'action="/c/{cid}/delete"' in page and "Delete" in page
 
 
+def test_rename_edits_the_name_in_a_textbox_prefilled_with_the_current_name(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
+    cid, _ = ask(client, "hello")
+    client.post(f"/c/{cid}/rename", data={"title": 'Say "hi"'})
+    page = client.get("/").text
+    form = page.split(f'action="/c/{cid}/rename"')[1].split("</form>")[0]
+    assert '<input' in form and 'name="title"' in form and 'type="text"' in form
+    assert 'value="Say &#34;hi&#34;"' in form
+    assert "prompt(" not in page
+
+
 def test_sidebar_offers_a_delete_control_per_conversation(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
     cid, _ = ask(client, "hello")

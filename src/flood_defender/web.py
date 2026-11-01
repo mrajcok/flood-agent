@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -31,8 +31,19 @@ from flood_defender.agent import (
     resolve_chart_data,
 )
 from flood_defender.queries import InvalidSort
+from flood_defender.trace import split_system_prompt
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+TEMPLATES.env.filters["split_system_prompt"] = split_system_prompt
+STATIC_DIR = Path(__file__).parent / "static"
+
+
+def static_version(name: str) -> int:
+    """Changes whenever the static file does, so a browser never reuses a stale cached copy."""
+    return (STATIC_DIR / name).stat().st_mtime_ns
+
+
+TEMPLATES.env.globals["static_version"] = static_version
 
 
 def _sse(event: str, data: str) -> str:
@@ -64,7 +75,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
         # Any endpoint reading Result Table rows (rows, CSV, chart rows) gets a clear 410.
         return JSONResponse({"detail": "This result has expired and been deleted. Ask again to regenerate it."}, 410)
 
-    app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     pending: dict[str, tuple[Conversation, str]] = {}
 
     def sidebar(current: str | None) -> dict:
@@ -97,7 +108,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
             else:
                 m = item["message"]
                 if m["role"] in ("user", "assistant") and m.get("content"):
-                    items.append({"type": m["role"], "text": m["content"]})
+                    items.append({"type": m["role"], "text": m["content"], "turn_id": item["turn_id"]})
         return items
 
     @app.get("/", response_class=HTMLResponse)
@@ -113,6 +124,32 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
             {**sidebar(conversation_id), "items": history(conversation_id), "current_id": conversation_id},
         )
 
+    @app.post("/c/{conversation_id}/delete")
+    def delete_conversation(conversation_id: str):
+        try:
+            agent.delete_conversation(conversation_id)
+        except KeyError:
+            raise HTTPException(404, "unknown conversation")
+        return RedirectResponse("/", status_code=303)
+
+    @app.post("/c/{conversation_id}/turns/{turn_id}/delete")
+    def delete_turn(conversation_id: str, turn_id: int):
+        try:
+            agent.delete_turn(conversation_id, turn_id)
+        except KeyError:
+            raise HTTPException(404, "unknown turn")
+        return RedirectResponse(f"/c/{conversation_id}", status_code=303)
+
+    @app.post("/c/{conversation_id}/rename")
+    def rename_conversation(conversation_id: str, title: str = Form("")):
+        if not agent.store.exists(conversation_id):
+            raise HTTPException(404, "unknown conversation")
+        title = title.strip()[:60]
+        if not title:
+            raise HTTPException(422, "a session name cannot be blank")
+        agent.store.rename_conversation(conversation_id, title)
+        return RedirectResponse(f"/c/{conversation_id}", status_code=303)
+
     @app.post("/chat", response_class=HTMLResponse)
     def chat(request: Request, message: str = Form(...), conversation_id: str = Form("")):
         if conversation_id:
@@ -125,7 +162,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
         turn_id = uuid.uuid4().hex
         pending[turn_id] = (conversation, message)
         if conversation.id is None:  # persist now so the sidebar and form can reference it
-            conversation.id = agent.store.create_conversation(message[:60])
+            conversation.id = agent.store.create_conversation()
         return TEMPLATES.TemplateResponse(
             request, "turn.html",
             {"turn_id": turn_id, "message": message, **sidebar(conversation.id)},
@@ -159,6 +196,9 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
                     elif isinstance(ev, FlagEvent):
                         yield _sse("flag", TEMPLATES.get_template("flag_note.html").render(flags=ev.items))
                     elif isinstance(ev, TraceReady):
+                        if ev.turn_id is not None and conversation.id:
+                            yield _sse("turn", TEMPLATES.get_template("turn_delete.html").render(
+                                conversation_id=conversation.id, turn_id=ev.turn_id))
                         yield _sse("trace", TEMPLATES.get_template("trace.html").render(trace=ev.trace))
                     elif isinstance(ev, TurnEnd):
                         break
@@ -172,7 +212,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
     def rows(
         result_table: str,
         page: int = Query(1, ge=1),
-        page_size: int = Query(50, ge=1, le=500),
+        page_size: int = Query(20, ge=1, le=500),
         sort: str | None = None,
         dir: Literal["asc", "desc"] = "asc",
     ):

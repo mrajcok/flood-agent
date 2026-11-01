@@ -62,14 +62,14 @@ async def test_every_canned_prompt_produces_its_declared_outcome(canned, make_ag
     assert not any(v in call for call in sent for v in values)
 
 
-async def test_an_unmatched_message_gets_a_reply_naming_fake_mode_and_listing_prompts(make_agent):
+async def test_an_unmatched_message_gets_a_reply_naming_fake_mode_without_relisting_the_prompts(make_agent):
     agent = await make_agent(fake_client(), model="fake")
 
     events = await collect(agent, "what is the weather?")
 
     text = text_of(events)
     assert "Fake Mode" in text
-    assert all(c.prompt in text for c in CANNED)
+    assert not any(c.prompt in text for c in CANNED)  # the page already lists them above the textbox
     assert not [e for e in events if isinstance(e, DisplayEvent)]
 
 
@@ -79,9 +79,9 @@ async def test_a_failed_query_without_telemetry_data_says_so_instead_of_asking_f
     with sqlite3.connect(telemetry_db) as con:  # this test's own copy: as if the data was never generated
         con.execute("DROP TABLE flows")
     agent = await make_agent(fake_client(), model="fake")
-    flow_count = next(c for c in CANNED if c.id == "flow-count")
+    top_dest = next(c for c in CANNED if c.id == "top-destinations")
 
-    events = await collect(agent, flow_count.prompt)
+    events = await collect(agent, top_dest.prompt)
 
     text = text_of(events)
     assert "run an earlier prompt" not in text
@@ -94,13 +94,13 @@ async def test_a_failed_query_after_an_earlier_success_does_not_show_the_earlier
     make_agent, telemetry_db
 ):
     agent = await make_agent(fake_client(), model="fake")
-    flow_count = next(c for c in CANNED if c.id == "flow-count")
+    top_dest = next(c for c in CANNED if c.id == "top-destinations")
     conversation = Conversation()
-    await collect(agent, flow_count.prompt, conversation)
+    await collect(agent, top_dest.prompt, conversation)
     with sqlite3.connect(telemetry_db) as con:
         con.execute("DROP TABLE flows")
 
-    events = await collect(agent, flow_count.prompt, conversation)
+    events = await collect(agent, top_dest.prompt, conversation)
 
     assert "query failed" in text_of(events)
     assert not [e for e in events if isinstance(e, DisplayEvent)]
@@ -132,6 +132,7 @@ def test_fake_mode_page_shows_badge_and_clickable_canned_prompts(build_agent, we
     html = client.get("/").text
 
     assert "Fake Mode — no LLM" in html
+    assert "You can only use these canned prompts with Fake Mode" in html
     assert CANNED[0].prompt in html
     created = client.post("/chat", data={"message": CANNED[0].prompt}).text
     cid = created.split('name="conversation_id" value="')[1].split('"')[0]
@@ -261,3 +262,62 @@ def test_picker_marks_prompts_that_fail_on_purpose(build_agent, web_client):
 
     assert all("fails on purpose" in row(c) for c in marked)
     assert not any("fails on purpose" in row(c) for c in CANNED if not c.fails_on_purpose)
+
+
+async def test_the_total_flow_count_prompt_uses_run_count_query_and_makes_no_result_table(make_agent):
+    canned = next(c for c in CANNED if c.id == "flow-count")
+    agent = await make_agent(fake_client(), model="fake")
+
+    events = await collect(agent, canned.prompt)
+
+    trace = next(e.trace for e in events if isinstance(e, TraceReady))
+    calls = [e for e in trace["entries"] if e["kind"] == "tool_call"]
+    assert [c["name"] for c in calls] == ["run_count_query"]
+    assert not [e for e in trace["entries"] if e["kind"] == "result_table"]
+    assert not [e for e in events if isinstance(e, DisplayEvent)]
+
+
+async def test_the_total_flow_count_reply_states_the_number_without_flagging_it(make_agent, telemetry_db):
+    canned = next(c for c in CANNED if c.id == "flow-count")
+    with sqlite3.connect(telemetry_db) as con:
+        (n,) = con.execute("SELECT COUNT(*) FROM flows").fetchone()
+    agent = await make_agent(fake_client(), model="fake")
+
+    events = await collect(agent, canned.prompt)
+
+    assert str(n) in text_of(events)
+    trace = next(e.trace for e in events if isinstance(e, TraceReady))
+    assert not [e for e in trace["entries"] if e["kind"] == "flag"]
+
+
+async def test_a_failed_count_query_says_so_instead_of_stating_a_number(make_agent, telemetry_db):
+    canned = next(c for c in CANNED if c.id == "flow-count")
+    with sqlite3.connect(telemetry_db) as con:
+        con.execute("DROP TABLE flows")
+    agent = await make_agent(fake_client(), model="fake")
+
+    events = await collect(agent, canned.prompt)
+
+    assert "query failed" in text_of(events) and "{count}" not in text_of(events)
+
+
+def test_a_canned_prompt_returns_more_rows_than_fit_on_one_table_page():
+    page_size = 20  # the Table Display's default page size
+    canned = next(c for c in CANNED if c.id == "many-rows")
+    sql = canned.steps[0].tool_calls[0].args["sql"]
+    assert int(re.search(r"LIMIT (\d+)", sql)[1]) > page_size
+
+
+async def test_the_fake_count_reply_puts_thousands_commas_in_the_number():
+    canned = next(c for c in CANNED if c.id == "flow-count")
+    messages = [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": canned.prompt},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "fake-0-0", "type": "function", "function": {"name": "run_count_query", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "fake-0-0", "content": json.dumps({"success": True, "count": 17392})},
+    ]
+
+    text = "".join([c.text async for c in fake_client().stream_chat(messages, []) if isinstance(c, TextChunk)])
+
+    assert "17,392" in text and "17392" not in text

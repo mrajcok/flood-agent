@@ -18,6 +18,7 @@ from mcp.types import TextContent
 from flood_defender import flagging, queries
 from flood_defender.llm import LLMClient, LLMError, TextChunk, ToolCallChunk, UsageChunk
 from flood_defender.mcp_connection import McpConnection, Transport, stdio_transport
+from flood_defender.mcp_protocol import QUERY_TOOLS
 from flood_defender.mcp_server import ServerSettings
 from flood_defender.semantic_layer import SemanticLayer
 from flood_defender.store import ConversationStore
@@ -84,6 +85,7 @@ class TraceReady:
     """The finished Trace for the turn (already persisted); for the UI only, never for the LLM."""
 
     trace: dict
+    turn_id: int | None = None
 
 
 @dataclass
@@ -257,6 +259,28 @@ class Agent:
             raise KeyError(conversation_id)
         return Conversation(conversation_id, repair_history(self.store.messages(conversation_id)))
 
+    def delete_conversation(self, conversation_id: str) -> None:
+        """Delete a saved Conversation and drop its Result Tables (KeyError if unknown)."""
+        if not self.store.exists(conversation_id):
+            raise KeyError(conversation_id)
+        self._drop_result_tables(self.store.delete_conversation(conversation_id))
+
+    def delete_turn(self, conversation_id: str, turn_id: int) -> None:
+        """Delete one prompt/answer exchange and the Result Tables it created (KeyError if unknown)."""
+        self._drop_result_tables(self.store.delete_turn(conversation_id, turn_id))
+
+    def _drop_result_tables(self, names: list[str]) -> None:
+        names = [n for n in names if queries.RESULT_TABLE_RE.match(n)]
+        if not names or not self.config.results_db.exists():
+            return
+        con = sqlite3.connect(self.config.results_db)
+        try:
+            for n in names:
+                con.execute(f"DROP TABLE IF EXISTS {n}")
+            con.commit()
+        finally:
+            con.close()
+
     def sweep_expired(self) -> None:
         """Delete Result Tables whose Conversation has been idle past the TTL.
 
@@ -265,14 +289,7 @@ class Agent:
         names = [n for n in self.store.due_for_expiry(self.config.result_ttl_ms) if queries.RESULT_TABLE_RE.match(n)]
         if not names:
             return
-        if self.config.results_db.exists():
-            con = sqlite3.connect(self.config.results_db)
-            try:
-                for n in names:
-                    con.execute(f"DROP TABLE IF EXISTS {n}")
-                con.commit()
-            finally:
-                con.close()
+        self._drop_result_tables(names)
         self.store.mark_expired(names)
 
     def is_expired(self, result_table: str) -> bool:
@@ -346,7 +363,7 @@ class Agent:
     async def _run(self, conversation: Conversation, user_message: str, queue: asyncio.Queue):
         self.sweep_expired()
         if conversation.id is None:
-            conversation.id = self.store.create_conversation(user_message[:60])
+            conversation.id = self.store.create_conversation()
         turn_id = self.store.start_turn(conversation.id, user_message)
         self._record(conversation, turn_id, {"role": "user", "content": user_message})
         trace = TraceBuilder(self.config.model)
@@ -359,7 +376,7 @@ class Agent:
             await self._fail_turn(conversation, turn_id, trace, queue, e)
         finished = trace.finish()
         self.store.save_trace(turn_id, finished)
-        await queue.put(TraceReady(finished))
+        await queue.put(TraceReady(finished, turn_id))
 
     async def _fail_turn(self, conversation, turn_id, trace: TraceBuilder, queue, error: BaseException) -> None:
         """A turn failed partway: tell the user, record it in the Trace and in the history."""
@@ -439,8 +456,8 @@ class Agent:
         """Execute one LLM tool call. Returns (content, args, executed_sql, failed 0/1).
 
         Never raises for problems the LLM caused (bad JSON, missing `sql`) or tool failures: it
-        returns an error result the LLM can act on, and a failed run_query counts toward the limit."""
-        is_query = c.name == "run_query"
+        returns an error result the LLM can act on, and a failed query tool call counts toward the limit."""
+        is_query = c.name in QUERY_TOOLS
         args: dict = {}
         executed_sql = None
         try:
@@ -453,7 +470,7 @@ class Agent:
                 content = _fail("The tool arguments must be a JSON object. Try again.")
             elif is_query and not isinstance(parsed.get("sql"), str):
                 args = parsed
-                content = _fail("run_query requires a 'sql' string argument. Try again.")
+                content = _fail(f"{c.name} requires a 'sql' string argument. Try again.")
             else:
                 args = parsed
                 try:
@@ -518,7 +535,7 @@ class Agent:
     async def _split_query_error(
         self, content: str, args: dict, queue, trace: TraceBuilder | None = None
     ) -> tuple[str, int]:
-        """Strip the raw SQLite error from run_query output before the LLM sees it, and
+        """Strip the raw SQLite error from run_query / run_count_query output before the LLM sees it, and
         emit it (with the sanitised error) as a Trace entry. Returns (content, failed 0/1)."""
         try:
             meta = json.loads(content)

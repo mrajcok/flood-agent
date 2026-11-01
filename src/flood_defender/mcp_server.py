@@ -1,7 +1,8 @@
 """MCP server. Exposes exactly the LLM-facing tools.
 
-No tool here returns rows: `run_query` returns Query Metadata, `show_table` records a
-Display definition. Rows reach the browser only through the Agent's internal data path.
+No tool here returns rows: `run_query` returns Query Metadata, `run_count_query` returns a
+single Count (the ADR 0001 exception), `show_table` records a Display definition. Rows reach the
+browser only through the Agent's internal data path.
 
 `create_server(settings)` builds the server from static `ServerSettings`. In production it runs
 as a stdio subprocess (`python -m flood_defender.mcp_server`) and reads those settings from the
@@ -137,6 +138,16 @@ def create_server(settings: ServerSettings) -> FastMCP:
         # before anything is sent to the LLM.
         return json.dumps(
             queries.run_query(settings.telemetry_db, settings.results_db, sql, settings.query_timeout_s, settings.max_result_rows, allowed)
+        )
+
+    @mcp.tool()
+    @_in_worker_thread
+    def run_count_query(sql: str, ctx: Context) -> str:
+        """Run a single read-only SELECT that returns one number, e.g. SELECT COUNT(*) FROM ...
+        No Result Table is created; the count itself is returned to you and you may state it."""
+        allowed = _allowed_tables(settings.app_db, ctx)
+        return json.dumps(
+            queries.run_count_query(settings.telemetry_db, settings.results_db, sql, settings.query_timeout_s, allowed)
         )
 
     @mcp.tool()

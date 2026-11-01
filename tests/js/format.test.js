@@ -42,3 +42,22 @@ test("formatCell dispatches on column format", () => {
   assert.equal(F.formatCell(null, { kind: "bytes" }), "");
   assert.equal(F.formatCell(1000, undefined), "1000");
 });
+
+test("a column is numeric when its non-null values are all numbers shown as numbers", () => {
+  assert.equal(F.isNumericColumn([[1], [2.5], [null]], 0, { kind: "plain" }), true);
+  assert.equal(F.isNumericColumn([[1000], [2000]], 0, { kind: "bytes" }), true);
+  assert.equal(F.isNumericColumn([[1767225600000]], 0, { kind: "time" }), true);
+  assert.equal(F.isNumericColumn([[1], [2]], 0, undefined), true);
+});
+
+test("enum and flags codes are shown as text, so their columns are not numeric", () => {
+  assert.equal(F.isNumericColumn([[6], [17]], 0, { kind: "enum", map: { 6: "TCP" } }), false);
+  assert.equal(F.isNumericColumn([[2], [18]], 0, { kind: "flags", map: { 2: "syn" } }), false);
+});
+
+test("text, mixed and all-null columns are not numeric", () => {
+  assert.equal(F.isNumericColumn([["10.0.0.1"], ["10.0.0.2"]], 0, { kind: "plain" }), false);
+  assert.equal(F.isNumericColumn([[1], ["x"]], 0, { kind: "plain" }), false);
+  assert.equal(F.isNumericColumn([[null], [null]], 0, { kind: "plain" }), false);
+  assert.equal(F.isNumericColumn([], 0, { kind: "plain" }), false);
+});

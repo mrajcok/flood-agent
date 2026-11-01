@@ -5,13 +5,20 @@
       {{ trace.totals.prompt_tokens }} in / {{ trace.totals.completion_tokens }} out tokens &middot;
       {% if trace.totals.cost is not none %}${{ "%.6f"|format(trace.totals.cost) }}{% else %}cost n/a{% endif %} &middot;
       {{ trace.totals.duration_ms }} ms</span></summary>
-  <h4>System prompt and Semantic Layer</h4>
-  <pre>{{ trace.system_prompt or "" }}</pre>
+  {% set parts = trace.system_prompt|split_system_prompt %}
+  <details class="trace-part"><summary>System prompt</summary><pre>{{ parts[0] }}</pre></details>
+  <details class="trace-part"><summary>Semantic Layer</summary><pre>{{ parts[1] }}</pre></details>
+  <details class="trace-part" open><summary>Result Tables and turn activity</summary>
+  <pre>{{ parts[2] }}</pre>
   {% for e in trace.entries %}
   <section class="trace-entry trace-{{ e.kind }}">
     {% if e.kind == "llm_step" %}
       <h4>LLM step &middot; {{ e.duration_ms }} ms{% if e.usage %} &middot; {{ e.usage.prompt_tokens }} in / {{ e.usage.completion_tokens }} out{% if e.usage.cost is not none %} &middot; ${{ "%.6f"|format(e.usage.cost) }}{% endif %}{% endif %}</h4>
-      {% if e.system_prompt %}<p>System prompt changed:</p><pre>{{ e.system_prompt }}</pre>{% endif %}
+      {% if e.system_prompt %}{% set now = e.system_prompt|split_system_prompt %}
+        {% if now[0] != parts[0] %}<details class="trace-part"><summary>System prompt changed</summary><pre>{{ now[0] }}</pre></details>{% endif %}
+        {% if now[1] != parts[1] %}<details class="trace-part"><summary>Semantic Layer changed</summary><pre>{{ now[1] }}</pre></details>{% endif %}
+        {% if now[2] != parts[2] %}<details class="trace-part" open><summary>Result Tables changed</summary><pre>{{ now[2] }}</pre></details>{% endif %}
+      {% endif %}
       <p>Raw response</p><pre>{{ e.raw_response.content }}</pre>
       {% for c in e.raw_response.tool_calls %}<p>Tool call {{ c.name }} ({{ c.id }})</p><pre>{{ c.arguments }}</pre>{% endfor %}
     {% elif e.kind == "tool_call" %}
@@ -37,4 +44,5 @@
     {% endif %}
   </section>
   {% endfor %}
+  </details>
 </details>

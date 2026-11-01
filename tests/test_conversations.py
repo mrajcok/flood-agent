@@ -36,7 +36,7 @@ def test_conversation_survives_restart_and_is_listed_in_sidebar(build_agent, web
 
     restarted = web_client(build_agent(ScriptedLLM()))  # new app, same files
     home = restarted.get("/").text
-    assert f'href="/c/{cid}"' in home and "top ports by bytes" in home
+    assert f'href="/c/{cid}"' in home and "Session 1" in home
 
     reopened = restarted.get(f"/c/{cid}").text
     assert "top ports by bytes" in main_pane(reopened) and "Here you go." in reopened
@@ -114,3 +114,189 @@ async def test_agent_cannot_display_another_conversations_result_table(make_agen
 
     reopened = other.open_conversation(first.id)
     assert [m["role"] for m in reopened.messages][0] == "user" and len(reopened.messages) == len(first.messages)
+
+
+def test_deleting_a_conversation_removes_it_and_its_result_tables(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM(*table_script(), [TextChunk("other")])))
+    cid, body = ask(client, "top ports")
+    other, _ = ask(client, "something else")
+    table = re.search(r"/api/results/(rt_\w+)/rows", client.get(f"/c/{cid}").text).group(1)
+    assert client.get(f"/api/results/{table}/rows").status_code == 200
+
+    deleted = client.post(f"/c/{cid}/delete", follow_redirects=False)
+    assert deleted.status_code == 303 and deleted.headers["location"] == "/"
+
+    assert client.get(f"/c/{cid}").status_code == 404
+    home = client.get("/").text
+    assert f'href="/c/{cid}"' not in home and f'href="/c/{other}"' in home
+    assert client.get(f"/api/results/{table}/rows").status_code != 200
+    assert client.get(f"/c/{other}").status_code == 200
+
+    restarted = web_client(build_agent(ScriptedLLM()))
+    assert f'href="/c/{cid}"' not in restarted.get("/").text
+
+
+def test_deleting_an_unknown_conversation_is_404(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM()))
+    assert client.post("/c/nope/delete").status_code == 404
+
+
+def sidebar_titles(client):
+    return re.findall(r'<a href="/c/[0-9a-f]+"[^>]*>([^<]*)</a>', client.get("/").text)
+
+
+def test_conversations_are_named_session_1_session_2_and_numbers_are_not_reused(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("a")], [TextChunk("b")], [TextChunk("c")])))
+    first, _ = ask(client, "one")
+    ask(client, "two")
+    assert sorted(sidebar_titles(client)) == ["Session 1", "Session 2"]
+
+    client.post(f"/c/{first}/delete")
+    ask(client, "three")
+    assert sorted(sidebar_titles(client)) == ["Session 2", "Session 3"]
+
+
+def test_a_conversation_can_be_renamed(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("a")])))
+    cid, _ = ask(client, "one")
+
+    renamed = client.post(f"/c/{cid}/rename", data={"title": "  SYN flood <b>probe</b> "}, follow_redirects=False)
+
+    assert renamed.status_code == 303 and renamed.headers["location"] == f"/c/{cid}"
+    assert sidebar_titles(client) == ["SYN flood &lt;b&gt;probe&lt;/b&gt;"]
+    restarted = web_client(build_agent(ScriptedLLM()))
+    assert sidebar_titles(restarted) == ["SYN flood &lt;b&gt;probe&lt;/b&gt;"]
+
+
+def test_rename_rejects_a_blank_title_and_an_unknown_conversation(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("a")])))
+    cid, _ = ask(client, "one")
+    assert client.post(f"/c/{cid}/rename", data={"title": "   "}).status_code == 422
+    assert sidebar_titles(client) == ["Session 1"]
+    assert client.post("/c/nope/rename", data={"title": "x"}).status_code == 404
+
+
+def test_each_session_has_a_menu_offering_rename_and_delete(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
+    cid, _ = ask(client, "hello")
+    page = client.get("/").text
+    assert 'aria-label="Session options"' in page
+    assert f'action="/c/{cid}/rename"' in page and "Rename" in page
+    assert f'action="/c/{cid}/delete"' in page and "Delete" in page
+
+
+def test_rename_edits_the_name_in_a_textbox_prefilled_with_the_current_name(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
+    cid, _ = ask(client, "hello")
+    client.post(f"/c/{cid}/rename", data={"title": 'Say "hi"'})
+    page = client.get("/").text
+    form = page.split(f'action="/c/{cid}/rename"')[1].split("</form>")[0]
+    assert '<input' in form and 'name="title"' in form and 'type="text"' in form
+    assert 'value="Say &#34;hi&#34;"' in form
+    assert "prompt(" not in page
+
+
+def test_sidebar_offers_a_delete_control_per_conversation(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
+    cid, _ = ask(client, "hello")
+    assert f'action="/c/{cid}/delete"' in client.get("/").text
+
+
+def test_a_submitted_prompt_shows_a_thinking_spinner_until_the_first_event_arrives(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
+    posted = client.post("/chat", data={"message": "hello", "conversation_id": ""}).text
+    holder = re.search(r'<div sse-swap="([^"]*)" hx-swap="delete">\s*<span class="thinking" role="status"', posted)
+    assert holder, "spinner removes itself when it receives an event"
+    # whichever stream event arrives first removes it, including a stream that only ends
+    assert set(holder[1].split(",")) == {"text", "flag", "display", "trace", "end"}
+
+
+def test_each_prompt_and_its_response_collapse_under_the_prompt(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("reply-alpha")], [TextChunk("reply-beta")])))
+    cid, _ = ask(client, "first question")
+    live = client.post("/chat", data={"message": "second question", "conversation_id": cid}).text
+    ask_stream = live.split('sse-connect="')[1].split('"')[0]
+    client.get(ask_stream)
+    assert 'class="turn" open' in live and '<summary class="user"><span>second question</span>' in live
+
+    page = main_pane(client.get(f"/c/{cid}").text)
+    turns = page.split('<details class="turn" open>')[1:]
+    assert len(turns) == 2
+    assert turns[0].startswith('<summary class="user"><span>first question</span>') and "reply-alpha" in turns[0]
+    assert "reply-beta" not in turns[0] and "second question" not in turns[0]
+    assert turns[1].startswith('<summary class="user"><span>second question</span>') and "reply-beta" in turns[1]
+
+
+def test_the_open_session_is_highlighted_in_the_sidebar(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("a")], [TextChunk("b")])))
+    first, _ = ask(client, "one")
+    second, _ = ask(client, "two")
+
+    def current(page):
+        return re.findall(r'<li[^>]*class="current"[^>]*>\s*<a href="/c/([0-9a-f]+)"', page)
+
+    assert current(client.get(f"/c/{first}").text) == [first]
+    assert current(client.get(f"/c/{second}").text) == [second]
+    assert current(client.get("/").text) == []
+    # the sidebar sent after a prompt is submitted marks that session too
+    posted = client.post("/chat", data={"message": "three", "conversation_id": first}).text
+    assert current(posted) == [first]
+
+
+def turn_ids(page: str) -> list[str]:
+    return re.findall(r'action="/c/[0-9a-f]+/turns/(\d+)/delete"', page)
+
+
+def test_deleting_a_turn_removes_its_prompt_answer_and_result_tables_only(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM(*table_script("reply-alpha"), [TextChunk("reply-beta")])))
+    cid, _ = ask(client, "first question")
+    ask(client, "second question", cid)
+    table = re.search(r"/api/results/(rt_\w+)/rows", client.get(f"/c/{cid}").text).group(1)
+    first, second = turn_ids(main_pane(client.get(f"/c/{cid}").text))
+
+    deleted = client.post(f"/c/{cid}/turns/{first}/delete", follow_redirects=False)
+
+    assert deleted.status_code == 303 and deleted.headers["location"] == f"/c/{cid}"
+    page = main_pane(client.get(f"/c/{cid}").text)
+    assert "<span>first question</span>" not in page and "reply-alpha" not in page
+    assert "<span>second question</span>" in page and "reply-beta" in page
+    assert turn_ids(page) == [second]
+    assert client.get(f"/api/results/{table}/rows").status_code != 200
+
+
+def test_deleting_a_later_turn_leaves_an_earlier_turns_result_table_readable(
+    build_agent, web_client
+):
+    later = [[tool_call("run_query", sql="SELECT dport FROM flows", title="t")],
+               [TextChunk("done")]]
+    client = web_client(build_agent(ScriptedLLM(*table_script("one"), *later)))
+    cid, _ = ask(client, "first question")
+    ask(client, "second question", cid)
+    first, second = turn_ids(main_pane(client.get(f"/c/{cid}").text))
+    first_table = re.search(r"/api/results/(rt_\w+)/rows", client.get(f"/c/{cid}").text).group(1)
+
+    client.post(f"/c/{cid}/turns/{second}/delete")
+
+    assert client.get(f"/api/results/{first_table}/rows").status_code == 200  # created by the first turn
+
+
+def test_deleting_a_turn_rejects_unknown_and_foreign_turns(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("a")], [TextChunk("b")])))
+    one, _ = ask(client, "one")
+    two, _ = ask(client, "two")
+    (turn_in_one,) = turn_ids(client.get(f"/c/{one}").text)
+    assert client.post(f"/c/{one}/turns/9999/delete").status_code == 404
+    assert client.post(f"/c/{two}/turns/{turn_in_one}/delete").status_code == 404
+    assert client.post("/c/nope/turns/1/delete").status_code == 404
+    assert "one" in client.get(f"/c/{one}").text
+
+
+def test_each_prompt_has_an_x_with_a_confirmation_both_live_and_on_reopen(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
+    cid, body = ask(client, "hello")
+    assert "event: turn" in body and "/turns/" in body  # the live turn gets its x once its id is known
+
+    page = main_pane(client.get(f"/c/{cid}").text)
+    summary = page.split("<summary")[1].split("</summary>")[0]
+    assert "hello" in summary and 'action="/c/' in summary and "&times;" in summary
+    assert "confirm(" in summary

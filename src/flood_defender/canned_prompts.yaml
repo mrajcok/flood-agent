@@ -11,6 +11,7 @@
 #   `failed_tool_calls` or `notice` as "fails on purpose".
 #   A tool call may give `raw_arguments` (a raw string, sent as-is) instead of `args`; a step may
 #   give `error` (raised as the LLM error after its text streams).
+#   Step text may contain `{count}` (the latest run_count_query count of the turn).
 #   Tool-call args may contain `{result_table}` (latest run_query Result Table) and
 #   `{result_table:-2}` (the one before it), anywhere inside the args, including nested Chart Specs.
 #
@@ -21,17 +22,12 @@
   prompt: How many flows are there in total?
   steps:
     - tool_calls:
-        - name: run_query
+        - name: run_count_query
           args:
-            sql: SELECT COUNT(*) AS flow_count FROM flows
-            title: Total flows
-    - tool_calls:
-        - name: show_table
-          args:
-            result_table: "{result_table}"
-    - text: "Here is the total number of flows."
+            sql: SELECT COUNT(*) FROM flows
+    - text: "There are {count} flows in total."
   expect:
-    displays: [table]
+    displays: []
 
 - id: top-destinations
   prompt: Which 10 destination IPs received the most bytes?
@@ -46,6 +42,22 @@
           args:
             result_table: "{result_table}"
     - text: "Here are the top destinations by bytes."
+  expect:
+    displays: [table]
+
+- id: many-rows
+  prompt: Which 50 destination ports received the most bytes?
+  steps:
+    - tool_calls:
+        - name: run_query
+          args:
+            sql: SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC LIMIT 50
+            title: Top 50 destination ports by bytes
+    - tool_calls:
+        - name: show_table
+          args:
+            result_table: "{result_table}"
+    - text: "Here are the top 50 destination ports. The table has more than one page of rows, so you can try paging and sorting."
   expect:
     displays: [table]
 
@@ -165,17 +177,12 @@
             title: Total flows
     - text: "That had a typo; retrying."
       tool_calls:
-        - name: run_query
+        - name: run_count_query
           args:
-            sql: SELECT COUNT(*) AS flow_count FROM flows
-            title: Total flows
-    - tool_calls:
-        - name: show_table
-          args:
-            result_table: "{result_table}"
-    - text: "Here is the total number of flows."
+            sql: SELECT COUNT(*) FROM flows
+    - text: "There are {count} flows in total."
   expect:
-    displays: [table]
+    displays: []
     failed_tool_calls: 1
 
 - id: too-many-rows

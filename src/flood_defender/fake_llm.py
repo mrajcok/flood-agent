@@ -9,7 +9,7 @@ messages since that message.
 import asyncio
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -21,6 +21,7 @@ CANNED_PROMPTS_FILE = Path(__file__).with_name("canned_prompts.yaml")
 CHUNK_SIZE = 8
 CHUNK_DELAY_S = 0.02
 SCRIPT_ENDED = "Fake Mode: script ended."
+_COUNT_PLACEHOLDER = "{count}"  # in step text: the latest run_count_query count of this turn
 _PLACEHOLDER = re.compile(r"\{result_table(?::(-\d+))?\}")
 
 
@@ -121,6 +122,8 @@ class FakeClient:
         try:  # don't send a broken call: say why there is nothing to show
             scope = self._scope(canned, messages, last_user)
             calls = [(c.name, self._arguments(c, scope)) for c in step.tool_calls]
+            if _COUNT_PLACEHOLDER in step.text:
+                step = replace(step, text=step.text.replace(_COUNT_PLACEHOLDER, _count(scope)))
         except ParentNotRun as e:
             step, calls = Step(text=_run_parent_first_reply(e.parent)), []
         except QueryFailed as e:
@@ -165,8 +168,7 @@ class FakeClient:
             yield text[i : i + CHUNK_SIZE]
 
     def _unmatched_reply(self) -> str:
-        listing = "\n".join(f"- {c.prompt}" for c in self.canned_prompts)
-        return f"I'm in Fake Mode: no LLM is running. Pick one of the Canned Prompts:\n{listing}"
+        return "I'm in Fake Mode: no LLM is running. Pick one of the canned prompts above the message box."
 
     def _resolve(self, node, messages: list[dict]):
         """Fill `{result_table}` / `{result_table:-2}` anywhere inside the arguments (nested
@@ -184,14 +186,26 @@ def _run_parent_first_reply(parent: CannedPrompt) -> str:
     return f"Fake Mode: run *{parent.prompt}* first in this Conversation"
 
 
+def _count(messages: list[dict]) -> str:
+    """The latest run_count_query count in `messages`; a failed or missing one is QueryFailed."""
+    results = _tool_results(messages, "run_count_query")
+    if not results or not results[-1].get("success"):
+        raise QueryFailed(results[-1].get("error") if results else None)
+    return f"{results[-1]['count']:,}"
+
+
 def _run_query_results(messages: list[dict]) -> list[dict]:
     """Query Metadata of every run_query result in `messages`, oldest first."""
+    return _tool_results(messages, "run_query")
+
+
+def _tool_results(messages: list[dict], tool: str) -> list[dict]:
     ids = {
         tc["id"]
         for m in messages
         if m["role"] == "assistant"
         for tc in m.get("tool_calls") or []
-        if tc["function"]["name"] == "run_query"
+        if tc["function"]["name"] == tool
     }
     return [json.loads(m["content"]) for m in messages if m["role"] == "tool" and m.get("tool_call_id") in ids]
 

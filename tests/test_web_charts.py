@@ -95,3 +95,10 @@ def test_reopening_rerenders_chart_display(build_agent, web_client):
     url = html.unescape(page.split('data-spec="')[1].split('"')[0])
     url = json.loads(url)["data"]["url"]
     assert restarted.get(url).json()[0] == {"dport": 8443, "bytes": 987_654}
+
+
+def test_main_pane_fills_the_space_beside_the_sidebar_so_charts_are_as_wide_as_the_trace(build_agent, web_client):
+    from conftest import ScriptedLLM
+
+    page = web_client(build_agent(ScriptedLLM())).get("/").text
+    assert "main { flex: 1; min-width: 0; }" in page  # otherwise main shrink-wraps its content

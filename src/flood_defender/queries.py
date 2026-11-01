@@ -9,6 +9,7 @@ import re
 import sqlite3
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 RESULT_TABLE_RE = re.compile(r"^rt_[0-9a-f]{8}$")
@@ -168,6 +169,33 @@ _ROWCAP_GUIDANCE = (
 )
 
 
+@contextmanager
+def _deadline(con: sqlite3.Connection, timeout_s: float):
+    """Abort statements on `con` after `timeout_s` seconds. Yields a callable that says whether
+    the deadline fired."""
+    end = time.monotonic() + timeout_s
+    fired = False
+
+    def _progress():
+        nonlocal fired
+        if time.monotonic() > end:
+            fired = True
+            return 1
+        return 0
+
+    con.set_progress_handler(_progress, 1000)
+    try:
+        yield lambda: fired
+    finally:
+        con.set_progress_handler(None, 0)
+
+
+def _failure(e: sqlite3.Error, timed_out: bool, timeout_s: float, **extra) -> dict:
+    """A failed-query result: a sanitised `error` for the LLM plus `raw_error` for the Trace."""
+    error = _TIMEOUT_GUIDANCE.format(s=timeout_s) if timed_out else sanitize_error(str(e))
+    return {"success": False, "error": error, "raw_error": str(e), **extra}
+
+
 def run_query(
     telemetry_db: Path,
     results_db: Path,
@@ -188,45 +216,71 @@ def run_query(
         return {"success": False, "error": str(e)}
     name = f"rt_{uuid.uuid4().hex[:8]}"
     con = open_connection(telemetry_db, results_db, allowed_tables)
-    deadline = time.monotonic() + timeout_s
-    timed_out = False
-
-    def _progress():
-        nonlocal timed_out
-        if time.monotonic() > deadline:
-            timed_out = True
-            return 1
-        return 0
-
-    executed = None
+    executed = f"CREATE TABLE results.{name} AS SELECT * FROM (\n{select}\n) LIMIT {int(max_rows) + 1}"
     try:
-        con.set_progress_handler(_progress, 1000)
-        executed = f"CREATE TABLE results.{name} AS SELECT * FROM (\n{select}\n) LIMIT {int(max_rows) + 1}"
-        con.execute(executed)
-        con.set_progress_handler(None, 0)
-        con.set_authorizer(None)
-        con.commit()
-        count = con.execute(f"SELECT COUNT(*) FROM results.{name}").fetchone()[0]
-        if count > max_rows:
-            con.execute(f"DROP TABLE results.{name}")
+        with _deadline(con, timeout_s) as timed_out:
+            try:
+                con.execute(executed)
+            except sqlite3.Error as e:
+                return _failure(e, timed_out(), timeout_s, executed_sql=executed)
+        try:
+            con.set_authorizer(None)
             con.commit()
-            return {"success": False, "error": _ROWCAP_GUIDANCE.format(n=max_rows), "executed_sql": executed}
-        cols = [
-            {"name": r[1], "type": r[2] or "ANY"}
-            for r in con.execute(f"PRAGMA results.table_info({name})")
-        ]
-    except sqlite3.Error as e:
-        if timed_out:
-            return {
-                "success": False,
-                "error": _TIMEOUT_GUIDANCE.format(s=timeout_s),
-                "raw_error": str(e),
-                "executed_sql": executed,
-            }
-        return {"success": False, "error": sanitize_error(str(e)), "raw_error": str(e), "executed_sql": executed}
+            count = con.execute(f"SELECT COUNT(*) FROM results.{name}").fetchone()[0]
+            if count > max_rows:
+                con.execute(f"DROP TABLE results.{name}")
+                con.commit()
+                return {"success": False, "error": _ROWCAP_GUIDANCE.format(n=max_rows), "executed_sql": executed}
+            cols = [
+                {"name": r[1], "type": r[2] or "ANY"}
+                for r in con.execute(f"PRAGMA results.table_info({name})")
+            ]
+        except sqlite3.Error as e:
+            return _failure(e, False, timeout_s, executed_sql=executed)
     finally:
         con.close()
     return {"success": True, "result_table": name, "columns": cols, "row_count": count, "executed_sql": executed}
+
+
+_COUNT_GUIDANCE = (
+    "A count query must have the form SELECT COUNT(...) FROM ... (optionally COUNT(...) AS name) "
+    "and return one non-negative integer, e.g. SELECT COUNT(*) FROM flows WHERE ..."
+)
+# The select list must be exactly one bare COUNT(...): no other column, alias trick or arithmetic.
+_COUNT_FORM_RE = re.compile(r"^\s*select\s+count\s*\([^()]*\)\s*(?:as\s+\w+\s+)?from\s", re.I)
+
+
+def run_count_query(
+    telemetry_db: Path,
+    results_db: Path,
+    sql: str,
+    timeout_s: float,
+    allowed_tables: set[str] | None = None,
+) -> dict:
+    """Run a `SELECT COUNT(...) FROM ...` and return the number itself (no Result Table). The one
+    place a telemetry-derived value reaches the LLM, so the select list must be a bare COUNT and
+    the result one non-negative integer. Failures carry `raw_error` like `run_query`."""
+    try:
+        select = validate_select(sql)
+    except QueryRejected as e:
+        return {"success": False, "error": str(e)}
+    if not _COUNT_FORM_RE.match(select):
+        return {"success": False, "error": _COUNT_GUIDANCE}
+    con = open_connection(telemetry_db, results_db, allowed_tables)
+    try:
+        with _deadline(con, timeout_s) as timed_out:
+            try:
+                rows = con.execute(f"SELECT * FROM (\n{select}\n) LIMIT 2").fetchall()
+            except sqlite3.Error as e:
+                return _failure(e, timed_out(), timeout_s)
+    finally:
+        con.close()
+    if len(rows) != 1 or len(rows[0]) != 1:
+        return {"success": False, "error": _COUNT_GUIDANCE}
+    value = rows[0][0]
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return {"success": False, "error": _COUNT_GUIDANCE}
+    return {"success": True, "count": value}
 
 
 def result_table_columns(results_db: Path, name: str) -> list[str] | None:

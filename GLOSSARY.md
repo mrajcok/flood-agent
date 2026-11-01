@@ -52,6 +52,10 @@ _Avoid_: Session, thread
 A declarative chart description written by the LLM that names a Result Table instead of containing data.
 _Avoid_: Chart config, visualization
 
+**Count**:
+The single integer `run_count_query` returns to the LLM from a `SELECT COUNT(...)`. The only telemetry-derived value the LLM sees (ADR 0001); no Result Table is created.
+_Avoid_: Count result
+
 **Trace**:
 The per-turn record of what passed between the Agent and the LLM — prompts, generated SQL, Query Metadata, errors, Chart Specs, cost and timings — shown to the user on demand.
 _Avoid_: Debug log, details

@@ -3,11 +3,11 @@
                async init() {
                  try {
                    const spec = JSON.parse($el.dataset.spec);
-                   const res = await vegaEmbed($refs.target, spec, { actions: false });
+                   const res = await vegaEmbed($refs.target, { ...spec, width: 'container', autosize: { type: 'fit-x', contains: 'padding' } }, { actions: false });
                    this.view = res.view;
                  } catch (e) { this.error = true; }
                },
                destroy() { if (this.view) { this.view.finalize(); this.view = null; } } }">
   <p x-show="error" x-cloak>Could not render chart.</p>
-  <div x-ref="target"></div>
+  <div x-ref="target" style="width:100%"></div>
 </div>

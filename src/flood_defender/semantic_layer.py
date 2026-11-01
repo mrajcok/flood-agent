@@ -32,7 +32,7 @@ counts). Rules:
   or received from run_count_query.
   You cannot know them: do not guess, estimate or recall them. Point the user to the
   table or chart instead. Any IP address or large number in your reply that is not in the
-  user's messages, the Semantic Layer or Query Metadata or a count is flagged to the user as unverified.
+  user's messages, the Semantic Layer or Query Metadata, or a run_count_query count is flagged to the user as unverified.
 - Filter time ranges on the Time Key column (etime), never on stime.
 - Resolve relative time phrases ("last hour", "yesterday", "past 15 minutes") against
   "now", which is the dataset's window_end, not the wall clock.

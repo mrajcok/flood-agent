@@ -17,6 +17,10 @@ def test_returns_the_count(telemetry_db, tmp_path):
     "sql",
     [
         "SELECT bytes FROM flows LIMIT 1",  # not a count
+        "SELECT MAX(dport) AS count FROM flows",  # 'count' only as an alias
+        "SELECT bytes AS count FROM flows LIMIT 1",
+        "SELECT COUNT(*) + MAX(bytes) FROM flows",  # arithmetic mixing in a value
+        "SELECT (SELECT bytes FROM flows LIMIT 1) AS count",
         "SELECT COUNT(*), 1 FROM flows",  # two columns
         "SELECT COUNT(*) FROM flows GROUP BY dport",  # several rows
         "SELECT sip || COUNT(*) FROM flows",  # not an integer
@@ -59,8 +63,13 @@ async def test_failed_count_queries_count_toward_the_retry_limit(make_agent):
     assert "raw_error" not in llm.all_sent_text()
 
 
-def test_chart_template_fills_the_pane_width():
-    from pathlib import Path
 
-    tpl = (Path(__file__).parent.parent / "src/flood_defender/templates/display_chart.html").read_text()
-    assert "width: 'container'" in tpl and "fit-x" in tpl
+async def test_large_count_stated_in_reply_is_not_flagged(make_agent):
+    from conftest import ScriptedLLM, collect, tool_call
+
+    from flood_defender.llm import TextChunk
+
+    cross = "SELECT COUNT(*) FROM " + ", ".join(f"flows t{i}" for i in range(9))  # 3**9 = 19683
+    llm = ScriptedLLM([tool_call("run_count_query", sql=cross)], [TextChunk("There are 19,683 rows.")])
+    events = await collect(await make_agent(llm), "how many?")
+    assert not any(type(e).__name__ == "FlagEvent" for e in events)

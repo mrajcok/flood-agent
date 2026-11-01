@@ -93,7 +93,7 @@ class Settings(BaseSettings):
     )
     chart_row_cap: int = Field(ge=1, description="A chart over a Result Table with more rows than this is refused.")
     max_failed_attempts: int = Field(
-        ge=1, description="Failed run_query attempts allowed per user turn before the Agent gives up."
+        ge=1, description="Failed run_query / run_count_query attempts allowed per user turn before the Agent gives up."
     )
     max_llm_steps: int = Field(
         ge=1, description="LLM calls allowed per user turn (a backstop against a model looping on tool calls)."

@@ -133,3 +133,10 @@ async def test_no_telemetry_value_reaches_the_llm_with_charts(make_agent, teleme
             if m["role"] in ("system", "tool"):
                 for v in values:
                     assert v not in m["content"], v
+
+
+def test_chart_template_fills_the_pane_width():
+    from pathlib import Path
+
+    tpl = (Path(__file__).parent.parent / "src/flood_defender/templates/display_chart.html").read_text()
+    assert "width: 'container'" in tpl and "fit-x" in tpl

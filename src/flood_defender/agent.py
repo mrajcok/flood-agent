@@ -18,6 +18,7 @@ from mcp.types import TextContent
 from flood_defender import flagging, queries
 from flood_defender.llm import LLMClient, LLMError, TextChunk, ToolCallChunk, UsageChunk
 from flood_defender.mcp_connection import McpConnection, Transport, stdio_transport
+from flood_defender.mcp_protocol import QUERY_TOOLS
 from flood_defender.mcp_server import ServerSettings
 from flood_defender.semantic_layer import SemanticLayer
 from flood_defender.store import ConversationStore
@@ -439,8 +440,8 @@ class Agent:
         """Execute one LLM tool call. Returns (content, args, executed_sql, failed 0/1).
 
         Never raises for problems the LLM caused (bad JSON, missing `sql`) or tool failures: it
-        returns an error result the LLM can act on, and a failed run_query counts toward the limit."""
-        is_query = c.name in ("run_query", "run_count_query")
+        returns an error result the LLM can act on, and a failed query tool call counts toward the limit."""
+        is_query = c.name in QUERY_TOOLS
         args: dict = {}
         executed_sql = None
         try:
@@ -518,7 +519,7 @@ class Agent:
     async def _split_query_error(
         self, content: str, args: dict, queue, trace: TraceBuilder | None = None
     ) -> tuple[str, int]:
-        """Strip the raw SQLite error from run_query output before the LLM sees it, and
+        """Strip the raw SQLite error from run_query / run_count_query output before the LLM sees it, and
         emit it (with the sanitised error) as a Trace entry. Returns (content, failed 0/1)."""
         try:
             meta = json.loads(content)

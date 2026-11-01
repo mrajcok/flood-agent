@@ -1,7 +1,8 @@
 """MCP server. Exposes exactly the LLM-facing tools.
 
 No tool here returns rows: `run_query` returns Query Metadata, `run_count_query` returns a
-single count (ADR 0001 exception), `show_table` records a Display definition. Rows reach the browser only through the Agent's internal data path.
+single Count (the ADR 0001 exception), `show_table` records a Display definition. Rows reach the
+browser only through the Agent's internal data path.
 
 `create_server(settings)` builds the server from static `ServerSettings`. In production it runs
 as a stdio subprocess (`python -m flood_defender.mcp_server`) and reads those settings from the

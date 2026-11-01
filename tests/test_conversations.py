@@ -36,7 +36,7 @@ def test_conversation_survives_restart_and_is_listed_in_sidebar(build_agent, web
 
     restarted = web_client(build_agent(ScriptedLLM()))  # new app, same files
     home = restarted.get("/").text
-    assert f'href="/c/{cid}"' in home and "top ports by bytes" in home
+    assert f'href="/c/{cid}"' in home and "Session 1" in home
 
     reopened = restarted.get(f"/c/{cid}").text
     assert "top ports by bytes" in main_pane(reopened) and "Here you go." in reopened
@@ -139,6 +139,50 @@ def test_deleting_a_conversation_removes_it_and_its_result_tables(build_agent, w
 def test_deleting_an_unknown_conversation_is_404(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM()))
     assert client.post("/c/nope/delete").status_code == 404
+
+
+def sidebar_titles(client):
+    return re.findall(r'<a href="/c/[0-9a-f]+"[^>]*>([^<]*)</a>', client.get("/").text)
+
+
+def test_conversations_are_named_session_1_session_2_and_numbers_are_not_reused(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("a")], [TextChunk("b")], [TextChunk("c")])))
+    first, _ = ask(client, "one")
+    ask(client, "two")
+    assert sorted(sidebar_titles(client)) == ["Session 1", "Session 2"]
+
+    client.post(f"/c/{first}/delete")
+    ask(client, "three")
+    assert sorted(sidebar_titles(client)) == ["Session 2", "Session 3"]
+
+
+def test_a_conversation_can_be_renamed(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("a")])))
+    cid, _ = ask(client, "one")
+
+    renamed = client.post(f"/c/{cid}/rename", data={"title": "  SYN flood <b>probe</b> "}, follow_redirects=False)
+
+    assert renamed.status_code == 303 and renamed.headers["location"] == f"/c/{cid}"
+    assert sidebar_titles(client) == ["SYN flood &lt;b&gt;probe&lt;/b&gt;"]
+    restarted = web_client(build_agent(ScriptedLLM()))
+    assert sidebar_titles(restarted) == ["SYN flood &lt;b&gt;probe&lt;/b&gt;"]
+
+
+def test_rename_rejects_a_blank_title_and_an_unknown_conversation(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("a")])))
+    cid, _ = ask(client, "one")
+    assert client.post(f"/c/{cid}/rename", data={"title": "   "}).status_code == 422
+    assert sidebar_titles(client) == ["Session 1"]
+    assert client.post("/c/nope/rename", data={"title": "x"}).status_code == 404
+
+
+def test_each_session_has_a_menu_offering_rename_and_delete(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
+    cid, _ = ask(client, "hello")
+    page = client.get("/").text
+    assert 'aria-label="Session options"' in page
+    assert f'action="/c/{cid}/rename"' in page and "Rename" in page
+    assert f'action="/c/{cid}/delete"' in page and "Delete" in page
 
 
 def test_sidebar_offers_a_delete_control_per_conversation(build_agent, web_client):

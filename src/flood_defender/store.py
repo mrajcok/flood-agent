@@ -11,6 +11,7 @@ Extension points for later tickets:
 """
 
 import json
+import re
 import sqlite3
 import time
 import uuid
@@ -99,13 +100,24 @@ class ConversationStore:
                 )
             return cur.lastrowid or 0
 
-    def create_conversation(self, title: str) -> str:
+    def create_conversation(self, title: str | None = None) -> str:
+        """`title` defaults to "Session N", N being one more than the highest number in use."""
         cid, now = uuid.uuid4().hex, self._now()
+        title = title or self._next_session_title()
         self._write(
             "INSERT INTO conversations(id, title, created_at, last_activity_at) VALUES (?,?,?,?)",
             (cid, title, now, now),
         )
         return cid
+
+    def _next_session_title(self) -> str:
+        with closing(self._connect()) as con:
+            used = [int(m[1]) for (t,) in con.execute("SELECT title FROM conversations")
+                    if (m := re.fullmatch(r"Session (\d+)", t))]
+        return f"Session {max(used, default=0) + 1}"
+
+    def rename_conversation(self, conversation_id: str, title: str) -> None:
+        self._write("UPDATE conversations SET title=? WHERE id=?", (title, conversation_id))
 
     def exists(self, conversation_id: str) -> bool:
         with closing(self._connect()) as con:

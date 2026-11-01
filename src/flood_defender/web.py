@@ -132,6 +132,16 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
             raise HTTPException(404, "unknown conversation")
         return RedirectResponse("/", status_code=303)
 
+    @app.post("/c/{conversation_id}/rename")
+    def rename_conversation(conversation_id: str, title: str = Form("")):
+        if not agent.store.exists(conversation_id):
+            raise HTTPException(404, "unknown conversation")
+        title = title.strip()[:60]
+        if not title:
+            raise HTTPException(422, "a session name cannot be blank")
+        agent.store.rename_conversation(conversation_id, title)
+        return RedirectResponse(f"/c/{conversation_id}", status_code=303)
+
     @app.post("/chat", response_class=HTMLResponse)
     def chat(request: Request, message: str = Form(...), conversation_id: str = Form("")):
         if conversation_id:
@@ -144,7 +154,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
         turn_id = uuid.uuid4().hex
         pending[turn_id] = (conversation, message)
         if conversation.id is None:  # persist now so the sidebar and form can reference it
-            conversation.id = agent.store.create_conversation(message[:60])
+            conversation.id = agent.store.create_conversation()
         return TEMPLATES.TemplateResponse(
             request, "turn.html",
             {"turn_id": turn_id, "message": message, **sidebar(conversation.id)},

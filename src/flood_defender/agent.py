@@ -358,7 +358,7 @@ class Agent:
     async def _run(self, conversation: Conversation, user_message: str, queue: asyncio.Queue):
         self.sweep_expired()
         if conversation.id is None:
-            conversation.id = self.store.create_conversation(user_message[:60])
+            conversation.id = self.store.create_conversation()
         turn_id = self.store.start_turn(conversation.id, user_message)
         self._record(conversation, turn_id, {"role": "user", "content": user_message})
         trace = TraceBuilder(self.config.model)

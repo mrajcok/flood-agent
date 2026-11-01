@@ -2,8 +2,19 @@
   <a class="new" href="/">+ New conversation</a>
   <ul>
     {% for c in conversations %}
-    <li><a href="/c/{{ c.id }}"{% if c.id == current_id %} class="current"{% endif %}>{{ c.title }}</a>
-      <form class="delete" method="post" action="/c/{{ c.id }}/delete" onsubmit="return confirm('Delete this conversation and its results?')"><button type="submit" title="Delete conversation" aria-label="Delete conversation">&times;</button></form></li>
+    <li x-data="{ open: false }" data-title="{{ c.title }}"><a href="/c/{{ c.id }}"{% if c.id == current_id %} class="current"{% endif %}>{{ c.title }}</a>
+      <div class="menu" @click.outside="open = false">
+        <button type="button" class="dots" aria-label="Session options" aria-haspopup="menu" :aria-expanded="open" @click="open = !open">&hellip;</button>
+        <div class="popup" role="menu" x-show="open" x-cloak>
+          <form method="post" action="/c/{{ c.id }}/rename" @submit="const t = prompt('Rename session', $el.closest('li').dataset.title); if (t === null || !t.trim()) { $event.preventDefault(); } else { $refs.title.value = t; }">
+            <input type="hidden" name="title" x-ref="title"><button type="submit" role="menuitem">Rename</button>
+          </form>
+          <form method="post" action="/c/{{ c.id }}/delete" @submit="if (!confirm('Delete this session and its results?')) $event.preventDefault()">
+            <button type="submit" role="menuitem">Delete</button>
+          </form>
+        </div>
+      </div>
+    </li>
     {% endfor %}
   </ul>
 </aside>

@@ -21,17 +21,12 @@
   prompt: How many flows are there in total?
   steps:
     - tool_calls:
-        - name: run_query
+        - name: run_count_query
           args:
-            sql: SELECT COUNT(*) AS flow_count FROM flows
-            title: Total flows
-    - tool_calls:
-        - name: show_table
-          args:
-            result_table: "{result_table}"
+            sql: SELECT COUNT(*) FROM flows
     - text: "Here is the total number of flows."
   expect:
-    displays: [table]
+    displays: []
 
 - id: top-destinations
   prompt: Which 10 destination IPs received the most bytes?
@@ -165,17 +160,12 @@
             title: Total flows
     - text: "That had a typo; retrying."
       tool_calls:
-        - name: run_query
+        - name: run_count_query
           args:
-            sql: SELECT COUNT(*) AS flow_count FROM flows
-            title: Total flows
-    - tool_calls:
-        - name: show_table
-          args:
-            result_table: "{result_table}"
+            sql: SELECT COUNT(*) FROM flows
     - text: "Here is the total number of flows."
   expect:
-    displays: [table]
+    displays: []
     failed_tool_calls: 1
 
 - id: too-many-rows

@@ -79,9 +79,9 @@ async def test_a_failed_query_without_telemetry_data_says_so_instead_of_asking_f
     with sqlite3.connect(telemetry_db) as con:  # this test's own copy: as if the data was never generated
         con.execute("DROP TABLE flows")
     agent = await make_agent(fake_client(), model="fake")
-    flow_count = next(c for c in CANNED if c.id == "flow-count")
+    top_dest = next(c for c in CANNED if c.id == "top-destinations")
 
-    events = await collect(agent, flow_count.prompt)
+    events = await collect(agent, top_dest.prompt)
 
     text = text_of(events)
     assert "run an earlier prompt" not in text
@@ -94,13 +94,13 @@ async def test_a_failed_query_after_an_earlier_success_does_not_show_the_earlier
     make_agent, telemetry_db
 ):
     agent = await make_agent(fake_client(), model="fake")
-    flow_count = next(c for c in CANNED if c.id == "flow-count")
+    top_dest = next(c for c in CANNED if c.id == "top-destinations")
     conversation = Conversation()
-    await collect(agent, flow_count.prompt, conversation)
+    await collect(agent, top_dest.prompt, conversation)
     with sqlite3.connect(telemetry_db) as con:
         con.execute("DROP TABLE flows")
 
-    events = await collect(agent, flow_count.prompt, conversation)
+    events = await collect(agent, top_dest.prompt, conversation)
 
     assert "query failed" in text_of(events)
     assert not [e for e in events if isinstance(e, DisplayEvent)]
@@ -261,3 +261,16 @@ def test_picker_marks_prompts_that_fail_on_purpose(build_agent, web_client):
 
     assert all("fails on purpose" in row(c) for c in marked)
     assert not any("fails on purpose" in row(c) for c in CANNED if not c.fails_on_purpose)
+
+
+async def test_the_total_flow_count_prompt_uses_run_count_query_and_makes_no_result_table(make_agent):
+    canned = next(c for c in CANNED if c.id == "flow-count")
+    agent = await make_agent(fake_client(), model="fake")
+
+    events = await collect(agent, canned.prompt)
+
+    trace = next(e.trace for e in events if isinstance(e, TraceReady))
+    calls = [e for e in trace["entries"] if e["kind"] == "tool_call"]
+    assert [c["name"] for c in calls] == ["run_count_query"]
+    assert not [e for e in trace["entries"] if e["kind"] == "result_table"]
+    assert not [e for e in events if isinstance(e, DisplayEvent)]

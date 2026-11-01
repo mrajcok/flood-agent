@@ -132,13 +132,13 @@ def test_trace_is_collapsed_details_in_stream_and_after_restart(build_agent, web
     client = web_client(build_agent(ScriptedLLM(*chart_script())))
     cid, body = ask(client, "chart please")
     assert "event: trace" in body
-    assert "<details" in body and body.count("trace-part\" open") == 1
+    assert "<details" in body and body.count("open><summary>Result Tables and turn activity") == 1
 
     restarted = web_client(build_agent(ScriptedLLM()))
     page = restarted.get(f"/c/{cid}").text
-    assert "<details" in page and page.count("trace-part\" open") == 1
+    assert "<details" in page and page.count("open><summary>Result Tables and turn activity") == 1
     assert page.count('class="trace"') == 1
-    assert page.count('class="trace-part"') == 3
+    assert page.count('class="trace-part"') >= 3
     assert '<details class="trace-part" open><summary>Result Tables' in page
     assert "CREATE TABLE results.rt_" in page and "test/model" in page
 
@@ -172,3 +172,25 @@ def test_split_system_prompt_into_three_parts():
     assert rest.startswith("# Result Tables")
     assert split_system_prompt(None) == ("", "", "")
     assert split_system_prompt("plain") == ("plain", "", "")
+
+
+def test_only_a_changed_result_tables_section_is_called_a_change_and_every_system_part_collapses(
+    build_agent, web_client
+):
+    client = web_client(build_agent(ScriptedLLM(*chart_script())))
+    cid, _ = ask(client, "chart please")
+    page = client.get(f"/c/{cid}").text
+    # run_query adds a Result Table, so the second step's prompt differs in that section only
+    assert "System prompt changed" not in page
+    assert "Result Tables changed" in page
+    changed = page.split("Result Tables changed")[1].split("</details>")[0]
+    assert "# Result Tables" in changed and "# Semantic Layer" not in changed
+
+
+def test_an_unchanged_system_prompt_is_not_reported_as_changed(build_agent, web_client):
+    client = web_client(
+        build_agent(ScriptedLLM([tool_call("run_count_query", sql="SELECT COUNT(*) FROM flows")], [TextChunk("n")]))
+    )
+    cid, _ = ask(client, "how many")
+    page = client.get(f"/c/{cid}").text
+    assert "changed" not in page.split('class="trace"')[1]

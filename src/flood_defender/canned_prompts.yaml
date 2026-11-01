@@ -45,6 +45,22 @@
   expect:
     displays: [table]
 
+- id: many-rows
+  prompt: Which 120 destination ports received the most bytes?
+  steps:
+    - tool_calls:
+        - name: run_query
+          args:
+            sql: SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC LIMIT 120
+            title: Top 120 destination ports by bytes
+    - tool_calls:
+        - name: show_table
+          args:
+            result_table: "{result_table}"
+    - text: "Here are the top 120 destination ports. The table has more than one page of rows, so you can try paging and sorting."
+  expect:
+    displays: [table]
+
 - id: bytes-over-time
   prompt: Chart total bytes per hour over time.
   steps:

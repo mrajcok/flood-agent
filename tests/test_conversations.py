@@ -200,3 +200,12 @@ def test_sidebar_offers_a_delete_control_per_conversation(build_agent, web_clien
     client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
     cid, _ = ask(client, "hello")
     assert f'action="/c/{cid}/delete"' in client.get("/").text
+
+
+def test_a_submitted_prompt_shows_a_thinking_spinner_until_the_first_event_arrives(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
+    posted = client.post("/chat", data={"message": "hello", "conversation_id": ""}).text
+    holder = re.search(r'<div sse-swap="([^"]*)" hx-swap="delete">\s*<span class="thinking" role="status"', posted)
+    assert holder, "spinner removes itself when it receives an event"
+    # whichever stream event arrives first removes it, including a stream that only ends
+    assert set(holder[1].split(",")) == {"text", "flag", "display", "trace", "end"}

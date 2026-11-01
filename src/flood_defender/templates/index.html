@@ -40,6 +40,9 @@
     .trace summary { cursor: pointer; }
     .trace pre { white-space: pre-wrap; word-break: break-word; background: #f6f6f6; padding: .4rem; margin: .2rem 0; }
     .trace h4 { margin: .6rem 0 .2rem; }
+    .thinking { display: inline-block; width: 1rem; height: 1rem; margin: .5rem 0; border: 2px solid #c8d4ea; border-top-color: #4a6fd3; border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .thinking { animation-duration: 3s; } }
     form { display: flex; gap: .5rem; margin-top: 1rem; }
     .badge { font-size: .5em; vertical-align: middle; padding: .15rem .5rem; background: #fde68a; border-radius: .25rem; }
     .canned { margin-top: 1rem; font-size: .9rem; }

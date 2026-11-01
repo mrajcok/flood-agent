@@ -2,6 +2,7 @@
 {% set oob = true %}{% include "sidebar.html" %}
 <div class="user">{{ message }}</div>
 <div hx-ext="sse" sse-connect="/chat/stream/{{ turn_id }}" sse-close="end">
+  <div sse-swap="text,flag,display,trace,end" hx-swap="delete"><span class="thinking" role="status" aria-label="Thinking"></span></div>
   <div class="reply" sse-swap="text" hx-swap="beforeend"></div>
   <div sse-swap="flag" hx-swap="beforeend"></div>
   <div sse-swap="display" hx-swap="beforeend"></div>

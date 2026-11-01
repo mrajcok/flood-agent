@@ -161,3 +161,9 @@ def test_format_js_url_changes_with_the_file_so_browsers_never_run_a_stale_copy(
     client = web_client(build_agent(ScriptedLLM()))
     page = client.get("/").text
     assert f'src="/static/format.js?v={web.static_version("format.js")}"' in page
+
+
+def test_row_keys_change_on_every_load_so_sorting_and_paging_redraw_the_cells(build_agent, web_client):
+    # Alpine reused the old cells (and showed the previous page's values) when row keys stayed 0..N.
+    template = (Path(__file__).parent.parent / "src/flood_defender/templates/display_table.html").read_text()
+    assert """:key="loads + '-' + i\"""" in template and "this.loads++" in template

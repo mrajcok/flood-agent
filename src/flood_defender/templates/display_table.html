@@ -1,6 +1,6 @@
 <div class="display" data-rows-url="{{ rows_url }}" data-csv-url="{{ csv_url }}"
      x-data="{ columns: [], rows: [], formats: {}, total: 0, page: 1, pageSize: 20,
-               sort: null, dir: 'asc', loaded: false, error: false, expired: false,
+               sort: null, dir: 'asc', loads: 0, loaded: false, error: false, expired: false,
                async load() {
                  try {
                    const q = new URLSearchParams({ page: this.page, page_size: this.pageSize });
@@ -10,7 +10,7 @@
                    if (!r.ok) throw new Error(r.status);
                    const d = await r.json();
                    this.columns = d.columns; this.rows = d.rows; this.formats = d.formats;
-                   this.total = d.total; this.loaded = true; this.error = false;
+                   this.total = d.total; this.loads++; this.loaded = true; this.error = false;
                  } catch (e) { this.error = true; }
                },
                init() { this.load(); },
@@ -29,7 +29,7 @@
   <div x-show="loaded" x-cloak>
     <table>
       <thead><tr><template x-for="(c, j) in columns" :key="c"><th :class="{ num: numeric(j) }" @click="sortBy(c)" style="cursor:pointer" :aria-sort="sort === c ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'"><span x-text="c"></span><span x-text="sort === c ? (dir === 'asc' ? ' ▲' : ' ▼') : ''"></span></th></template></tr></thead>
-      <tbody><template x-for="(row, i) in rows" :key="i"><tr><template x-for="(v, j) in row" :key="j"><td :class="{ num: numeric(j) }" x-text="fmt(v, columns[j])"></td></template></tr></template></tbody>
+      <tbody><template x-for="(row, i) in rows" :key="loads + '-' + i"><tr><template x-for="(v, j) in row" :key="j"><td :class="{ num: numeric(j) }" x-text="fmt(v, columns[j])"></td></template></tr></template></tbody>
     </table>
     <div class="pager">
       <button type="button" @click="go(page - 1)" :disabled="page <= 1">Prev</button>

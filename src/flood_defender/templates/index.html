@@ -14,6 +14,7 @@
   <style>
     body { font-family: system-ui, sans-serif; max-width: 60rem; margin: 0 auto; padding: 1rem; }
     .user { margin: 1.25rem 0 .45rem; padding: .6rem .9rem; background: #e8f0fe; border-radius: .75rem; white-space: pre-wrap; }
+    summary.user { cursor: pointer; }
     .reply { white-space: pre-wrap; }
     .layout { display: flex; gap: 1.5rem; align-items: flex-start; }
     aside { width: 14rem; flex: none; }
@@ -69,8 +70,9 @@
   {% include "sidebar.html" %}
   <main>
   <div id="chat">
+    {% set turn = namespace(open=false) %}
     {% for item in items %}
-      {% if item.type == "user" %}<div class="user">{{ item.text }}</div>
+      {% if item.type == "user" %}{% if turn.open %}</details>{% endif %}<details class="turn" open><summary class="user">{{ item.text }}</summary>{% set turn.open = true %}
       {% elif item.type == "assistant" %}<div class="reply">{{ item.text }}</div>
       {% elif item.type == "trace" %}{% if item.flags %}{% with flags=item.flags %}{% include "flag_note.html" %}{% endwith %}{% endif %}{% with trace=item.trace %}{% include "trace.html" %}{% endwith %}
       {% elif item.type == "display" and item.expired %}<p class="expired"><em>expired</em> (this result has been deleted)</p>
@@ -80,10 +82,11 @@
         {% with spec_json=item.spec_json %}{% include "display_chart.html" %}{% endwith %}
       {% endif %}
     {% endfor %}
+    {% if turn.open %}</details>{% endif %}
   </div>
   {% if fake_mode %}
   <div class="canned">
-    <strong>Canned Prompts</strong>
+    <strong>You can only use these canned prompts with Fake Mode</strong>
     <ul>
     {% for c in picker %}
       {{ entry(c) }}

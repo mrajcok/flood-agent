@@ -62,14 +62,14 @@ async def test_every_canned_prompt_produces_its_declared_outcome(canned, make_ag
     assert not any(v in call for call in sent for v in values)
 
 
-async def test_an_unmatched_message_gets_a_reply_naming_fake_mode_and_listing_prompts(make_agent):
+async def test_an_unmatched_message_gets_a_reply_naming_fake_mode_without_relisting_the_prompts(make_agent):
     agent = await make_agent(fake_client(), model="fake")
 
     events = await collect(agent, "what is the weather?")
 
     text = text_of(events)
     assert "Fake Mode" in text
-    assert all(c.prompt in text for c in CANNED)
+    assert not any(c.prompt in text for c in CANNED)  # the page already lists them above the textbox
     assert not [e for e in events if isinstance(e, DisplayEvent)]
 
 
@@ -132,6 +132,7 @@ def test_fake_mode_page_shows_badge_and_clickable_canned_prompts(build_agent, we
     html = client.get("/").text
 
     assert "Fake Mode — no LLM" in html
+    assert "You can only use these canned prompts with Fake Mode" in html
     assert CANNED[0].prompt in html
     created = client.post("/chat", data={"message": CANNED[0].prompt}).text
     cid = created.split('name="conversation_id" value="')[1].split('"')[0]

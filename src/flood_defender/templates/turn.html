@@ -1,6 +1,6 @@
 <input type="hidden" id="conversation_id" name="conversation_id" value="{{ current_id }}" hx-swap-oob="true">
 {% set oob = true %}{% include "sidebar.html" %}
-<div class="user">{{ message }}</div>
+<details class="turn" open><summary class="user">{{ message }}</summary>
 <div hx-ext="sse" sse-connect="/chat/stream/{{ turn_id }}" sse-close="end">
   <div sse-swap="text,flag,display,trace,end" hx-swap="delete"><span class="thinking" role="status" aria-label="Thinking"></span></div>
   <div class="reply" sse-swap="text" hx-swap="beforeend"></div>
@@ -8,3 +8,4 @@
   <div sse-swap="display" hx-swap="beforeend"></div>
   <div sse-swap="trace" hx-swap="beforeend"></div>
 </div>
+</details>

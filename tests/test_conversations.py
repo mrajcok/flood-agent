@@ -209,3 +209,19 @@ def test_a_submitted_prompt_shows_a_thinking_spinner_until_the_first_event_arriv
     assert holder, "spinner removes itself when it receives an event"
     # whichever stream event arrives first removes it, including a stream that only ends
     assert set(holder[1].split(",")) == {"text", "flag", "display", "trace", "end"}
+
+
+def test_each_prompt_and_its_response_collapse_under_the_prompt(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("reply-alpha")], [TextChunk("reply-beta")])))
+    cid, _ = ask(client, "first question")
+    live = client.post("/chat", data={"message": "second question", "conversation_id": cid}).text
+    ask_stream = live.split('sse-connect="')[1].split('"')[0]
+    client.get(ask_stream)
+    assert '<details class="turn" open><summary class="user">second question</summary>' in live
+
+    page = main_pane(client.get(f"/c/{cid}").text)
+    turns = page.split('<details class="turn" open>')[1:]
+    assert len(turns) == 2
+    assert turns[0].startswith('<summary class="user">first question</summary>') and "reply-alpha" in turns[0]
+    assert "reply-beta" not in turns[0] and "second question" not in turns[0]
+    assert turns[1].startswith('<summary class="user">second question</summary>') and "reply-beta" in turns[1]

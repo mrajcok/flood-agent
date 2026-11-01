@@ -41,7 +41,7 @@ The page shows a "Fake Mode — no LLM" badge and a list of Canned Prompts above
 input; click one to send it. Follow-ups are indented under the prompt they build on (run the
 parent first in the same Conversation), and entries marked "fails on purpose" exercise error
 paths (bad SQL, row and chart caps, malformed tool calls, an LLM stream error). Any other
-message gets a reply listing the Canned Prompts. Traces show the model as `fake` and $0.00.
+message gets a short reply pointing to the Canned Prompts shown above the message box. Traces show the model as `fake` and $0.00.
 
 To keep fake Conversations out of your real ones, also set `APP_DB=data/fake.db`. Canned
 Prompts live in `src/flood_defender/canned_prompts.yaml` (format in its header); `pytest`

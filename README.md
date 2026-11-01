@@ -23,6 +23,10 @@ cp .env.example .env     # then set OPENROUTER_API_KEY in .env (never commit it)
 uv run python -m flood_defender                    # http://127.0.0.1:8000
 ```
 
+To restart automatically when the code, templates, Semantic Layer or `.env` change, run
+`uv run flood-defender-dev` instead (same settings, e.g. `LLM_BACKEND=fake uv run flood-defender-dev`).
+Reload the page after a restart.
+
 ### Fake Mode (no LLM, no key)
 
 Fake Mode replaces only the LLM with a scripted stand-in, so you can try the MCP tools, table

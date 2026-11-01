@@ -217,14 +217,14 @@ def test_each_prompt_and_its_response_collapse_under_the_prompt(build_agent, web
     live = client.post("/chat", data={"message": "second question", "conversation_id": cid}).text
     ask_stream = live.split('sse-connect="')[1].split('"')[0]
     client.get(ask_stream)
-    assert '<details class="turn" open><summary class="user">second question</summary>' in live
+    assert 'class="turn" open' in live and '<summary class="user"><span>second question</span>' in live
 
     page = main_pane(client.get(f"/c/{cid}").text)
     turns = page.split('<details class="turn" open>')[1:]
     assert len(turns) == 2
-    assert turns[0].startswith('<summary class="user">first question</summary>') and "reply-alpha" in turns[0]
+    assert turns[0].startswith('<summary class="user"><span>first question</span>') and "reply-alpha" in turns[0]
     assert "reply-beta" not in turns[0] and "second question" not in turns[0]
-    assert turns[1].startswith('<summary class="user">second question</summary>') and "reply-beta" in turns[1]
+    assert turns[1].startswith('<summary class="user"><span>second question</span>') and "reply-beta" in turns[1]
 
 
 def test_the_open_session_is_highlighted_in_the_sidebar(build_agent, web_client):
@@ -241,3 +241,62 @@ def test_the_open_session_is_highlighted_in_the_sidebar(build_agent, web_client)
     # the sidebar sent after a prompt is submitted marks that session too
     posted = client.post("/chat", data={"message": "three", "conversation_id": first}).text
     assert current(posted) == [first]
+
+
+def turn_ids(page: str) -> list[str]:
+    return re.findall(r'action="/c/[0-9a-f]+/turns/(\d+)/delete"', page)
+
+
+def test_deleting_a_turn_removes_its_prompt_answer_and_result_tables_only(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM(*table_script("reply-alpha"), [TextChunk("reply-beta")])))
+    cid, _ = ask(client, "first question")
+    ask(client, "second question", cid)
+    table = re.search(r"/api/results/(rt_\w+)/rows", client.get(f"/c/{cid}").text).group(1)
+    first, second = turn_ids(main_pane(client.get(f"/c/{cid}").text))
+
+    deleted = client.post(f"/c/{cid}/turns/{first}/delete", follow_redirects=False)
+
+    assert deleted.status_code == 303 and deleted.headers["location"] == f"/c/{cid}"
+    page = main_pane(client.get(f"/c/{cid}").text)
+    assert "<span>first question</span>" not in page and "reply-alpha" not in page
+    assert "<span>second question</span>" in page and "reply-beta" in page
+    assert turn_ids(page) == [second]
+    assert client.get(f"/api/results/{table}/rows").status_code != 200
+
+
+def test_deleting_a_later_turn_leaves_an_earlier_turns_result_table_readable(
+    build_agent, web_client
+):
+    later = [[tool_call("run_query", sql="SELECT dport FROM flows", title="t")],
+               [TextChunk("done")]]
+    client = web_client(build_agent(ScriptedLLM(*table_script("one"), *later)))
+    cid, _ = ask(client, "first question")
+    ask(client, "second question", cid)
+    first, second = turn_ids(main_pane(client.get(f"/c/{cid}").text))
+    first_table = re.search(r"/api/results/(rt_\w+)/rows", client.get(f"/c/{cid}").text).group(1)
+
+    client.post(f"/c/{cid}/turns/{second}/delete")
+
+    assert client.get(f"/api/results/{first_table}/rows").status_code == 200  # created by the first turn
+
+
+def test_deleting_a_turn_rejects_unknown_and_foreign_turns(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("a")], [TextChunk("b")])))
+    one, _ = ask(client, "one")
+    two, _ = ask(client, "two")
+    (turn_in_one,) = turn_ids(client.get(f"/c/{one}").text)
+    assert client.post(f"/c/{one}/turns/9999/delete").status_code == 404
+    assert client.post(f"/c/{two}/turns/{turn_in_one}/delete").status_code == 404
+    assert client.post("/c/nope/turns/1/delete").status_code == 404
+    assert "one" in client.get(f"/c/{one}").text
+
+
+def test_each_prompt_has_an_x_with_a_confirmation_both_live_and_on_reopen(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
+    cid, body = ask(client, "hello")
+    assert "event: turn" in body and "/turns/" in body  # the live turn gets its x once its id is known
+
+    page = main_pane(client.get(f"/c/{cid}").text)
+    summary = page.split("<summary")[1].split("</summary>")[0]
+    assert "hello" in summary and 'action="/c/' in summary and "&times;" in summary
+    assert "confirm(" in summary

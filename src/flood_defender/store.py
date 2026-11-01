@@ -141,6 +141,27 @@ class ConversationStore:
             con.execute("DELETE FROM conversations WHERE id=?", (conversation_id,))
         return names
 
+    def delete_turn(self, conversation_id: str, turn_id: int) -> list[str]:
+        """Remove one prompt/answer exchange; returns the Result Tables it created (now expired).
+
+        A Result Table belongs to the earliest turn whose messages mention it, so a later turn
+        that merely queried it does not own it. Displays elsewhere that show a deleted table
+        render as expired."""
+        with closing(self._connect()) as con, con:
+            if con.execute("SELECT 1 FROM turns WHERE id=? AND conversation_id=?", (turn_id, conversation_id)).fetchone() is None:
+                raise KeyError(turn_id)
+            bodies = con.execute(
+                "SELECT turn_id, body FROM messages WHERE conversation_id=? ORDER BY id", (conversation_id,)
+            ).fetchall()
+            tables = [r[0] for r in con.execute(
+                "SELECT name FROM result_tables WHERE conversation_id=? AND expired=0", (conversation_id,))]
+            owned = [n for n in tables if next((b["turn_id"] for b in bodies if n in b["body"]), None) == turn_id]
+            con.executemany("UPDATE result_tables SET expired=1 WHERE name=?", [(n,) for n in owned])
+            for table in ("displays", "messages"):
+                con.execute(f"DELETE FROM {table} WHERE turn_id=?", (turn_id,))
+            con.execute("DELETE FROM turns WHERE id=?", (turn_id,))
+        return owned
+
     def start_turn(self, conversation_id: str, user_message: str) -> int:
         return self._write(
             "INSERT INTO turns(conversation_id, user_message, created_at) VALUES (?,?,?)",
@@ -250,7 +271,7 @@ class ConversationStore:
         """
         with closing(self._connect()) as con:
             msgs = con.execute(
-                "SELECT id, body FROM messages WHERE conversation_id=? ORDER BY id", (conversation_id,)
+                "SELECT id, turn_id, body FROM messages WHERE conversation_id=? ORDER BY id", (conversation_id,)
             ).fetchall()
             displays = con.execute(
                 "SELECT id, after_message_id, kind, result_table, definition FROM displays "
@@ -264,7 +285,7 @@ class ConversationStore:
         trace_after = {last_of_turn[t]: json.loads(b) for t, b in traces.items() if t in last_of_turn}
         out: list[dict] = []
         for m in msgs:
-            out.append({"type": "message", "message": json.loads(m["body"])})
+            out.append({"type": "message", "turn_id": m["turn_id"], "message": json.loads(m["body"])})
             for d in displays:
                 if d["after_message_id"] == m["id"]:
                     out.append({"type": "display", "kind": d["kind"], "result_table": d["result_table"],

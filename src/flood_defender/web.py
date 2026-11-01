@@ -108,7 +108,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
             else:
                 m = item["message"]
                 if m["role"] in ("user", "assistant") and m.get("content"):
-                    items.append({"type": m["role"], "text": m["content"]})
+                    items.append({"type": m["role"], "text": m["content"], "turn_id": item["turn_id"]})
         return items
 
     @app.get("/", response_class=HTMLResponse)
@@ -131,6 +131,14 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
         except KeyError:
             raise HTTPException(404, "unknown conversation")
         return RedirectResponse("/", status_code=303)
+
+    @app.post("/c/{conversation_id}/turns/{turn_id}/delete")
+    def delete_turn(conversation_id: str, turn_id: int):
+        try:
+            agent.delete_turn(conversation_id, turn_id)
+        except KeyError:
+            raise HTTPException(404, "unknown turn")
+        return RedirectResponse(f"/c/{conversation_id}", status_code=303)
 
     @app.post("/c/{conversation_id}/rename")
     def rename_conversation(conversation_id: str, title: str = Form("")):
@@ -188,6 +196,9 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
                     elif isinstance(ev, FlagEvent):
                         yield _sse("flag", TEMPLATES.get_template("flag_note.html").render(flags=ev.items))
                     elif isinstance(ev, TraceReady):
+                        if ev.turn_id is not None and conversation.id:
+                            yield _sse("turn", TEMPLATES.get_template("turn_delete.html").render(
+                                conversation_id=conversation.id, turn_id=ev.turn_id))
                         yield _sse("trace", TEMPLATES.get_template("trace.html").render(trace=ev.trace))
                     elif isinstance(ev, TurnEnd):
                         break

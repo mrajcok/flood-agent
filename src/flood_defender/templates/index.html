@@ -14,7 +14,11 @@
   <style>
     body { font-family: system-ui, sans-serif; max-width: 60rem; margin: 0 auto; padding: 1rem; }
     .user { margin: 1.25rem 0 .45rem; padding: .6rem .9rem; background: #e8f0fe; border-radius: .75rem; white-space: pre-wrap; }
-    summary.user { cursor: pointer; }
+    summary.user { cursor: pointer; display: flex; justify-content: space-between; align-items: flex-start; gap: .75rem; }
+    summary.user::marker { content: none; }
+    .turn-actions form, .turn-actions { margin: 0; display: block; }
+    .turn-delete button { background: none; border: 0; color: #667; cursor: pointer; font-size: 1.1rem; line-height: 1; padding: 0 .2rem; }
+    .turn-delete button:hover { color: #a00; }
     .reply { white-space: pre-wrap; }
     .layout { display: flex; gap: 1.5rem; align-items: flex-start; }
     aside { width: 14rem; flex: none; }
@@ -73,7 +77,7 @@
   <div id="chat">
     {% set turn = namespace(open=false) %}
     {% for item in items %}
-      {% if item.type == "user" %}{% if turn.open %}</details>{% endif %}<details class="turn" open><summary class="user">{{ item.text }}</summary>{% set turn.open = true %}
+      {% if item.type == "user" %}{% if turn.open %}</details>{% endif %}<details class="turn" open><summary class="user"><span>{{ item.text }}</span><span class="turn-actions">{% if item.turn_id %}{% with conversation_id=current_id, turn_id=item.turn_id %}{% include "turn_delete.html" %}{% endwith %}{% endif %}</span></summary>{% set turn.open = true %}
       {% elif item.type == "assistant" %}<div class="reply">{{ item.text }}</div>
       {% elif item.type == "trace" %}{% if item.flags %}{% with flags=item.flags %}{% include "flag_note.html" %}{% endwith %}{% endif %}{% with trace=item.trace %}{% include "trace.html" %}{% endwith %}
       {% elif item.type == "display" and item.expired %}<p class="expired"><em>expired</em> (this result has been deleted)</p>

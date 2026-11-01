@@ -85,6 +85,7 @@ class TraceReady:
     """The finished Trace for the turn (already persisted); for the UI only, never for the LLM."""
 
     trace: dict
+    turn_id: int | None = None
 
 
 @dataclass
@@ -264,6 +265,10 @@ class Agent:
             raise KeyError(conversation_id)
         self._drop_result_tables(self.store.delete_conversation(conversation_id))
 
+    def delete_turn(self, conversation_id: str, turn_id: int) -> None:
+        """Delete one prompt/answer exchange and the Result Tables it created (KeyError if unknown)."""
+        self._drop_result_tables(self.store.delete_turn(conversation_id, turn_id))
+
     def _drop_result_tables(self, names: list[str]) -> None:
         names = [n for n in names if queries.RESULT_TABLE_RE.match(n)]
         if not names or not self.config.results_db.exists():
@@ -371,7 +376,7 @@ class Agent:
             await self._fail_turn(conversation, turn_id, trace, queue, e)
         finished = trace.finish()
         self.store.save_trace(turn_id, finished)
-        await queue.put(TraceReady(finished))
+        await queue.put(TraceReady(finished, turn_id))
 
     async def _fail_turn(self, conversation, turn_id, trace: TraceBuilder, queue, error: BaseException) -> None:
         """A turn failed partway: tell the user, record it in the Trace and in the history."""

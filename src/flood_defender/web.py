@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -114,6 +114,14 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
             request, "index.html",
             {**sidebar(conversation_id), "items": history(conversation_id), "current_id": conversation_id},
         )
+
+    @app.post("/c/{conversation_id}/delete")
+    def delete_conversation(conversation_id: str):
+        try:
+            agent.delete_conversation(conversation_id)
+        except KeyError:
+            raise HTTPException(404, "unknown conversation")
+        return RedirectResponse("/", status_code=303)
 
     @app.post("/chat", response_class=HTMLResponse)
     def chat(request: Request, message: str = Form(...), conversation_id: str = Form("")):

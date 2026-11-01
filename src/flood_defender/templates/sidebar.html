@@ -2,7 +2,8 @@
   <a class="new" href="/">+ New conversation</a>
   <ul>
     {% for c in conversations %}
-    <li><a href="/c/{{ c.id }}"{% if c.id == current_id %} class="current"{% endif %}>{{ c.title }}</a></li>
+    <li><a href="/c/{{ c.id }}"{% if c.id == current_id %} class="current"{% endif %}>{{ c.title }}</a>
+      <form class="delete" method="post" action="/c/{{ c.id }}/delete" onsubmit="return confirm('Delete this conversation and its results?')"><button type="submit" title="Delete conversation" aria-label="Delete conversation">&times;</button></form></li>
     {% endfor %}
   </ul>
 </aside>

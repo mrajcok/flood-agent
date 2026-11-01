@@ -114,3 +114,34 @@ async def test_agent_cannot_display_another_conversations_result_table(make_agen
 
     reopened = other.open_conversation(first.id)
     assert [m["role"] for m in reopened.messages][0] == "user" and len(reopened.messages) == len(first.messages)
+
+
+def test_deleting_a_conversation_removes_it_and_its_result_tables(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM(*table_script(), [TextChunk("other")])))
+    cid, body = ask(client, "top ports")
+    other, _ = ask(client, "something else")
+    table = re.search(r"/api/results/(rt_\w+)/rows", client.get(f"/c/{cid}").text).group(1)
+    assert client.get(f"/api/results/{table}/rows").status_code == 200
+
+    deleted = client.post(f"/c/{cid}/delete", follow_redirects=False)
+    assert deleted.status_code == 303 and deleted.headers["location"] == "/"
+
+    assert client.get(f"/c/{cid}").status_code == 404
+    home = client.get("/").text
+    assert f'href="/c/{cid}"' not in home and f'href="/c/{other}"' in home
+    assert client.get(f"/api/results/{table}/rows").status_code != 200
+    assert client.get(f"/c/{other}").status_code == 200
+
+    restarted = web_client(build_agent(ScriptedLLM()))
+    assert f'href="/c/{cid}"' not in restarted.get("/").text
+
+
+def test_deleting_an_unknown_conversation_is_404(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM()))
+    assert client.post("/c/nope/delete").status_code == 404
+
+
+def test_sidebar_offers_a_delete_control_per_conversation(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
+    cid, _ = ask(client, "hello")
+    assert f'action="/c/{cid}/delete"' in client.get("/").text

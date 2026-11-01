@@ -258,6 +258,24 @@ class Agent:
             raise KeyError(conversation_id)
         return Conversation(conversation_id, repair_history(self.store.messages(conversation_id)))
 
+    def delete_conversation(self, conversation_id: str) -> None:
+        """Delete a saved Conversation and drop its Result Tables (KeyError if unknown)."""
+        if not self.store.exists(conversation_id):
+            raise KeyError(conversation_id)
+        self._drop_result_tables(self.store.delete_conversation(conversation_id))
+
+    def _drop_result_tables(self, names: list[str]) -> None:
+        names = [n for n in names if queries.RESULT_TABLE_RE.match(n)]
+        if not names or not self.config.results_db.exists():
+            return
+        con = sqlite3.connect(self.config.results_db)
+        try:
+            for n in names:
+                con.execute(f"DROP TABLE IF EXISTS {n}")
+            con.commit()
+        finally:
+            con.close()
+
     def sweep_expired(self) -> None:
         """Delete Result Tables whose Conversation has been idle past the TTL.
 
@@ -266,14 +284,7 @@ class Agent:
         names = [n for n in self.store.due_for_expiry(self.config.result_ttl_ms) if queries.RESULT_TABLE_RE.match(n)]
         if not names:
             return
-        if self.config.results_db.exists():
-            con = sqlite3.connect(self.config.results_db)
-            try:
-                for n in names:
-                    con.execute(f"DROP TABLE IF EXISTS {n}")
-                con.commit()
-            finally:
-                con.close()
+        self._drop_result_tables(names)
         self.store.mark_expired(names)
 
     def is_expired(self, result_table: str) -> bool:

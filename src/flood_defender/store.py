@@ -119,6 +119,16 @@ class ConversationStore:
             )
             return [dict(r) for r in rows]
 
+    def delete_conversation(self, conversation_id: str) -> list[str]:
+        """Remove a Conversation and everything it owns; returns the names of its Result Tables."""
+        with closing(self._connect()) as con, con:
+            names = [r[0] for r in con.execute(
+                "SELECT name FROM result_tables WHERE conversation_id=?", (conversation_id,))]
+            for table in ("displays", "messages", "turns", "result_tables"):
+                con.execute(f"DELETE FROM {table} WHERE conversation_id=?", (conversation_id,))
+            con.execute("DELETE FROM conversations WHERE id=?", (conversation_id,))
+        return names
+
     def start_turn(self, conversation_id: str, user_message: str) -> int:
         return self._write(
             "INSERT INTO turns(conversation_id, user_message, created_at) VALUES (?,?,?)",

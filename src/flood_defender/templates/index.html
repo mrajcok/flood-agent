@@ -18,7 +18,11 @@
     .layout { display: flex; gap: 1.5rem; align-items: flex-start; }
     aside { width: 14rem; flex: none; }
     aside ul { list-style: none; padding: 0; margin: .5rem 0; }
-    aside li a { display: block; padding: .25rem 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    aside li { display: flex; align-items: center; gap: .25rem; }
+    aside li a { display: block; flex: 1; min-width: 0; padding: .25rem 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    aside form.delete { margin: 0; display: block; }
+    aside form.delete button { background: none; border: 0; color: #888; cursor: pointer; padding: 0 .25rem; }
+    aside form.delete button:hover { color: #a00; }
     aside a.current { font-weight: 600; }
     main { flex: 1; min-width: 0; }
     .display.chart .vega-embed { display: block; width: 100%; }

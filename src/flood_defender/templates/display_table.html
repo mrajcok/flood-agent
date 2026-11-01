@@ -27,15 +27,15 @@
   <p x-show="expired" x-cloak><em>expired</em> (this result has been deleted)</p>
   <p x-show="error" x-cloak>Could not load table.</p>
   <div x-show="loaded" x-cloak>
-    <table>
-      <thead><tr><template x-for="(c, j) in columns" :key="c"><th :class="{ num: numeric(j) }" @click="sortBy(c)" style="cursor:pointer" :aria-sort="sort === c ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'"><span x-text="c"></span><span x-text="sort === c ? (dir === 'asc' ? ' ▲' : ' ▼') : ''"></span></th></template></tr></thead>
-      <tbody><template x-for="(row, i) in rows" :key="loads + '-' + i"><tr><template x-for="(v, j) in row" :key="j"><td :class="{ num: numeric(j) }" x-text="fmt(v, columns[j])"></td></template></tr></template></tbody>
-    </table>
     <div class="pager">
       <button type="button" @click="go(page - 1)" :disabled="page <= 1">Prev</button>
       <span x-text="'Page ' + page + ' of ' + pages + ' (' + total + ' rows)'"></span>
       <button type="button" @click="go(page + 1)" :disabled="page >= pages">Next</button>
       <a :href="$el.closest('.display').dataset.csvUrl" download>Download CSV</a>
     </div>
+    <table>
+      <thead><tr><template x-for="(c, j) in columns" :key="c"><th :class="{ num: numeric(j) }" @click="sortBy(c)" style="cursor:pointer" :aria-sort="sort === c ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'"><span x-text="c"></span><span x-text="sort === c ? (dir === 'asc' ? ' ▲' : ' ▼') : ''"></span></th></template></tr></thead>
+      <tbody><template x-for="(row, i) in rows" :key="loads + '-' + i"><tr><template x-for="(v, j) in row" :key="j"><td :class="{ num: numeric(j) }" x-text="fmt(v, columns[j])"></td></template></tr></template></tbody>
+    </table>
   </div>
 </div>

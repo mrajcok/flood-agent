@@ -11,6 +11,7 @@
 #   `failed_tool_calls` or `notice` as "fails on purpose".
 #   A tool call may give `raw_arguments` (a raw string, sent as-is) instead of `args`; a step may
 #   give `error` (raised as the LLM error after its text streams).
+#   Step text may contain `{count}` (the latest run_count_query count of the turn).
 #   Tool-call args may contain `{result_table}` (latest run_query Result Table) and
 #   `{result_table:-2}` (the one before it), anywhere inside the args, including nested Chart Specs.
 #
@@ -24,7 +25,7 @@
         - name: run_count_query
           args:
             sql: SELECT COUNT(*) FROM flows
-    - text: "Here is the total number of flows."
+    - text: "There are {count} flows in total."
   expect:
     displays: []
 
@@ -163,7 +164,7 @@
         - name: run_count_query
           args:
             sql: SELECT COUNT(*) FROM flows
-    - text: "Here is the total number of flows."
+    - text: "There are {count} flows in total."
   expect:
     displays: []
     failed_tool_calls: 1

@@ -274,3 +274,27 @@ async def test_the_total_flow_count_prompt_uses_run_count_query_and_makes_no_res
     assert [c["name"] for c in calls] == ["run_count_query"]
     assert not [e for e in trace["entries"] if e["kind"] == "result_table"]
     assert not [e for e in events if isinstance(e, DisplayEvent)]
+
+
+async def test_the_total_flow_count_reply_states_the_number_without_flagging_it(make_agent, telemetry_db):
+    canned = next(c for c in CANNED if c.id == "flow-count")
+    with sqlite3.connect(telemetry_db) as con:
+        (n,) = con.execute("SELECT COUNT(*) FROM flows").fetchone()
+    agent = await make_agent(fake_client(), model="fake")
+
+    events = await collect(agent, canned.prompt)
+
+    assert str(n) in text_of(events)
+    trace = next(e.trace for e in events if isinstance(e, TraceReady))
+    assert not [e for e in trace["entries"] if e["kind"] == "flag"]
+
+
+async def test_a_failed_count_query_says_so_instead_of_stating_a_number(make_agent, telemetry_db):
+    canned = next(c for c in CANNED if c.id == "flow-count")
+    with sqlite3.connect(telemetry_db) as con:
+        con.execute("DROP TABLE flows")
+    agent = await make_agent(fake_client(), model="fake")
+
+    events = await collect(agent, canned.prompt)
+
+    assert "query failed" in text_of(events) and "{count}" not in text_of(events)

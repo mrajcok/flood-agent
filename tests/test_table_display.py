@@ -51,11 +51,11 @@ def test_pagination_boundaries(env):
     rt = table()
     base = f"/api/results/{rt}/rows"
     first = client.get(base).json()
-    assert first["total"] == 120 and first["page"] == 1 and first["page_size"] == 50
-    assert len(first["rows"]) == 50
-    last = client.get(base, params={"page": 3}).json()
+    assert first["total"] == 120 and first["page"] == 1 and first["page_size"] == 20
+    assert len(first["rows"]) == 20
+    last = client.get(base, params={"page": 3, "page_size": 50}).json()
     assert len(last["rows"]) == 20 and last["rows"][-1][0] == 120
-    beyond = client.get(base, params={"page": 4}).json()
+    beyond = client.get(base, params={"page": 7}).json()
     assert beyond["rows"] == [] and beyond["total"] == 120
     exact = client.get(base, params={"page": 2, "page_size": 60}).json()
     assert len(exact["rows"]) == 60 and exact["rows"][-1][0] == 120

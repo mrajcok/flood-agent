@@ -201,7 +201,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
     def rows(
         result_table: str,
         page: int = Query(1, ge=1),
-        page_size: int = Query(50, ge=1, le=500),
+        page_size: int = Query(20, ge=1, le=500),
         sort: str | None = None,
         dir: Literal["asc", "desc"] = "asc",
     ):

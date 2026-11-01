@@ -301,7 +301,7 @@ async def test_a_failed_count_query_says_so_instead_of_stating_a_number(make_age
 
 
 def test_a_canned_prompt_returns_more_rows_than_fit_on_one_table_page():
-    page_size = 50  # the Table Display's default page size
+    page_size = 20  # the Table Display's default page size
     canned = next(c for c in CANNED if c.id == "many-rows")
     sql = canned.steps[0].tool_calls[0].args["sql"]
     assert int(re.search(r"LIMIT (\d+)", sql)[1]) > page_size

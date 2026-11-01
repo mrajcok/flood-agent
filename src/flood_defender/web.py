@@ -31,8 +31,10 @@ from flood_defender.agent import (
     resolve_chart_data,
 )
 from flood_defender.queries import InvalidSort
+from flood_defender.trace import split_system_prompt
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+TEMPLATES.env.filters["split_system_prompt"] = split_system_prompt
 
 
 def _sse(event: str, data: str) -> str:

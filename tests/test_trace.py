@@ -132,12 +132,14 @@ def test_trace_is_collapsed_details_in_stream_and_after_restart(build_agent, web
     client = web_client(build_agent(ScriptedLLM(*chart_script())))
     cid, body = ask(client, "chart please")
     assert "event: trace" in body
-    assert "<details" in body and "<details open" not in body
+    assert "<details" in body and body.count("trace-part\" open") == 1
 
     restarted = web_client(build_agent(ScriptedLLM()))
     page = restarted.get(f"/c/{cid}").text
-    assert "<details" in page and "<details open" not in page
+    assert "<details" in page and page.count("trace-part\" open") == 1
     assert page.count('class="trace"') == 1
+    assert page.count('class="trace-part"') == 3
+    assert '<details class="trace-part" open><summary>Result Tables' in page
     assert "CREATE TABLE results.rt_" in page and "test/model" in page
 
 
@@ -158,3 +160,15 @@ def test_each_turn_has_its_own_trace_on_reopen(build_agent, web_client):
     cid, _ = ask(client, "a")
     ask(client, "b", cid)
     assert client.get(f"/c/{cid}").text.count('class="trace"') == 2
+
+
+def test_split_system_prompt_into_three_parts():
+    from flood_defender.trace import split_system_prompt
+
+    prompt = "rules\n# Semantic Layer\ntables: x\n\n# Result Tables\nNone.\n"
+    head, layer, rest = split_system_prompt(prompt)
+    assert head == "rules\n"
+    assert layer == "# Semantic Layer\ntables: x\n"
+    assert rest.startswith("# Result Tables")
+    assert split_system_prompt(None) == ("", "", "")
+    assert split_system_prompt("plain") == ("plain", "", "")

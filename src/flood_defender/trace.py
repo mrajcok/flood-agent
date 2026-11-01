@@ -66,5 +66,19 @@ class TraceBuilder:
         return self.trace
 
 
+def split_system_prompt(prompt: str | None) -> tuple[str, str, str]:
+    """Split a system prompt into (instructions, Semantic Layer, rest) for display.
+
+    The rest is everything from the Result Tables section on, which can differ between turns.
+    Prompts without the expected headings land wholly in the first part.
+    """
+    prompt = prompt or ""
+    head, sep, tail = prompt.partition("# Semantic Layer\n")
+    if not sep:
+        return prompt, "", ""
+    layer, rt_sep, rest = tail.partition("\n# Result Tables")
+    return head, "# Semantic Layer\n" + layer, (rt_sep + rest).lstrip("\n")
+
+
 def elapsed_ms(started: float) -> int:
     return int((time.monotonic() - started) * 1000)

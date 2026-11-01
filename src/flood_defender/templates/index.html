@@ -17,8 +17,16 @@
            display: flex; flex-direction: column; overflow: hidden; }
     .topbar { flex: none; display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
     .topbar h1 { margin: .6rem 0; }
-    .max-rows { display: flex; align-items: center; gap: .5rem; margin: 0; font-size: .9rem; }
-    .max-rows input[type=number] { width: 8rem; padding: .2rem .35rem; }
+    .controls { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+    .max-rows { display: flex; align-items: center; gap: .5rem; margin: 0; font-size: .9rem; color: #2a4ba0; }
+    .max-rows label { font-weight: 600; }
+    .max-rows select, .max-rows input[type=text], .toggle-all { font: inherit; color: #2a4ba0; background: #eef3fd; border: 1px solid #b9c7e6; border-radius: 999px; padding: .25rem .8rem; }
+    .max-rows select { appearance: none; -webkit-appearance: none; cursor: pointer; padding-right: 1.9rem;
+      background: #eef3fd url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%232a4ba0' stroke-width='1.6'/%3E%3C/svg%3E") no-repeat right .75rem center; }
+    .max-rows select:hover, .toggle-all:hover { background-color: #dce7fb; }
+    .max-rows select:focus-visible, .max-rows input[type=text]:focus-visible, .toggle-all:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
+    .max-rows input[type=text] { width: 6.5rem; text-align: right; }
+    .toggle-all { cursor: pointer; font-size: .9rem; }
     .scroll-y { overflow-y: auto; min-height: 0; }
     .user { margin: 1.25rem 0 .45rem; padding: .6rem .9rem; background: #e8f0fe; border-radius: .75rem; white-space: pre-wrap; }
     summary.user { cursor: pointer; position: relative; padding-right: 2.2rem; }
@@ -81,7 +89,14 @@
   {% endmacro %}
   <div class="topbar">
     <h1>Flood Defender{% if fake_mode %} <span class="badge">Fake Mode — no LLM</span>{% endif %}</h1>
-    <div class="max-rows" x-data="{ choice: '1000000', custom: '' }">
+    <div class="controls">
+    <button type="button" class="toggle-all" x-data="{ anyOpen: true }"
+            x-init="const refresh = () => { anyOpen = !!document.querySelector('details.turn[open]') };
+                    new MutationObserver(refresh).observe(document.getElementById('chat'), { childList: true, subtree: true, attributes: true, attributeFilter: ['open'] });
+                    refresh()"
+            @click="const open = !anyOpen; document.querySelectorAll('details.turn').forEach(d => d.open = open)"
+            x-text="anyOpen ? 'Collapse all prompts' : 'Expand all prompts'">Collapse all prompts</button>
+    <div class="max-rows" x-data="{ choice: '10000', custom: '' }">
       <label for="max-rows-choice">Max result rows</label>
       <select id="max-rows-choice" x-model="choice">
         <option value="10">10</option>
@@ -92,8 +107,10 @@
         <option value="1000000">1,000,000</option>
         <option value="custom">custom...</option>
       </select>
-      <input type="number" min="1" step="1" x-show="choice === 'custom'" x-cloak x-model="custom" aria-label="Custom max result rows" placeholder="rows">
-      <input type="hidden" id="max_rows" name="max_rows" :value="choice === 'custom' ? custom : choice" value="1000000">
+      <input type="text" inputmode="numeric" maxlength="9" x-show="choice === 'custom'" x-cloak x-model="custom"
+             @input="custom = custom.replace(/\D/g, '')" aria-label="Custom max result rows" placeholder="rows">
+      <input type="hidden" id="max_rows" name="max_rows" :value="choice === 'custom' ? custom : choice" value="10000">
+    </div>
     </div>
   </div>
   <div class="layout">

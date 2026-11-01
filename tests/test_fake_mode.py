@@ -305,3 +305,18 @@ def test_a_canned_prompt_returns_more_rows_than_fit_on_one_table_page():
     canned = next(c for c in CANNED if c.id == "many-rows")
     sql = canned.steps[0].tool_calls[0].args["sql"]
     assert int(re.search(r"LIMIT (\d+)", sql)[1]) > page_size
+
+
+async def test_the_fake_count_reply_puts_thousands_commas_in_the_number():
+    canned = next(c for c in CANNED if c.id == "flow-count")
+    messages = [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": canned.prompt},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "fake-0-0", "type": "function", "function": {"name": "run_count_query", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "fake-0-0", "content": json.dumps({"success": True, "count": 17392})},
+    ]
+
+    text = "".join([c.text async for c in fake_client().stream_chat(messages, []) if isinstance(c, TextChunk)])
+
+    assert "17,392" in text and "17392" not in text

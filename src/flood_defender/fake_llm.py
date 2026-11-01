@@ -192,7 +192,7 @@ def _count(messages: list[dict]) -> str:
     results = _tool_results(messages, "run_count_query")
     if not results or not results[-1].get("success"):
         raise QueryFailed(results[-1].get("error") if results else None)
-    return str(results[-1]["count"])
+    return f"{results[-1]['count']:,}"
 
 
 def _run_query_results(messages: list[dict]) -> list[dict]:

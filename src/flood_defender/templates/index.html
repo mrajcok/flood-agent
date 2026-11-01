@@ -18,6 +18,8 @@
     .layout { display: flex; gap: 1.5rem; align-items: flex-start; }
     aside { width: 14rem; flex: none; }
     main { flex: 1; min-width: 0; }
+    aside a.new { display: block; padding: .5rem .75rem; border-radius: .6rem; background: #4a6fd3; color: #fff; text-align: center; text-decoration: none; font-weight: 600; }
+    aside a.new:hover { background: #3b5cb8; }
     aside ul { list-style: none; padding: 0; margin: .5rem 0; }
     aside li { display: flex; align-items: center; gap: .25rem; }
     aside li a { display: block; flex: 1; min-width: 0; padding: .25rem 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -35,6 +37,9 @@
     .display th.num, .display td.num { text-align: right; }
     th, td { border: 1px solid #ccc; padding: .25rem .5rem; text-align: left; }
     .pager { display: flex; gap: .75rem; align-items: center; font-size: .9rem; }
+    .pager button { padding: .25rem .8rem; border: 1px solid #b9c7e6; border-radius: 999px; background: #eef3fd; color: #2a4ba0; font: inherit; cursor: pointer; }
+    .pager button:hover:not(:disabled) { background: #dce7fb; }
+    .pager button:disabled { opacity: .45; cursor: default; }
     th { user-select: none; }
     .flag-note { margin: .4rem 0; padding: .4rem .6rem; border-left: 4px solid #c60; background: #fff4e5; font-size: .9rem; }
     .trace { margin: .5rem 0; font-size: .85rem; color: #444; }

@@ -1,5 +1,5 @@
 <aside id="sidebar" {% if oob %}hx-swap-oob="true"{% endif %}>
-  <a class="new" href="/">+ New conversation</a>
+  <a class="new" href="/">New conversation</a>
   <ul>
     {% for c in conversations %}
     <li x-data="{ open: false, editing: false }">

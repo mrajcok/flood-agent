@@ -324,15 +324,19 @@ class Agent:
         self._raise_if_expired(result_table)
         return queries.fetch_records(self.config.results_db, result_table, self.config.chart_row_cap)
 
-    async def run_turn(self, conversation: Conversation, user_message: str) -> AsyncIterator[Event]:
+    async def run_turn(
+        self, conversation: Conversation, user_message: str, max_result_rows: int | None = None
+    ) -> AsyncIterator[Event]:
         """Run one turn on the Agent's MCP connection (`start()` first).
 
         The turn runs in a producer task. If the consumer stops early (client disconnect), the
-        producer is cancelled and awaited; the MCP server keeps running."""
+        producer is cancelled and awaited; the MCP server keeps running.
+
+        `max_result_rows` overrides the configured row cap for this turn's queries."""
         if self._connection is None:
             raise RuntimeError("Agent not started: call `await agent.start()` or use `async with agent`")
         queue: asyncio.Queue = asyncio.Queue()
-        task = asyncio.create_task(self._produce(conversation, user_message, queue))
+        task = asyncio.create_task(self._produce(conversation, user_message, queue, max_result_rows))
         self._turn_tasks.add(task)
         task.add_done_callback(self._turn_tasks.discard)
         finished = False
@@ -351,16 +355,20 @@ class Agent:
                 task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
-    async def _produce(self, conversation: Conversation, user_message: str, queue: asyncio.Queue):
+    async def _produce(
+        self, conversation: Conversation, user_message: str, queue: asyncio.Queue, max_result_rows: int | None
+    ):
         try:
-            await self._run(conversation, user_message, queue)
+            await self._run(conversation, user_message, queue, max_result_rows)
             await queue.put(TurnEnd())
         except asyncio.CancelledError:
             raise
         except BaseException as e:  # surfaced to the consumer
             await queue.put(e)
 
-    async def _run(self, conversation: Conversation, user_message: str, queue: asyncio.Queue):
+    async def _run(
+        self, conversation: Conversation, user_message: str, queue: asyncio.Queue, max_result_rows: int | None
+    ):
         self.sweep_expired()
         if conversation.id is None:
             conversation.id = self.store.create_conversation()
@@ -368,7 +376,7 @@ class Agent:
         self._record(conversation, turn_id, {"role": "user", "content": user_message})
         trace = TraceBuilder(self.config.model)
         try:
-            await self._converse(conversation, turn_id, user_message, trace, queue)
+            await self._converse(conversation, turn_id, user_message, trace, queue, max_result_rows)
         except asyncio.CancelledError:
             self.store.save_trace(turn_id, trace.finish())
             raise
@@ -391,7 +399,9 @@ class Agent:
         await queue.put(TextDelta(message))
         await queue.put(TurnError(message, detail))
 
-    async def _converse(self, conversation, turn_id, user_message, trace: TraceBuilder, queue):
+    async def _converse(
+        self, conversation, turn_id, user_message, trace: TraceBuilder, queue, max_result_rows: int | None = None
+    ):
         connection = await self._ensure_connection()
         tools = connection.tools
         failed_attempts = 0
@@ -427,7 +437,9 @@ class Agent:
             items: list[tuple[dict, list[tuple]]] = [(assistant, [])]
             for c in calls:
                 call_started = time.monotonic()
-                content, args, executed_sql, failed = await self._run_tool(connection, c, queue, trace, conversation.id)
+                content, args, executed_sql, failed = await self._run_tool(
+                    connection, c, queue, trace, conversation.id, max_result_rows
+                )
                 failed_attempts += failed
                 trace.tool_call(c.name, args, content, call_started, executed_sql)
                 self._trace_result_table(trace, content)
@@ -451,7 +463,8 @@ class Agent:
         await queue.put(TextDelta(message))
 
     async def _run_tool(
-        self, connection: McpConnection, c: ToolCallChunk, queue: asyncio.Queue, trace: TraceBuilder, conversation_id: str
+        self, connection: McpConnection, c: ToolCallChunk, queue: asyncio.Queue, trace: TraceBuilder,
+        conversation_id: str, max_result_rows: int | None = None,
     ) -> tuple[str, dict, str | None, int]:
         """Execute one LLM tool call. Returns (content, args, executed_sql, failed 0/1).
 
@@ -474,7 +487,7 @@ class Agent:
             else:
                 args = parsed
                 try:
-                    result = await connection.call_tool(c.name, args, conversation_id)
+                    result = await connection.call_tool(c.name, args, conversation_id, max_result_rows)
                     content = "".join(b.text for b in result.content if isinstance(b, TextContent))
                     if result.isError:
                         content = _fail(content[:500] or "The tool call was rejected.")

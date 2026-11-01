@@ -101,4 +101,4 @@ def test_main_pane_fills_the_space_beside_the_sidebar_so_charts_are_as_wide_as_t
     from conftest import ScriptedLLM
 
     page = web_client(build_agent(ScriptedLLM())).get("/").text
-    assert "main { flex: 1; min-width: 0; }" in page  # otherwise main shrink-wraps its content
+    assert "main { flex: 1; min-width: 0;" in page  # otherwise main shrink-wraps its content

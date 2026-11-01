@@ -18,7 +18,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.types import CallToolResult
 
-from flood_defender.mcp_protocol import META_CONVERSATION_ID
+from flood_defender.mcp_protocol import META_CONVERSATION_ID, META_MAX_RESULT_ROWS
 
 
 def _openai_tool(t) -> dict:
@@ -102,11 +102,16 @@ class McpConnection:
             self._session = None
             self._ready.set()
 
-    async def call_tool(self, name: str, arguments: dict, conversation_id: str) -> CallToolResult:
-        """Call a tool, sending the Conversation id in request `_meta`."""
+    async def call_tool(
+        self, name: str, arguments: dict, conversation_id: str, max_result_rows: int | None = None
+    ) -> CallToolResult:
+        """Call a tool, sending the Conversation id (and this turn's row cap, if any) in request `_meta`."""
         if self._session is None:
             raise RuntimeError("MCP connection is not running")
-        return await self._session.call_tool(name, arguments, meta={META_CONVERSATION_ID: conversation_id})
+        meta: dict = {META_CONVERSATION_ID: conversation_id}
+        if max_result_rows is not None:
+            meta[META_MAX_RESULT_ROWS] = max_result_rows
+        return await self._session.call_tool(name, arguments, meta=meta)
 
     async def aclose(self) -> None:
         """Shut the server down cleanly (a subprocess is reaped)."""

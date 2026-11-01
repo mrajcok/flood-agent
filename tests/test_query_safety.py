@@ -187,3 +187,23 @@ def test_bypassed_validation_cannot_write_via_run_query(telemetry_db, tmp_path, 
         res = queries.run_query(telemetry_db, tmp_path / "results.db", sql, **query_limits())
         assert res["success"] is False
     assert len(all_telemetry_values(telemetry_db)) > 10
+
+
+SERIES_OF_5 = "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5) SELECT i FROM n"
+
+
+async def _run_with_turn_cap(make_agent, sql, turn_cap, **limits):
+    llm = ScriptedLLM([tool_call("run_query", sql=sql, title="t")], [TextChunk("ok")])
+    agent = await make_agent(llm, **limits)
+    await collect(agent, "q", max_result_rows=turn_cap)
+    return last_tool_result(llm.calls[1])
+
+
+async def test_a_turn_can_lower_the_row_cap_below_the_configured_default(make_agent):
+    meta = await _run_with_turn_cap(make_agent, SERIES_OF_5, 2, max_result_rows=1000)
+    assert meta["success"] is False and "2" in meta["error"]
+
+
+async def test_a_turn_can_raise_the_row_cap_above_the_configured_default(make_agent):
+    meta = await _run_with_turn_cap(make_agent, SERIES_OF_5, 5, max_result_rows=2)
+    assert meta["success"] is True and meta["row_count"] == 5

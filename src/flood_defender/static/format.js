@@ -46,7 +46,15 @@
     return v === null || v === undefined ? "" : String(v);
   }
 
-  const api = { formatBytes, formatTime, formatEnum, formatFlags, formatCell };
+  // Right-align a column of numbers, but not enum/flags codes, which are displayed as text.
+  function isNumericColumn(rows, j, fmt) {
+    const kind = fmt && fmt.kind;
+    if (kind === "enum" || kind === "flags") return false;
+    const values = rows.map((r) => r[j]).filter((v) => v !== null && v !== undefined);
+    return values.length > 0 && values.every(isNum);
+  }
+
+  const api = { isNumericColumn, formatBytes, formatTime, formatEnum, formatFlags, formatCell };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.FloodFormat = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

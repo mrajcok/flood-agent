@@ -153,3 +153,11 @@ def test_js_formatting_functions():
     test_file = Path(__file__).parent / "js" / "format.test.js"
     r = subprocess.run(["node", "--test", str(test_file)], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_format_js_url_changes_with_the_file_so_browsers_never_run_a_stale_copy(build_agent, web_client):
+    from flood_defender import web
+
+    client = web_client(build_agent(ScriptedLLM()))
+    page = client.get("/").text
+    assert f'src="/static/format.js?v={web.static_version("format.js")}"' in page

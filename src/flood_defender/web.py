@@ -35,6 +35,15 @@ from flood_defender.trace import split_system_prompt
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 TEMPLATES.env.filters["split_system_prompt"] = split_system_prompt
+STATIC_DIR = Path(__file__).parent / "static"
+
+
+def static_version(name: str) -> int:
+    """Changes whenever the static file does, so a browser never reuses a stale cached copy."""
+    return (STATIC_DIR / name).stat().st_mtime_ns
+
+
+TEMPLATES.env.globals["static_version"] = static_version
 
 
 def _sse(event: str, data: str) -> str:
@@ -66,7 +75,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
         # Any endpoint reading Result Table rows (rows, CSV, chart rows) gets a clear 410.
         return JSONResponse({"detail": "This result has expired and been deleted. Ask again to regenerate it."}, 410)
 
-    app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     pending: dict[str, tuple[Conversation, str]] = {}
 
     def sidebar(current: str | None) -> dict:

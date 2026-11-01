@@ -25,7 +25,7 @@
       background: #eef3fd url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%232a4ba0' stroke-width='1.6'/%3E%3C/svg%3E") no-repeat right .75rem center; }
     .max-rows select:hover, .toggle-all:hover { background-color: #dce7fb; }
     .max-rows select:focus-visible, .max-rows input[type=text]:focus-visible, .toggle-all:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
-    .max-rows input[type=text] { width: 6.5rem; text-align: right; }
+    .max-rows input[type=text] { box-sizing: content-box; width: 9ch; min-width: 0; padding: .25rem .5rem; text-align: right; }
     .toggle-all { cursor: pointer; font-size: .9rem; }
     .scroll-y { overflow-y: auto; min-height: 0; }
     .user { margin: 1.25rem 0 .45rem; padding: .6rem .9rem; background: #e8f0fe; border-radius: .75rem; white-space: pre-wrap; }
@@ -95,7 +95,7 @@
                     new MutationObserver(refresh).observe(document.getElementById('chat'), { childList: true, subtree: true, attributes: true, attributeFilter: ['open'] });
                     refresh()"
             @click="const open = !anyOpen; document.querySelectorAll('details.turn').forEach(d => d.open = open)"
-            x-text="anyOpen ? 'Collapse all prompts' : 'Expand all prompts'">Collapse all prompts</button>
+            x-text="anyOpen ? 'Collapse prompts' : 'Expand prompts'">Collapse prompts</button>
     <div class="max-rows" x-data="{ choice: '10000', custom: '' }">
       <label for="max-rows-choice">Max result rows</label>
       <select id="max-rows-choice" x-model="choice">
@@ -107,7 +107,7 @@
         <option value="1000000">1,000,000</option>
         <option value="custom">custom...</option>
       </select>
-      <input type="text" inputmode="numeric" maxlength="9" x-show="choice === 'custom'" x-cloak x-model="custom"
+      <input type="text" inputmode="numeric" x-show="choice === 'custom'" x-cloak x-model="custom"
              @input="custom = custom.replace(/\D/g, '')" aria-label="Custom max result rows" placeholder="rows">
       <input type="hidden" id="max_rows" name="max_rows" :value="choice === 'custom' ? custom : choice" value="10000">
     </div>

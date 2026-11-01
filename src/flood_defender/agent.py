@@ -440,7 +440,7 @@ class Agent:
 
         Never raises for problems the LLM caused (bad JSON, missing `sql`) or tool failures: it
         returns an error result the LLM can act on, and a failed run_query counts toward the limit."""
-        is_query = c.name == "run_query"
+        is_query = c.name in ("run_query", "run_count_query")
         args: dict = {}
         executed_sql = None
         try:
@@ -453,7 +453,7 @@ class Agent:
                 content = _fail("The tool arguments must be a JSON object. Try again.")
             elif is_query and not isinstance(parsed.get("sql"), str):
                 args = parsed
-                content = _fail("run_query requires a 'sql' string argument. Try again.")
+                content = _fail(f"{c.name} requires a 'sql' string argument. Try again.")
             else:
                 args = parsed
                 try:

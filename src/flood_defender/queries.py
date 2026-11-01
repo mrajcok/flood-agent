@@ -229,6 +229,54 @@ def run_query(
     return {"success": True, "result_table": name, "columns": cols, "row_count": count, "executed_sql": executed}
 
 
+_COUNT_SHAPE = "A count query must be a SELECT returning exactly one row with one non-negative integer, e.g. SELECT COUNT(*) FROM flows WHERE ..."
+
+
+def run_count_query(
+    telemetry_db: Path,
+    results_db: Path,
+    sql: str,
+    timeout_s: float,
+    allowed_tables: set[str] | None = None,
+) -> dict:
+    """Run a count SELECT and return the number itself (no Result Table). The one place a
+    telemetry-derived value reaches the LLM, so it must be a single non-negative integer from a
+    query that uses COUNT. Failures carry `raw_error` like `run_query`."""
+    try:
+        select = validate_select(sql)
+        words, _ = _scan(select)
+        if "count" not in words:
+            raise QueryRejected(_COUNT_SHAPE)
+    except QueryRejected as e:
+        return {"success": False, "error": str(e)}
+    con = open_connection(telemetry_db, results_db, allowed_tables)
+    deadline = time.monotonic() + timeout_s
+    timed_out = False
+
+    def _progress():
+        nonlocal timed_out
+        if time.monotonic() > deadline:
+            timed_out = True
+            return 1
+        return 0
+
+    try:
+        con.set_progress_handler(_progress, 1000)
+        rows = con.execute(f"SELECT * FROM (\n{select}\n) LIMIT 2").fetchall()
+    except sqlite3.Error as e:
+        if timed_out:
+            return {"success": False, "error": _TIMEOUT_GUIDANCE.format(s=timeout_s), "raw_error": str(e)}
+        return {"success": False, "error": sanitize_error(str(e)), "raw_error": str(e)}
+    finally:
+        con.close()
+    if len(rows) != 1 or len(rows[0]) != 1:
+        return {"success": False, "error": _COUNT_SHAPE}
+    value = rows[0][0]
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return {"success": False, "error": _COUNT_SHAPE}
+    return {"success": True, "count": value}
+
+
 def result_table_columns(results_db: Path, name: str) -> list[str] | None:
     if not RESULT_TABLE_RE.match(name) or not Path(results_db).exists():
         return None

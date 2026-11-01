@@ -7,3 +7,4 @@ Flow records are sensitive, so the LLM never sees them. It writes a single read-
 - The LLM cannot interpret results itself (e.g. "why did traffic spike?"). The user reads the Displays, and the LLM must not state values it has not seen.
 - Every query costs a table write. Ocient supports CTAS, so the pattern carries over to production.
 - Opening the Telemetry Database read-only and keeping Result Tables in a separate database means LLM-generated SQL cannot modify source data, even if validation is bypassed.
+- One deliberate exception: `run_count_query` returns a single non-negative integer from a `COUNT` query straight to the LLM, with no Result Table, so "how many…?" questions don't need a table write and a Display. A count is an aggregate, not a Flow Record; the tool rejects anything that isn't one `COUNT` row holding one integer.

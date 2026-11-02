@@ -131,7 +131,7 @@ def test_expired_display_renders_expired_and_rows_endpoint_gives_410(build_agent
     resp = client.get(rows_url)
     assert resp.status_code == 410 and "expired" in resp.json()["detail"].lower()
 
-    for suffix in ("csv", "chart-rows"):
+    for suffix in ("psv", "chart-rows"):
         gone = client.get(rows_url.replace("/rows", "/" + suffix))
         assert gone.status_code == 410 and "expired" in gone.json()["detail"].lower()
 

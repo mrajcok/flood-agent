@@ -1,4 +1,4 @@
-"""Table Display polish at the HTTP seam: pagination, sorting, CSV, format metadata."""
+"""Table Display polish at the HTTP seam: pagination, sorting, PSV (pipe-separated) export, format metadata."""
 
 import csv
 import io
@@ -102,33 +102,33 @@ def test_sort_dir_validated(env):
     assert r.status_code in (400, 422)
 
 
-def test_csv_returns_full_table_with_escaping_and_formula_neutralised(env):
+def test_psv_returns_full_table_with_escaping_and_formula_neutralised(env):
     client, table = env
     rt = table(
-        "SELECT dport AS \"a,b\", 'he said \"hi\"' AS q, 'line1\nline2' AS nl, "
+        "SELECT dport AS \"a|b\", 'x|y, z' AS pipe, 'he said \"hi\"' AS q, 'line1\nline2' AS nl, "
         "'=SUM(A1)' AS f1, '+1' AS f2, '-2+3' AS f3, '@x' AS f4, 'ok' AS f5, -5 AS neg, NULL AS nul "
         "FROM flows"
     )
-    r = client.get(f"/api/results/{rt}/csv")
+    r = client.get(f"/api/results/{rt}/psv")
     assert r.status_code == 200
-    assert r.headers["content-type"].startswith("text/csv")
-    assert f"{rt}.csv" in r.headers["content-disposition"]
-    parsed = list(csv.reader(io.StringIO(r.text, newline="")))
-    assert parsed[0] == ["a,b", "q", "nl", "f1", "f2", "f3", "f4", "f5", "neg", "nul"]
+    assert r.headers["content-type"].startswith("text/plain")
+    assert f"{rt}.psv" in r.headers["content-disposition"]
+    parsed = list(csv.reader(io.StringIO(r.text, newline=""), delimiter="|"))
+    assert parsed[0] == ["a|b", "pipe", "q", "nl", "f1", "f2", "f3", "f4", "f5", "neg", "nul"]
     assert len(parsed) == 4  # header + all 3 flows (not just one page)
     row = parsed[1]
-    assert row[1] == 'he said "hi"' and row[2] == "line1\nline2"
-    assert row[3:7] == ["'=SUM(A1)", "'+1", "'-2+3", "'@x"] and row[7] == "ok"
-    assert row[8] == "-5" and row[9] == ""  # real numbers are not mangled
+    assert row[1] == "x|y, z" and row[2] == 'he said "hi"' and row[3] == "line1\nline2"
+    assert row[4:8] == ["'=SUM(A1)", "'+1", "'-2+3", "'@x"] and row[8] == "ok"
+    assert row[9] == "-5" and row[10] == ""  # real numbers are not mangled
 
 
-def test_csv_is_full_even_beyond_page_size_and_unknown_is_404(env):
+def test_psv_is_full_even_beyond_page_size_and_unknown_is_404(env):
     client, table = env
     rt = table()
-    rows = list(csv.reader(io.StringIO(client.get(f"/api/results/{rt}/csv").text)))
+    rows = list(csv.reader(io.StringIO(client.get(f"/api/results/{rt}/psv").text), delimiter="|"))
     assert len(rows) == 121
-    assert client.get("/api/results/rt_deadbeef/csv").status_code == 404
-    assert client.get("/api/results/nope/csv").status_code == 404
+    assert client.get("/api/results/rt_deadbeef/psv").status_code == 404
+    assert client.get("/api/results/nope/psv").status_code == 404
 
 
 def test_formats_come_from_semantic_layer_by_shared_name(env):

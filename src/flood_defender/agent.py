@@ -191,7 +191,7 @@ class Agent:
 
     async def start(self) -> None:
         """Launch the long-lived MCP server. Needed before `run_turn`, not for row fetches,
-        CSV export or Conversation listing."""
+        PSV export or Conversation listing."""
         if self._connection is not None:
             raise RuntimeError("Agent already started")
         connection = McpConnection(self._transport())
@@ -315,7 +315,7 @@ class Agent:
         return data
 
     def iter_all_rows(self, result_table: str):
-        """Internal data path for CSV export of the full Result Table. Not an LLM tool."""
+        """Internal data path for PSV export of the full Result Table. Not an LLM tool."""
         self._raise_if_expired(result_table)
         return queries.iter_all_rows(self.config.results_db, result_table)
 

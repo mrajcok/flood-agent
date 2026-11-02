@@ -2,7 +2,7 @@
 
 import pytest
 
-from flood_defender.queries import sanitize_error
+from flood_agent.queries import sanitize_error
 
 
 @pytest.mark.parametrize("name", ["rt_1a1f9db6", "rt_abcdefab", "rt_12345678", "rt_00ff00ff", "rt_a1b2c3d4"])

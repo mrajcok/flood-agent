@@ -5,8 +5,8 @@ import re
 import pytest
 from conftest import ScriptedLLM, all_telemetry_values, collect, last_tool_result, query_limits, tool_call
 
-from flood_defender.agent import Conversation, DisplayEvent
-from flood_defender.llm import TextChunk
+from flood_agent.agent import Conversation, DisplayEvent
+from flood_agent.llm import TextChunk
 
 BY_PORT = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport"
 HOUR = 3_600_000
@@ -163,7 +163,7 @@ def test_single_composed_authorizer_enforces_action_list_and_table_scope(telemet
     and reads of Result Tables outside the allowed set, while the CTAS and own-table reads work."""
     import sqlite3
 
-    from flood_defender import queries
+    from flood_agent import queries
 
     results = tmp_path / "results.db"
     monkeypatch.setattr(queries, "validate_select", lambda sql: sql)

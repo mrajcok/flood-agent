@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from flood_defender.generator import generate
+from flood_agent.generator import generate
 
 REAL_SL = Path(__file__).parent.parent / "semantic_layer.yaml"
 DAY_MS = 86_400_000
@@ -61,7 +61,7 @@ def test_spans_seven_days_with_diurnal_pattern(built):
 
 
 def test_full_scale_row_count_target_is_about_two_million():
-    from flood_defender.generator import expected_rows
+    from flood_agent.generator import expected_rows
     assert 1_900_000 < expected_rows(1.0) < 2_300_000
 
 

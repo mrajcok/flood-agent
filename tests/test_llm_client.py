@@ -6,7 +6,7 @@ import json
 import httpx
 import pytest
 
-from flood_defender.llm import LLMError, OpenRouterClient, TextChunk, ToolCallChunk, UsageChunk
+from flood_agent.llm import LLMError, OpenRouterClient, TextChunk, ToolCallChunk, UsageChunk
 
 
 def sse(*objs, done=True):

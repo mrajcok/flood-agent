@@ -5,8 +5,8 @@ import sqlite3
 import pytest
 from conftest import ScriptedLLM, all_telemetry_values, collect, last_tool_result, tool_call
 
-from flood_defender.agent import Conversation, DisplayEvent, TextDelta, TurnEnd
-from flood_defender.llm import TextChunk
+from flood_agent.agent import Conversation, DisplayEvent, TextDelta, TurnEnd
+from flood_agent.llm import TextChunk
 
 TOP_PORTS_SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
 

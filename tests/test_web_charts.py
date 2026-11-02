@@ -4,7 +4,7 @@ import json
 
 from conftest import ScriptedLLM, last_tool_result, tool_call
 
-from flood_defender.llm import TextChunk
+from flood_agent.llm import TextChunk
 
 
 def test_chart_display_is_streamed_and_rows_served_from_chart_endpoint(build_agent, web_client):
@@ -49,7 +49,7 @@ def test_page_pins_vega_cdn_versions_and_component_finalizes_view(build_agent, w
         assert re.search(rf"/{lib}@\d+\.\d+\.\d+\"", page), lib
     from pathlib import Path
 
-    tpl = (Path(__file__).parent.parent / "src/flood_defender/templates/display_chart.html").read_text()
+    tpl = (Path(__file__).parent.parent / "src/flood_agent/templates/display_chart.html").read_text()
     assert "finalize()" in tpl and "destroy()" in tpl
 
 

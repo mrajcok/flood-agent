@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from conftest import ScriptedLLM, query_limits
 
-from flood_defender import queries
+from flood_agent import queries
 
 LAYER = """\
 dialect: sqlite
@@ -156,7 +156,7 @@ def test_js_formatting_functions():
 
 
 def test_format_js_url_changes_with_the_file_so_browsers_never_run_a_stale_copy(build_agent, web_client):
-    from flood_defender import web
+    from flood_agent import web
 
     client = web_client(build_agent(ScriptedLLM()))
     page = client.get("/").text
@@ -165,10 +165,10 @@ def test_format_js_url_changes_with_the_file_so_browsers_never_run_a_stale_copy(
 
 def test_row_keys_change_on_every_load_so_sorting_and_paging_redraw_the_cells(build_agent, web_client):
     # Alpine reused the old cells (and showed the previous page's values) when row keys stayed 0..N.
-    template = (Path(__file__).parent.parent / "src/flood_defender/templates/display_table.html").read_text()
+    template = (Path(__file__).parent.parent / "src/flood_agent/templates/display_table.html").read_text()
     assert """:key="loads + '-' + i\"""" in template and "this.loads++" in template
 
 
 def test_pager_sits_above_the_table_so_it_does_not_move_on_a_short_last_page():
-    template = (Path(__file__).parent.parent / "src/flood_defender/templates/display_table.html").read_text()
+    template = (Path(__file__).parent.parent / "src/flood_agent/templates/display_table.html").read_text()
     assert template.index('class="pager"') < template.index("<table>")

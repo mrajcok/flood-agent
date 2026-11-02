@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from flood_defender import queries
+from flood_agent import queries
 
 GOLDEN_PATH = Path(__file__).parent / "golden.yaml"
 

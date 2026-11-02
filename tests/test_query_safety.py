@@ -5,9 +5,9 @@ import sqlite3
 import pytest
 from conftest import ScriptedLLM, all_telemetry_values, collect, last_tool_result, query_limits, tool_call
 
-from flood_defender import queries
-from flood_defender.agent import Conversation, TextDelta, TraceEntry, TurnEnd
-from flood_defender.llm import TextChunk
+from flood_agent import queries
+from flood_agent.agent import Conversation, TextDelta, TraceEntry, TurnEnd
+from flood_agent.llm import TextChunk
 
 
 async def run_one(make_agent, sql, **limits):

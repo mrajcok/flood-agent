@@ -1,6 +1,6 @@
 """Seeded synthetic Telemetry Database generator with injected attacks.
 
-    python -m flood_defender.generator [data/telemetry.db] [--seed N] [--scale F]
+    python -m flood_agent.generator [data/telemetry.db] [--seed N] [--scale F]
 
 The generator is the single writer of ``window_start``/``window_end`` in the
 Semantic Layer. Attack parameters are returned and written to

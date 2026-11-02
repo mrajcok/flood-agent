@@ -15,7 +15,7 @@ from typing import AsyncIterator
 
 import yaml
 
-from flood_defender.llm import Chunk, LLMError, TextChunk, ToolCallChunk, UsageChunk
+from flood_agent.llm import Chunk, LLMError, TextChunk, ToolCallChunk, UsageChunk
 
 CANNED_PROMPTS_FILE = Path(__file__).with_name("canned_prompts.yaml")
 CHUNK_SIZE = 8
@@ -153,7 +153,7 @@ class FakeClient:
         path = self.telemetry_db or "<TELEMETRY_DB path>"
         return (
             f"Fake Mode: the query failed{detail}, so there is nothing to show. If the Telemetry Database "
-            f"has not been generated yet, run: uv run python -m flood_defender.generator {path}"
+            f"has not been generated yet, run: uv run python -m flood_agent.generator {path}"
         )
 
     def _arguments(self, call: Call, messages: list[dict]) -> str:

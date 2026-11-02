@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Flood Defender</title>
+  <title>Flood Agent</title>
   <script src="https://unpkg.com/htmx.org@2.0.4"></script>
   <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
   <script src="/static/format.js?v={{ static_version('format.js') }}"></script>
@@ -88,7 +88,7 @@
     hx-target="#chat" hx-swap="beforeend">{{ c.prompt }}</button>{% if c.fails_on_purpose %} <small class="fails">fails on purpose</small>{% endif %}</li>
   {% endmacro %}
   <div class="topbar">
-    <h1>Flood Defender{% if fake_mode %} <span class="badge">Fake Mode — no LLM</span>{% endif %}</h1>
+    <h1>Flood Agent{% if fake_mode %} <span class="badge">Fake Mode — no LLM</span>{% endif %}</h1>
     <div class="controls">
     <button type="button" class="toggle-all" x-data="{ anyOpen: true }"
             x-init="const refresh = () => { anyOpen = !!document.querySelector('details.turn[open]') };

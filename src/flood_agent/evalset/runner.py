@@ -3,7 +3,7 @@ Result Tables the LLM produced against reference results, and reports per-model
 correctness, retries, latency and cost. On demand only; never part of CI or default pytest.
 
     export OPENROUTER_API_KEY=...   # or put it in .env (see .env.example)
-    uv run python -m flood_defender.evalset --db data/telemetry.db \\
+    uv run python -m flood_agent.evalset --db data/telemetry.db \\
         --models anthropic/claude-sonnet-5.5 z-ai/glm-5.3 --out eval-report
 
 The runner is Agent-side harness code: it may read Result Tables (like the UI does). The
@@ -25,13 +25,13 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from flood_defender import queries
-from flood_defender.agent import Agent, Conversation, TraceEntry, TurnError
-from flood_defender.config import Settings
-from flood_defender.evalset.client import UsageMeter
-from flood_defender.evalset.compare import DEFAULT_TOLERANCE, Comparison, compare
-from flood_defender.evalset.golden import Question, load_golden, run_reference
-from flood_defender.llm import OpenRouterClient
+from flood_agent import queries
+from flood_agent.agent import Agent, Conversation, TraceEntry, TurnError
+from flood_agent.config import Settings
+from flood_agent.evalset.client import UsageMeter
+from flood_agent.evalset.compare import DEFAULT_TOLERANCE, Comparison, compare
+from flood_agent.evalset.golden import Question, load_golden, run_reference
+from flood_agent.llm import OpenRouterClient
 
 CANDIDATE_MODELS = [
     "anthropic/claude-sonnet-5.5",
@@ -167,7 +167,7 @@ def _money(v) -> str:
 
 def render_markdown(summary: dict, results: list[QuestionResult]) -> str:
     lines = [
-        "# Flood Defender eval report", "",
+        "# Flood Agent eval report", "",
         "| Model | Correct | Accuracy | Retries | Errors | Mean latency | Max latency | Total cost | Cost/question |",
         "|---|---|---|---|---|---|---|---|---|",
     ]

@@ -20,9 +20,9 @@ from pydantic_settings import (
     TomlConfigSettingsSource,
 )
 
-from flood_defender.agent import AgentConfig
-from flood_defender.fake_llm import CannedPrompt, FakeClient, load_canned_prompts
-from flood_defender.llm import LLMClient, OpenRouterClient
+from flood_agent.agent import AgentConfig
+from flood_agent.fake_llm import CannedPrompt, FakeClient, load_canned_prompts
+from flood_agent.llm import LLMClient, OpenRouterClient
 
 DEFAULTS_FILE = Path(__file__).with_name("defaults.toml")
 
@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     llm_backend: Literal["openrouter", "fake"] = Field(
         description="openrouter calls a real model (needs OPENROUTER_API_KEY). fake is Fake Mode: a scripted\n"
         "stand-in answers Canned Prompts listed on the page, so no model is called and no key is needed.\n"
-        "Try it for one run with: LLM_BACKEND=fake uv run python -m flood_defender"
+        "Try it for one run with: LLM_BACKEND=fake uv run python -m flood_agent"
     )
     openrouter_api_key: SecretStr | None = Field(
         None, description="OpenRouter API key. Required when LLM_BACKEND is openrouter; the only setting without a default. Never commit a real key."
@@ -74,7 +74,7 @@ class Settings(BaseSettings):
         "deepseek/deepseek-v4-pro-0813, z-ai/glm-5.3"
     )
     telemetry_db: Path = Field(
-        description="Read-only flow records. Create with: uv run python -m flood_defender.generator data/telemetry.db"
+        description="Read-only flow records. Create with: uv run python -m flood_agent.generator data/telemetry.db"
     )
     results_db: Path = Field(description="Writable database holding Result Tables.")
     app_db: Path = Field(
@@ -149,10 +149,10 @@ class Settings(BaseSettings):
 
 
 _ENV_EXAMPLE_HEADER = """\
-# Flood Defender settings.
+# Flood Agent settings.
 #
-# Generated from flood_defender/config.py and flood_defender/defaults.toml; regenerate with:
-#   uv run python -m flood_defender.config > .env.example
+# Generated from flood_agent/config.py and flood_agent/defaults.toml; regenerate with:
+#   uv run python -m flood_agent.config > .env.example
 #
 # Copy to .env (already gitignored). The app reads .env from the working directory at
 # startup. A variable already set in the real environment wins over the same variable in
@@ -163,7 +163,7 @@ _ENV_EXAMPLE_HEADER = """\
 # pin defaults that may change later."""
 
 _ENV_EXAMPLE_FOOTER = """\
-# The eval runner (python -m flood_defender.evalset)
+# The eval runner (python -m flood_agent.evalset)
 # reads OPENROUTER_API_KEY and the telemetry_db and semantic_layer paths (overridable with
 # --db and --semantic-layer) from this file or the environment, takes its model list from
 # --models, and always uses the limits in defaults.toml so runs are comparable."""

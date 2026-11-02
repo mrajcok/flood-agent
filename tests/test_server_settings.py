@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from flood_defender.mcp_server import ServerSettings
+from flood_agent.mcp_server import ServerSettings
 
 
 def test_settings_round_trip_through_the_launch_environment():

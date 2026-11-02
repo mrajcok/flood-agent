@@ -1,4 +1,4 @@
-"""Run the app: python -m flood_defender
+"""Run the app: python -m flood_agent
 
 Settings come from defaults.toml, a .env file in the working directory, and the
 environment, in that order of increasing priority. See .env.example for every setting.
@@ -6,10 +6,10 @@ environment, in that order of increasing priority. See .env.example for every se
 
 import uvicorn
 
-from flood_defender.agent import Agent
-from flood_defender.config import Settings
-from flood_defender.fake_llm import CannedPrompt
-from flood_defender.web import PickerEntry, create_app
+from flood_agent.agent import Agent
+from flood_agent.config import Settings
+from flood_agent.fake_llm import CannedPrompt
+from flood_agent.web import PickerEntry, create_app
 
 
 def picker_entries(canned_prompts: list[CannedPrompt]) -> list[PickerEntry]:

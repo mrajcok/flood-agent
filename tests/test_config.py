@@ -7,9 +7,9 @@ import pytest
 from conftest import ScriptedLLM, collect, last_tool_result, tool_call
 from pydantic import ValidationError
 
-from flood_defender.agent import STEP_LIMIT_MESSAGE, Agent, TextDelta
-from flood_defender.config import DEFAULTS_FILE, Settings, render_env_example
-from flood_defender.llm import TextChunk
+from flood_agent.agent import STEP_LIMIT_MESSAGE, Agent, TextDelta
+from flood_agent.config import DEFAULTS_FILE, Settings, render_env_example
+from flood_agent.llm import TextChunk
 
 ENV_EXAMPLE = Path(__file__).parent.parent / ".env.example"
 
@@ -126,7 +126,7 @@ def test_every_setting_is_described():
 
 def test_env_example_is_the_generated_one():
     assert ENV_EXAMPLE.read_text() == render_env_example(), (
-        "stale .env.example; regenerate with: uv run python -m flood_defender.config > .env.example"
+        "stale .env.example; regenerate with: uv run python -m flood_agent.config > .env.example"
     )
 
 
@@ -201,7 +201,7 @@ async def test_max_llm_steps_from_the_env_file_limits_llm_calls_per_turn(agent_f
 
 
 def test_the_eval_runner_reads_the_api_key_from_the_env_file(tmp_path, monkeypatch, capsys):
-    from flood_defender.evalset.runner import main
+    from flood_agent.evalset.runner import main
 
     monkeypatch.setitem(Settings.model_config, "env_file", ".env")  # conftest disables the cwd .env
     monkeypatch.chdir(tmp_path)
@@ -225,7 +225,7 @@ def test_tests_are_isolated_from_a_developers_dotenv_and_exports(tmp_path, monke
 
 
 def test_build_app_creates_the_directories_of_both_databases(tmp_path):
-    from flood_defender.__main__ import build_app
+    from flood_agent.__main__ import build_app
 
     env_file = write_env(
         tmp_path / ".env",

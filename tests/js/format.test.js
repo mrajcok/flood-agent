@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const F = require("../../src/flood_defender/static/format.js");
+const F = require("../../src/flood_agent/static/format.js");
 
 test("bytes use decimal KB/MB/GB/TB", () => {
   assert.equal(F.formatBytes(0), "0 B");

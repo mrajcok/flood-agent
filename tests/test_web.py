@@ -4,8 +4,8 @@ import pytest
 from conftest import ScriptedLLM, last_tool_result, mcp_children, tool_call
 from fastapi.testclient import TestClient
 
-from flood_defender.llm import TextChunk
-from flood_defender.web import create_app
+from flood_agent.llm import TextChunk
+from flood_agent.web import create_app
 
 
 def test_chat_page_stream_and_row_endpoint(build_agent, web_client):
@@ -76,7 +76,7 @@ def test_entering_the_client_starts_one_mcp_server_and_leaving_it_stops_it(build
 @pytest.mark.subprocess
 def test_app_startup_fails_when_the_mcp_server_cannot_start(build_agent, monkeypatch):
     agent = build_agent(ScriptedLLM())
-    monkeypatch.setattr("flood_defender.agent.sys.executable", "/nonexistent/python")
+    monkeypatch.setattr("flood_agent.agent.sys.executable", "/nonexistent/python")
     with pytest.raises(Exception):
         with TestClient(create_app(agent)):
             pass

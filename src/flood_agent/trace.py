@@ -10,7 +10,7 @@ Entry kinds: llm_step, tool_call, query_error, result_table, chart_spec, flag
 
 import time
 
-from flood_defender.mcp_protocol import QUERY_TOOLS
+from flood_agent.mcp_protocol import QUERY_TOOLS
 
 
 class TraceBuilder:

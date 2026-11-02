@@ -1,5 +1,5 @@
 # Default value of every setting. This file is the single source of truth: the code
-# has no fallbacks, and .env.example is generated from it (see flood_defender.config).
+# has no fallbacks, and .env.example is generated from it (see flood_agent.config).
 # Override any key with a .env file or an environment variable of the same name in
 # upper case (QUERY_TIMEOUT_S, ...). The real environment wins over .env.
 # openrouter_api_key has no default; it is a secret and belongs in .env.

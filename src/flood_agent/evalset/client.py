@@ -5,7 +5,7 @@ tests), passes every chunk through unchanged, and accumulates the `UsageChunk`s 
 emits. Nothing extra reaches the LLM.
 """
 
-from flood_defender.llm import UsageChunk
+from flood_agent.llm import UsageChunk
 
 
 class UsageMeter:

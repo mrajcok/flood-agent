@@ -101,13 +101,22 @@ async def test_inline_or_foreign_data_is_rejected_with_guidance(make_agent, muta
     assert '{"name"' in result["error"]
 
 
-async def test_chart_over_row_cap_is_refused_with_guidance_to_aggregate(make_agent):
+async def test_chart_over_row_cap_charts_the_first_rows_and_tells_the_llm(make_agent):
     llm = chart_script(chart_spec)
     agent = await make_agent(llm, chart_row_cap=1)  # the server's launch settings come from the config
     events = await collect(agent, "chart it")
-    assert not displays(events)
+    assert [e.kind for e in displays(events)] == ["chart"]
     result = last_tool_result(llm.calls[2])
-    assert result["success"] is False and "aggregate" in result["error"].lower()
+    assert result["success"] is True
+    assert "first 1 rows" in result["note"] and "aggregate" in result["note"].lower()
+    table = displays(events)[0].result_table
+    assert len(agent.fetch_chart_rows(table)) == 1
+
+
+async def test_chart_within_row_cap_has_no_note(make_agent):
+    llm = chart_script(chart_spec)
+    await collect(await make_agent(llm), "chart it")
+    assert "note" not in last_tool_result(llm.calls[2])
 
 
 async def test_table_and_chart_displays_come_in_order(make_agent):

@@ -224,10 +224,9 @@
               encoding:
                 x: {field: i, type: quantitative}
                 y: {field: doubled, type: quantitative}
-    - text: "That Result Table has too many rows to chart."
+    - text: "That Result Table has more rows than the chart row cap, so only the first 10,000 rows are charted."
   expect:
-    displays: []
-    failed_tool_calls: 1
+    displays: [chart]
 
 - id: chart-with-inline-data
   prompt: "Chart a spec that embeds its own data values."

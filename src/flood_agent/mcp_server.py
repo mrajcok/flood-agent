@@ -178,7 +178,7 @@ def create_server(settings: ServerSettings) -> FastMCP:
     def show_chart(vega_lite_spec: dict, ctx: Context) -> str:
         """Show a Vega-Lite Chart Spec to the user as a chart Display. Its data must be
         {"name": "<result table>"}; never include data values. Aggregate first if the Result
-        Table is large. Use temporal x scales of type "utc" for epoch-ms time columns."""
+        Table is large: a chart shows at most its first CHART_ROW_CAP rows. Use temporal x scales of type "utc" for epoch-ms time columns."""
         data = vega_lite_spec.get("data")
         table = data.get("name") if isinstance(data, dict) else None
         if not isinstance(table, str):
@@ -190,18 +190,14 @@ def create_server(settings: ServerSettings) -> FastMCP:
         violation = _find_violation(vega_lite_spec, table)
         if violation:
             return json.dumps({"success": False, "error": violation})
+        result: dict = {"success": True, "display": {"kind": "chart", "result_table": table, "spec": vega_lite_spec}}
         if count > settings.chart_row_cap:
-            return json.dumps(
-                {
-                    "success": False,
-                    "error": f"Result Table has too many rows to chart (limit {settings.chart_row_cap}). "
-                    "Aggregate or filter with run_query (e.g. GROUP BY a time bucket or LIMIT to top N) "
-                    "and chart the new Result Table.",
-                }
+            result["note"] = (
+                f"Only the first {settings.chart_row_cap} rows of the Result Table are charted. Do not present the "
+                "chart as covering all the data; to chart everything, aggregate or filter with run_query "
+                "(e.g. GROUP BY a time bucket) and chart the new Result Table."
             )
-        return json.dumps(
-            {"success": True, "display": {"kind": "chart", "result_table": table, "spec": vega_lite_spec}}
-        )
+        return json.dumps(result)
 
     return mcp
 

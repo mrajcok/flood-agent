@@ -97,8 +97,8 @@ The LLM asks for a chart with `show_chart(vega_lite_spec)`, a [Vega-Lite](https:
 Chart Spec (time series, bar/top-N, heatmap, ...). The spec's `data` must be exactly
 `{"name": "<result table>"}` naming an existing Result Table; inline `values`, `url`,
 `datasets` and any other data source are rejected, so the LLM can't put data in a chart.
-A Result Table with more than `CHART_ROW_CAP` rows (default 10,000) is refused with guidance
-to aggregate and chart the new Result Table.
+A Result Table with more than `CHART_ROW_CAP` rows (default 10,000) is charted from its first
+`CHART_ROW_CAP` rows only, and the LLM is told so (and to aggregate to chart everything).
 
 The Agent rewrites the data reference to `GET /api/results/<rt>/chart-rows` (row objects,
 capped at `CHART_ROW_CAP`; an Agent endpoint, not an LLM tool), and the browser renders the

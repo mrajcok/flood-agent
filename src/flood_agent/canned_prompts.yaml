@@ -201,7 +201,7 @@
         - name: show_table
           args:
             result_table: "{result_table}"
-    - text: "That query returned more rows than Max result rows, so the Result Table was truncated."
+    - text: "That query returned the Max result rows, so the Result Table was very likely truncated."
   expect:
     displays: [table]
 

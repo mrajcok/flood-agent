@@ -156,7 +156,7 @@
   </div>
   <form hx-post="/chat" hx-include="#max_rows" hx-target="#chat" hx-swap="beforeend" hx-on::after-request="this.reset()">
     <input type="hidden" id="conversation_id" name="conversation_id" value="{{ current_id or '' }}">
-    <input name="message" placeholder="Ask about your flow traffic..." autocomplete="off" required>
+    <input name="message" placeholder="Write a prompt about your flow traffic..." autocomplete="off" required>
     <button type="submit">Ask</button>
   </form>
   </main>

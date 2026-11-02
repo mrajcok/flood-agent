@@ -230,8 +230,8 @@ def mcp_children() -> list[int]:
     return found
 
 
-async def collect(agent: Agent, message: str, conversation: Conversation | None = None):
-    return [e async for e in agent.run_turn(conversation or Conversation(), message)]
+async def collect(agent: Agent, message: str, conversation: Conversation | None = None, **turn_options):
+    return [e async for e in agent.run_turn(conversation or Conversation(), message, **turn_options)]
 
 
 def text_of(events) -> str:

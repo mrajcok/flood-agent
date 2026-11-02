@@ -355,7 +355,7 @@ def fetch_records(results_db: Path, name: str, limit: int) -> list[dict]:
 
 
 def iter_all_rows(results_db: Path, name: str):
-    """Yield (columns, row iterator) for the whole Result Table (CSV export)."""
+    """Yield (columns, row iterator) for the whole Result Table (PSV export)."""
     all_cols = result_table_columns(results_db, name)
     if all_cols is None:
         raise KeyError(name)

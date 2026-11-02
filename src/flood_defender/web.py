@@ -72,11 +72,11 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
 
     @app.exception_handler(ResultTableExpired)
     def expired_handler(request: Request, exc: ResultTableExpired):
-        # Any endpoint reading Result Table rows (rows, CSV, chart rows) gets a clear 410.
+        # Any endpoint reading Result Table rows (rows, PSV, chart rows) gets a clear 410.
         return JSONResponse({"detail": "This result has expired and been deleted. Ask again to regenerate it."}, 410)
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-    pending: dict[str, tuple[Conversation, str]] = {}
+    pending: dict[str, tuple[Conversation, str, int | None]] = {}
 
     def sidebar(current: str | None) -> dict:
         return {
@@ -99,7 +99,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
                     {
                         **item,
                         "rows_url": f"/api/results/{item['result_table']}/rows",
-                        "csv_url": f"/api/results/{item['result_table']}/csv",
+                        "psv_url": f"/api/results/{item['result_table']}/psv",
                         "expired": item["result_table"] in expired,
                     }
                 )
@@ -151,7 +151,8 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
         return RedirectResponse(f"/c/{conversation_id}", status_code=303)
 
     @app.post("/chat", response_class=HTMLResponse)
-    def chat(request: Request, message: str = Form(...), conversation_id: str = Form("")):
+    def chat(request: Request, message: str = Form(...), conversation_id: str = Form(""), max_rows: str = Form("")):
+        max_result_rows = _parse_max_rows(max_rows)
         if conversation_id:
             try:
                 conversation = agent.open_conversation(conversation_id)
@@ -160,7 +161,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
         else:
             conversation = Conversation()
         turn_id = uuid.uuid4().hex
-        pending[turn_id] = (conversation, message)
+        pending[turn_id] = (conversation, message, max_result_rows)
         if conversation.id is None:  # persist now so the sidebar and form can reference it
             conversation.id = agent.store.create_conversation()
         return TEMPLATES.TemplateResponse(
@@ -173,11 +174,11 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
         entry = pending.pop(turn_id, None)
         if entry is None:
             raise HTTPException(404)
-        conversation, message = entry
+        conversation, message, max_result_rows = entry
 
         async def events():
             try:
-                async for ev in agent.run_turn(conversation, message):
+                async for ev in agent.run_turn(conversation, message, max_result_rows):
                     if isinstance(ev, TextDelta):
                         yield _sse("text", escape(ev.text))
                     elif isinstance(ev, DisplayEvent) and ev.kind == "chart":
@@ -188,7 +189,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
                     elif isinstance(ev, DisplayEvent):
                         html = TEMPLATES.get_template("display_table.html").render(
                             rows_url=f"/api/results/{ev.result_table}/rows",
-                            csv_url=f"/api/results/{ev.result_table}/csv",
+                            psv_url=f"/api/results/{ev.result_table}/psv",
                             result_table=ev.result_table,
                             columns=ev.columns,
                         )
@@ -225,8 +226,8 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
         except InvalidSort:
             raise HTTPException(400, "unknown sort column")
 
-    @app.get("/api/results/{result_table}/csv")
-    def csv_download(result_table: str):
+    @app.get("/api/results/{result_table}/psv")
+    def psv_download(result_table: str):
         try:
             columns, rows_iter = agent.iter_all_rows(result_table)
         except KeyError:
@@ -234,10 +235,10 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
 
         def body():
             buf = io.StringIO()
-            w = csv.writer(buf, lineterminator="\r\n")
-            w.writerow([_csv_safe(c) for c in columns])
+            w = csv.writer(buf, delimiter="|", lineterminator="\r\n")
+            w.writerow([_psv_safe(c) for c in columns])
             for row in rows_iter:
-                w.writerow([_csv_safe(v) for v in row])
+                w.writerow([_psv_safe(v) for v in row])
                 if buf.tell() > 65536:
                     yield buf.getvalue()
                     buf.seek(0)
@@ -246,8 +247,8 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
 
         return StreamingResponse(
             body(),
-            media_type="text/csv; charset=utf-8",
-            headers={"Content-Disposition": f'attachment; filename="{result_table}.csv"'},
+            media_type="text/plain; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{result_table}.psv"'},
         )
 
     @app.get("/api/results/{result_table}/chart-rows")
@@ -261,7 +262,17 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
     return app
 
 
-def _csv_safe(v):
+def _parse_max_rows(raw: str) -> int | None:
+    """The "Max result rows" choice: blank means the configured default, otherwise a positive integer."""
+    raw = raw.strip().replace(",", "")
+    if not raw:
+        return None
+    if not raw.isascii() or not raw.isdigit() or int(raw) < 1:
+        raise HTTPException(422, "Max result rows must be a whole number of at least 1")
+    return int(raw)
+
+
+def _psv_safe(v):
     """Neutralise spreadsheet formula injection in text cells; numbers pass through."""
     if v is None:
         return ""

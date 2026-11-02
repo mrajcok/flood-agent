@@ -167,7 +167,7 @@
     displays: [chart]
 
 - id: invalid-sql-retry
-  prompt: "Fail on purpose: run a query with a typo, then retry."
+  prompt: "Run a query with a typo, then retry."
   steps:
     - text: "Let me count the flows."
       tool_calls:
@@ -186,7 +186,7 @@
     failed_tool_calls: 1
 
 - id: too-many-rows
-  prompt: "Fail on purpose: run a query that returns too many rows."
+  prompt: "Run a query that returns too many rows."
   steps:
     - tool_calls:
         - name: run_query
@@ -201,7 +201,7 @@
     failed_tool_calls: 1
 
 - id: chart-over-row-cap
-  prompt: "Fail on purpose: chart a Result Table above the chart row cap."
+  prompt: "Chart a Result Table above the chart row cap."
   steps:
     - tool_calls:
         - name: run_query
@@ -225,7 +225,7 @@
     failed_tool_calls: 1
 
 - id: chart-with-inline-data
-  prompt: "Fail on purpose: chart a spec that embeds its own data values."
+  prompt: "Chart a spec that embeds its own data values."
   steps:
     - tool_calls:
         - name: run_query
@@ -249,7 +249,7 @@
     failed_tool_calls: 1
 
 - id: malformed-json-arguments
-  prompt: "Fail on purpose: call a tool with malformed JSON arguments."
+  prompt: "Call a tool with malformed JSON arguments."
   steps:
     - tool_calls:
         - name: run_query
@@ -260,7 +260,7 @@
     failed_tool_calls: 1
 
 - id: repeated-failures
-  prompt: "Fail on purpose: keep failing until the attempt limit ends the turn."
+  prompt: "Keep failing until the attempt limit ends the turn."
   steps:
     - tool_calls:
         - name: run_query
@@ -277,7 +277,7 @@
     notice: after several attempts
 
 - id: llm-stream-error
-  prompt: "Fail on purpose: the LLM stream breaks partway."
+  prompt: "The LLM stream breaks partway."
   steps:
     - text: "Let me look into that, and then"
       error: The response stream was cut off.

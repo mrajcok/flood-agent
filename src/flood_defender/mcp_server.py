@@ -27,7 +27,7 @@ import anyio.to_thread
 from mcp.server.fastmcp import Context, FastMCP
 
 from flood_defender import queries
-from flood_defender.mcp_protocol import META_CONVERSATION_ID
+from flood_defender.mcp_protocol import META_CONVERSATION_ID, META_MAX_RESULT_ROWS
 
 
 @dataclass(frozen=True)
@@ -80,6 +80,13 @@ def _conversation_id(ctx: Context) -> str | None:
     meta = ctx.request_context.meta
     value = getattr(meta, META_CONVERSATION_ID, None) if meta else None
     return value if isinstance(value, str) and value else None
+
+
+def _max_result_rows(ctx: Context, default: int) -> int:
+    """This turn's row cap from request `_meta`; the launch default if it is missing or invalid."""
+    meta = ctx.request_context.meta
+    value = getattr(meta, META_MAX_RESULT_ROWS, None) if meta else None
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 1 else default
 
 
 def _allowed_tables(app_db: Path | None, ctx: Context) -> set[str]:
@@ -137,7 +144,10 @@ def create_server(settings: ServerSettings) -> FastMCP:
         # A failed result may carry `raw_error`; the Agent strips it (keeping it for the Trace)
         # before anything is sent to the LLM.
         return json.dumps(
-            queries.run_query(settings.telemetry_db, settings.results_db, sql, settings.query_timeout_s, settings.max_result_rows, allowed)
+            queries.run_query(
+                settings.telemetry_db, settings.results_db, sql, settings.query_timeout_s,
+                _max_result_rows(ctx, settings.max_result_rows), allowed,
+            )
         )
 
     @mcp.tool()

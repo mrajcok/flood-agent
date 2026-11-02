@@ -18,7 +18,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.types import CallToolResult
 
-from flood_defender.mcp_protocol import META_CONVERSATION_ID, META_MAX_RESULT_ROWS
+from flood_agent.mcp_protocol import META_CONVERSATION_ID, META_MAX_RESULT_ROWS
 
 
 def _openai_tool(t) -> dict:

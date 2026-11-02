@@ -5,7 +5,7 @@ import time
 
 from conftest import ScriptedLLM, TextChunk, collect, tool_call
 
-from flood_defender.agent import Conversation
+from flood_agent.agent import Conversation
 
 SLOW_SQL = (
     "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c) SELECT count(*) AS n FROM c"

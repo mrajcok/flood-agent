@@ -1,6 +1,6 @@
 """Comparison rules: how a model's Result Table is judged against the reference."""
 
-from flood_defender.evalset.compare import compare
+from flood_agent.evalset.compare import compare
 
 REF_COLS = ["sip", "total_bytes"]
 REF = [("a", 100), ("b", 50), ("c", 7)]

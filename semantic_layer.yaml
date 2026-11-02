@@ -1,5 +1,5 @@
 dialect: sqlite
-# The generator (python -m flood_defender.generator) writes the dataset window. "now" = window_end.
+# The generator (python -m flood_agent.generator) writes the dataset window. "now" = window_end.
 window_start: 1767225600000
 window_end: 1767830400000
 time_key: etime

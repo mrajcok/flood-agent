@@ -5,9 +5,9 @@ import json
 import pytest
 from conftest import ScriptedLLM, all_telemetry_values, mcp_children, tool_call
 
-from flood_defender.evalset import runner
-from flood_defender.evalset.golden import Question
-from flood_defender.llm import TextChunk
+from flood_agent.evalset import runner
+from flood_agent.evalset.golden import Question
+from flood_agent.llm import TextChunk
 
 Q = Question(
     id="top-dport",

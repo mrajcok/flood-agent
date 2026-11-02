@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from flood_defender.semantic_layer import SemanticLayer
+from flood_agent.semantic_layer import SemanticLayer
 
 REAL = Path(__file__).parent.parent / "semantic_layer.yaml"
 

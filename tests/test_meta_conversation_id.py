@@ -6,9 +6,9 @@ import pytest
 from conftest import ScriptedLLM, TextChunk, collect, in_process_transport, last_tool_result, mcp_children, tool_call
 from mcp import ClientSession
 
-from flood_defender.agent import Conversation
+from flood_agent.agent import Conversation
 
-META_KEY = "flood_defender/conversation_id"
+META_KEY = "flood_agent/conversation_id"
 
 
 @pytest.mark.subprocess

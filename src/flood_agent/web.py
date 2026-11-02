@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from flood_defender.agent import (
+from flood_agent.agent import (
     Agent,
     Conversation,
     DisplayEvent,
@@ -30,8 +30,8 @@ from flood_defender.agent import (
     TurnEnd,
     resolve_chart_data,
 )
-from flood_defender.queries import InvalidSort
-from flood_defender.trace import split_system_prompt
+from flood_agent.queries import InvalidSort
+from flood_agent.trace import split_system_prompt
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 TEMPLATES.env.filters["split_system_prompt"] = split_system_prompt
@@ -68,7 +68,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
         async with agent:
             yield
 
-    app = FastAPI(title="Flood Defender", lifespan=lifespan)
+    app = FastAPI(title="Flood Agent", lifespan=lifespan)
 
     @app.exception_handler(ResultTableExpired)
     def expired_handler(request: Request, exc: ResultTableExpired):

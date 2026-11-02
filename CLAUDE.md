@@ -1,4 +1,4 @@
-# flood-defender
+# flood-agent
 
 ## Checks
 
@@ -8,7 +8,7 @@ Before committing: `uv run ruff check --fix . && uv run pyright && uv run pytest
 
 ### Issue tracker
 
-Issues are tracked in GitHub Issues on `mrajcok/flood-defender` via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+Issues are tracked in GitHub Issues on `mrajcok/flood-agent` via the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

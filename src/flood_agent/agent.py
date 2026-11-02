@@ -15,14 +15,14 @@ from typing import AsyncIterator, Callable
 from mcp import StdioServerParameters
 from mcp.types import TextContent
 
-from flood_defender import flagging, queries
-from flood_defender.llm import LLMClient, LLMError, TextChunk, ToolCallChunk, UsageChunk
-from flood_defender.mcp_connection import McpConnection, Transport, stdio_transport
-from flood_defender.mcp_protocol import QUERY_TOOLS
-from flood_defender.mcp_server import ServerSettings
-from flood_defender.semantic_layer import SemanticLayer
-from flood_defender.store import ConversationStore
-from flood_defender.trace import TraceBuilder
+from flood_agent import flagging, queries
+from flood_agent.llm import LLMClient, LLMError, TextChunk, ToolCallChunk, UsageChunk
+from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
+from flood_agent.mcp_protocol import QUERY_TOOLS
+from flood_agent.mcp_server import ServerSettings
+from flood_agent.semantic_layer import SemanticLayer
+from flood_agent.store import ConversationStore
+from flood_agent.trace import TraceBuilder
 
 
 @dataclass
@@ -246,7 +246,7 @@ class Agent:
 
     def _server_params(self) -> StdioServerParameters:
         return StdioServerParameters(
-            command=sys.executable, args=["-m", "flood_defender.mcp_server"], env=self._server_settings().to_env()
+            command=sys.executable, args=["-m", "flood_agent.mcp_server"], env=self._server_settings().to_env()
         )
 
     def _transport(self) -> Transport:

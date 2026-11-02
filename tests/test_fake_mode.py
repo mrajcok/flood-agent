@@ -7,11 +7,11 @@ import sqlite3
 import pytest
 from conftest import all_telemetry_values, collect, text_of
 
-from flood_defender.__main__ import build_app, picker_entries
-from flood_defender.agent import Conversation, DisplayEvent, TraceReady, TurnError
-from flood_defender.config import Settings
-from flood_defender.fake_llm import CannedPrompt, FakeClient, Step, load_canned_prompts, parent_of
-from flood_defender.llm import TextChunk
+from flood_agent.__main__ import build_app, picker_entries
+from flood_agent.agent import Conversation, DisplayEvent, TraceReady, TurnError
+from flood_agent.config import Settings
+from flood_agent.fake_llm import CannedPrompt, FakeClient, Step, load_canned_prompts, parent_of
+from flood_agent.llm import TextChunk
 
 CANNED = load_canned_prompts()
 PICKER = picker_entries(CANNED)
@@ -86,7 +86,7 @@ async def test_a_failed_query_without_telemetry_data_says_so_instead_of_asking_f
     text = text_of(events)
     assert "run an earlier prompt" not in text
     assert "query failed" in text
-    assert "flood_defender.generator" in text
+    assert "flood_agent.generator" in text
     assert not [e for e in events if isinstance(e, DisplayEvent)]
 
 

@@ -1,4 +1,4 @@
-# Flood Defender
+# Flood Agent
 
 Chat-driven flow telemetry analysis where no telemetry data passes through the LLM
 (see `GLOSSARY.md` and `docs/adr/0001-no-telemetry-data-through-the-llm.md`).
@@ -12,7 +12,7 @@ Requires [uv](https://docs.astral.sh/uv/) (Python 3.11+; the MCP SDK is pinned t
 
 ```
 uv sync
-uv run python -m flood_defender.generator data/telemetry.db   # 7 days, ~2M Flow Records, 3 injected attacks;
+uv run python -m flood_agent.generator data/telemetry.db   # 7 days, ~2M Flow Records, 3 injected attacks;
                                                               # also writes the window into semantic_layer.yaml and data/telemetry.db.attacks.json
 ```
 
@@ -20,11 +20,11 @@ uv run python -m flood_defender.generator data/telemetry.db   # 7 days, ~2M Flow
 
 ```
 cp .env.example .env     # then set OPENROUTER_API_KEY in .env (never commit it)
-uv run python -m flood_defender                    # http://127.0.0.1:8000
+uv run python -m flood_agent                    # http://127.0.0.1:8000
 ```
 
 To restart automatically when the code, templates, Semantic Layer or `.env` change, run
-`uv run flood-defender-dev` instead (same settings, e.g. `LLM_BACKEND=fake uv run flood-defender-dev`).
+`uv run flood-agent-dev` instead (same settings, e.g. `LLM_BACKEND=fake uv run flood-agent-dev`).
 Reload the page after a restart.
 
 ### Fake Mode (no LLM, no key)
@@ -34,7 +34,7 @@ and chart Displays, Traces, saved Conversations and PSV export without an OpenRo
 without any cost or model latency. Generate the data first (default seed, as in Setup), then:
 
 ```
-LLM_BACKEND=fake uv run python -m flood_defender   # or set LLM_BACKEND=fake in .env
+LLM_BACKEND=fake uv run python -m flood_agent   # or set LLM_BACKEND=fake in .env
 ```
 
 The page shows a "Fake Mode — no LLM" badge and a list of Canned Prompts above the chat
@@ -44,22 +44,22 @@ paths (bad SQL, row and chart caps, malformed tool calls, an LLM stream error). 
 message gets a short reply pointing to the Canned Prompts shown above the message box. Traces show the model as `fake` and $0.00.
 
 To keep fake Conversations out of your real ones, also set `APP_DB=data/fake.db`. Canned
-Prompts live in `src/flood_defender/canned_prompts.yaml` (format in its header); `pytest`
+Prompts live in `src/flood_agent/canned_prompts.yaml` (format in its header); `pytest`
 runs every one and checks its declared outcome.
 
 ## Settings
 
-Every setting has a default in `src/flood_defender/defaults.toml`, the only place defaults
+Every setting has a default in `src/flood_agent/defaults.toml`, the only place defaults
 are written. Override any of them, highest priority first, with an environment variable, a
 `.env` file in the working directory, or (lowest) that defaults file. Names are the keys in
 upper case (`QUERY_TIMEOUT_S`, `MAX_LLM_STEPS`, ...); blank values count as unset and `$`
 is never interpolated. Validation errors name the offending setting.
 
-`.env.example` documents every setting and is generated from `flood_defender/config.py`
+`.env.example` documents every setting and is generated from `flood_agent/config.py`
 and `defaults.toml`; a test fails if it is stale. After changing either, regenerate it:
 
 ```
-uv run python -m flood_defender.config > .env.example
+uv run python -m flood_agent.config > .env.example
 ```
 
 ## Test
@@ -82,7 +82,7 @@ Tables are paginated (50 rows/page, max 500) and sortable on any column by the A
 Result Table; `sort` must exactly match a column of that Result Table or the request is a
 400. `GET /api/results/<rt>/psv` streams the full Result Table as pipe-separated values (fields containing `|`, a quote or a newline are double-quoted, CSV-style; raw values, formula-leading
 text prefixed with `'`). Both are Agent endpoints, not LLM tools. The `/api/results/...`
-endpoints are not scoped per Conversation by design: Flood Defender is single-user and local, with no authentication.
+endpoints are not scoped per Conversation by design: Flood Agent is single-user and local, with no authentication.
 
 Formatting comes from Semantic Layer column metadata (`tables.flows.columns.<col>`):
 `enum` -> names (proto), `enum_bits` -> flag letters (S, SA, FPA), `unit: bytes` -> decimal
@@ -119,7 +119,7 @@ after the data reference is resolved.
 
 ## Eval set and runner (on demand, not CI)
 
-`src/flood_defender/evalset/golden.yaml` holds ~30 golden questions with reference SQL
+`src/flood_agent/evalset/golden.yaml` holds ~30 golden questions with reference SQL
 (many target the injected attacks of the default seed-1 database). `pytest` checks that
 every reference query runs and that attack answers agree with `attacks.json`, and tests
 the runner with the scripted fake LLM; it never calls OpenRouter.
@@ -127,9 +127,9 @@ the runner with the scripted fake LLM; it never calls OpenRouter.
 To compare models against real OpenRouter (costs money):
 
 ```
-uv run python -m flood_defender.generator data/telemetry.db        # default seed 1, full scale
+uv run python -m flood_agent.generator data/telemetry.db        # default seed 1, full scale
 export OPENROUTER_API_KEY=...
-uv run python -m flood_defender.evalset --db data/telemetry.db \
+uv run python -m flood_agent.evalset --db data/telemetry.db \
     --models anthropic/claude-sonnet-5.5 deepseek/deepseek-v4-pro-0813 z-ai/glm-5.3 qwen/qwen3.8-27b \
     --out eval-report                                              # writes eval-report.md / .json
 ```

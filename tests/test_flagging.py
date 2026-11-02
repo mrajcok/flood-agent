@@ -7,9 +7,9 @@ import re
 import pytest
 from conftest import ScriptedLLM, collect, last_tool_result, tool_call
 
-from flood_defender.agent import Conversation, FlagEvent, TraceReady
-from flood_defender.flagging import find_unseen_values
-from flood_defender.llm import TextChunk
+from flood_agent.agent import Conversation, FlagEvent, TraceReady
+from flood_agent.flagging import find_unseen_values
+from flood_agent.llm import TextChunk
 
 SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
 

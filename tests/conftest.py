@@ -14,11 +14,11 @@ import pytest
 from fastapi.testclient import TestClient
 from mcp.shared.memory import create_client_server_memory_streams
 
-from flood_defender.agent import Agent, AgentConfig, Conversation, TextDelta
-from flood_defender.config import Settings
-from flood_defender.llm import TextChunk, ToolCallChunk, UsageChunk
-from flood_defender.mcp_server import ServerSettings, create_server
-from flood_defender.web import create_app
+from flood_agent.agent import Agent, AgentConfig, Conversation, TextDelta
+from flood_agent.config import Settings
+from flood_agent.llm import TextChunk, ToolCallChunk, UsageChunk
+from flood_agent.mcp_server import ServerSettings, create_server
+from flood_agent.web import create_app
 
 SCHEMA = """
 CREATE TABLE flows (
@@ -223,7 +223,7 @@ def mcp_children() -> list[int]:
             if ppid != me:
                 continue
             with open(f"/proc/{pid}/cmdline", "rb") as f:
-                if b"flood_defender.mcp_server" in f.read():
+                if b"flood_agent.mcp_server" in f.read():
                     found.append(int(pid))
         except (OSError, IndexError, ValueError):
             continue  # process vanished

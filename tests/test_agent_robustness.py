@@ -8,9 +8,9 @@ import json
 import pytest
 from conftest import ScriptedLLM, collect, last_tool_result, mcp_children, tool_call
 
-import flood_defender.agent as agent_mod
-from flood_defender.agent import Conversation, DisplayEvent, TextDelta, TraceReady, TurnEnd, TurnError
-from flood_defender.llm import LLMError, TextChunk, ToolCallChunk
+import flood_agent.agent as agent_mod
+from flood_agent.agent import Conversation, DisplayEvent, TextDelta, TraceReady, TurnEnd, TurnError
+from flood_agent.llm import LLMError, TextChunk, ToolCallChunk
 
 SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
 
@@ -354,7 +354,7 @@ async def test_show_table_still_works_for_own_table(make_agent):
 
 # Never answers `initialize`; exits when its stdin closes, as a real server does, so teardown
 # doesn't wait out the client's 2 s grace period before killing it.
-HANGING_SERVER = ["-c", "import sys; sys.stdin.read()  # flood_defender.mcp_server"]
+HANGING_SERVER = ["-c", "import sys; sys.stdin.read()  # flood_agent.mcp_server"]
 
 
 @pytest.mark.subprocess
@@ -390,7 +390,7 @@ async def test_cancelling_connection_start_reaps_the_subprocess():
 
     from mcp import StdioServerParameters
 
-    from flood_defender.mcp_connection import McpConnection, stdio_transport
+    from flood_agent.mcp_connection import McpConnection, stdio_transport
 
     conn = McpConnection(stdio_transport(StdioServerParameters(command=sys.executable, args=HANGING_SERVER)))
     task = asyncio.create_task(conn.start())
@@ -404,7 +404,7 @@ async def test_cancelling_connection_start_reaps_the_subprocess():
 
 @pytest.mark.subprocess
 async def test_connection_start_after_aclose_or_twice_fails_clearly(build_agent):
-    from flood_defender.mcp_connection import McpConnection
+    from flood_agent.mcp_connection import McpConnection
 
     agent = build_agent(ScriptedLLM())
     conn = McpConnection(agent._transport())

@@ -2,7 +2,7 @@
 
 import pytest
 
-from flood_defender import queries
+from flood_agent import queries
 
 
 def _run(telemetry_db, tmp_path, sql):
@@ -41,7 +41,7 @@ def test_sqlite_error_keeps_raw_error(telemetry_db, tmp_path):
 async def test_agent_turn_gives_llm_the_count_and_creates_no_result_table(make_agent):
     from conftest import ScriptedLLM, collect, last_tool_result, tool_call
 
-    from flood_defender.llm import TextChunk
+    from flood_agent.llm import TextChunk
 
     llm = ScriptedLLM(
         [tool_call("run_count_query", sql="SELECT COUNT(*) FROM flows")], [TextChunk("There are 3 flows.")]
@@ -67,7 +67,7 @@ async def test_failed_count_queries_count_toward_the_retry_limit(make_agent):
 async def test_large_count_stated_in_reply_is_not_flagged(make_agent):
     from conftest import ScriptedLLM, collect, tool_call
 
-    from flood_defender.llm import TextChunk
+    from flood_agent.llm import TextChunk
 
     cross = "SELECT COUNT(*) FROM " + ", ".join(f"flows t{i}" for i in range(9))  # 3**9 = 19683
     llm = ScriptedLLM([tool_call("run_count_query", sql=cross)], [TextChunk("There are 19,683 rows.")])

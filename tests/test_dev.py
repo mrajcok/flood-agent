@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from flood_defender.dev import watched_paths
+from flood_agent.dev import watched_paths
 
 
 def test_watches_the_package_and_the_semantic_layer(tmp_path):

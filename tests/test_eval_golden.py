@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from flood_defender.evalset.golden import load_golden, run_reference
-from flood_defender.generator import generate
+from flood_agent.evalset.golden import load_golden, run_reference
+from flood_agent.generator import generate
 
 REAL_SL = Path(__file__).parent.parent / "semantic_layer.yaml"
 QUESTIONS = load_golden()

@@ -3,8 +3,8 @@
 import pytest
 from conftest import ScriptedLLM, all_telemetry_values, collect, last_tool_result, tool_call
 
-from flood_defender.agent import DisplayEvent
-from flood_defender.llm import TextChunk
+from flood_agent.agent import DisplayEvent
+from flood_agent.llm import TextChunk
 
 CHART_SQL = "SELECT etime, SUM(bytes) AS total_bytes FROM flows GROUP BY etime"
 TOP_PORTS_SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
@@ -138,5 +138,5 @@ async def test_no_telemetry_value_reaches_the_llm_with_charts(make_agent, teleme
 def test_chart_template_fills_the_pane_width():
     from pathlib import Path
 
-    tpl = (Path(__file__).parent.parent / "src/flood_defender/templates/display_chart.html").read_text()
+    tpl = (Path(__file__).parent.parent / "src/flood_agent/templates/display_chart.html").read_text()
     assert "width: 'container'" in tpl and "fit-x" in tpl

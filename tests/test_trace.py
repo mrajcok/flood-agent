@@ -5,8 +5,8 @@ import re
 
 from conftest import ScriptedLLM, collect, last_tool_result, tool_call
 
-from flood_defender.agent import Conversation, TraceReady
-from flood_defender.llm import TextChunk
+from flood_agent.agent import Conversation, TraceReady
+from flood_agent.llm import TextChunk
 
 SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
 SPEC = {"mark": "bar", "encoding": {"x": {"field": "dport"}}}
@@ -163,7 +163,7 @@ def test_each_turn_has_its_own_trace_on_reopen(build_agent, web_client):
 
 
 def test_split_system_prompt_into_three_parts():
-    from flood_defender.trace import split_system_prompt
+    from flood_agent.trace import split_system_prompt
 
     prompt = "rules\n# Semantic Layer\ntables: x\n\n# Result Tables\nNone.\n"
     head, layer, rest = split_system_prompt(prompt)

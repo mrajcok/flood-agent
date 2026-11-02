@@ -5,13 +5,13 @@ single Count (the ADR 0001 exception), `show_table` records a Display definition
 browser only through the Agent's internal data path.
 
 `create_server(settings)` builds the server from static `ServerSettings`. In production it runs
-as a stdio subprocess (`python -m flood_defender.mcp_server`) and reads those settings from the
+as a stdio subprocess (`python -m flood_agent.mcp_server`) and reads those settings from the
 launch environment the Agent passes it: TELEMETRY_DB, RESULTS_DB, APP_DB, QUERY_TIMEOUT_S,
 MAX_RESULT_ROWS and CHART_ROW_CAP. There are no fallbacks. Most tests run it in-process
 (`tests/conftest.py`).
 
 The Conversation id that limits which Result Tables a call may use arrives with every tool call in
-the MCP request `_meta` (key `flood_defender/conversation_id`), set by the Agent. It is not a tool
+the MCP request `_meta` (key `flood_agent/conversation_id`), set by the Agent. It is not a tool
 argument, so the LLM never sees it. A missing or empty id means no Result Tables are owned.
 """
 
@@ -26,8 +26,8 @@ from pathlib import Path
 import anyio.to_thread
 from mcp.server.fastmcp import Context, FastMCP
 
-from flood_defender import queries
-from flood_defender.mcp_protocol import META_CONVERSATION_ID, META_MAX_RESULT_ROWS
+from flood_agent import queries
+from flood_agent.mcp_protocol import META_CONVERSATION_ID, META_MAX_RESULT_ROWS
 
 
 @dataclass(frozen=True)
@@ -132,7 +132,7 @@ def _find_violation(node, table: str) -> str | None:
 
 def create_server(settings: ServerSettings) -> FastMCP:
     """The MCP server with its tools bound to these static settings."""
-    mcp = FastMCP("flood-defender")
+    mcp = FastMCP("flood-agent")
 
     @mcp.tool()
     @_in_worker_thread

@@ -1,6 +1,6 @@
-# Flood Defender
+# Flood Agent
 
-Flood stores network telemetry (NetFlow/IPFIX). Flood Defender is a chat-based analyst tool for exploring that telemetry and investigating volumetric attacks, without ever exposing telemetry data to the LLM.
+Flood stores network telemetry (NetFlow/IPFIX). Flood Agent is a chat-based analyst tool for exploring that telemetry and investigating volumetric attacks, without ever exposing telemetry data to the LLM.
 
 ## Actors
 
@@ -45,7 +45,7 @@ _Avoid_: Query result, response
 ## Conversation
 
 **Conversation**:
-One chat thread between a user and Flood Defender; owns its Result Tables.
+One chat thread between a user and Flood Agent; owns its Result Tables.
 _Avoid_: Session, thread
 
 **Chart Spec**:
@@ -67,7 +67,7 @@ _Avoid_: Widget, view, output
 ## Fake Mode
 
 **Fake Mode**:
-Running Flood Defender with a scripted stand-in for the LLM, so no language model is called. Everything else — the Agent, queries, Result Tables, Displays, Traces — runs for real.
+Running Flood Agent with a scripted stand-in for the LLM, so no language model is called. Everything else — the Agent, queries, Result Tables, Displays, Traces — runs for real.
 _Avoid_: Demo mode, offline mode, mock mode
 
 **Canned Prompt**:

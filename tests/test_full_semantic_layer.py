@@ -5,9 +5,9 @@ from pathlib import Path
 import pytest
 from conftest import ScriptedLLM, all_telemetry_values, collect, config_for_test, last_tool_result, tool_call
 
-from flood_defender.agent import Agent
-from flood_defender.llm import TextChunk
-from flood_defender.semantic_layer import SemanticLayer
+from flood_agent.agent import Agent
+from flood_agent.llm import TextChunk
+from flood_agent.semantic_layer import SemanticLayer
 
 REAL = Path(__file__).parent.parent / "semantic_layer.yaml"
 

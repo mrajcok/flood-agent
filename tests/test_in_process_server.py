@@ -3,8 +3,8 @@
 import pytest
 from conftest import ScriptedLLM, collect, last_tool_result, mcp_children, tool_call
 
-from flood_defender.agent import TurnEnd
-from flood_defender.llm import TextChunk
+from flood_agent.agent import TurnEnd
+from flood_agent.llm import TextChunk
 
 
 async def test_a_turn_runs_its_tools_without_starting_a_server_process(make_agent):

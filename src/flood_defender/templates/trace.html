@@ -3,7 +3,7 @@
   <summary>Trace
     <span class="trace-totals">{{ trace.model }} &middot;
       {{ trace.totals.prompt_tokens }} in / {{ trace.totals.completion_tokens }} out tokens &middot;
-      {% if trace.totals.cost is not none %}${{ "%.6f"|format(trace.totals.cost) }}{% else %}cost n/a{% endif %} &middot;
+      {% if trace.totals.cost is not none %}${{ "%.3f"|format(trace.totals.cost) }}{% else %}cost n/a{% endif %} &middot;
       {{ trace.totals.duration_ms }} ms</span></summary>
   {% set parts = trace.system_prompt|split_system_prompt %}
   <details class="trace-part"><summary>System prompt</summary><pre>{{ parts[0] }}</pre></details>
@@ -13,7 +13,7 @@
   {% for e in trace.entries %}
   <section class="trace-entry trace-{{ e.kind }}">
     {% if e.kind == "llm_step" %}
-      <h4>LLM step &middot; {{ e.duration_ms }} ms{% if e.usage %} &middot; {{ e.usage.prompt_tokens }} in / {{ e.usage.completion_tokens }} out{% if e.usage.cost is not none %} &middot; ${{ "%.6f"|format(e.usage.cost) }}{% endif %}{% endif %}</h4>
+      <h4>LLM step &middot; {{ e.duration_ms }} ms{% if e.usage %} &middot; {{ e.usage.prompt_tokens }} in / {{ e.usage.completion_tokens }} out{% if e.usage.cost is not none %} &middot; ${{ "%.3f"|format(e.usage.cost) }}{% endif %}{% endif %}</h4>
       {% if e.system_prompt %}{% set now = e.system_prompt|split_system_prompt %}
         {% if now[0] != parts[0] %}<details class="trace-part"><summary>System prompt changed</summary><pre>{{ now[0] }}</pre></details>{% endif %}
         {% if now[1] != parts[1] %}<details class="trace-part"><summary>Semantic Layer changed</summary><pre>{{ now[1] }}</pre></details>{% endif %}

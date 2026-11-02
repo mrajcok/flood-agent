@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS result_tables (
   request TEXT NOT NULL DEFAULT '',
   expired INTEGER NOT NULL DEFAULT 0,
   truncated_to INTEGER,
-  retention_ms INTEGER
+  retention_ms INTEGER,
+  display_name TEXT
 );
 """
 
@@ -70,6 +71,7 @@ _RESULT_TABLE_MIGRATIONS = {
     "expired": "INTEGER NOT NULL DEFAULT 0",
     "truncated_to": "INTEGER",
     "retention_ms": "INTEGER",
+    "display_name": "TEXT",
 }
 
 
@@ -89,6 +91,8 @@ class ConversationStore:
             for col, decl in _RESULT_TABLE_MIGRATIONS.items():
                 if col not in have:
                     con.execute(f"ALTER TABLE result_tables ADD COLUMN {col} {decl}")
+                    if col == "display_name":  # keep the names older databases already showed
+                        con.execute("UPDATE result_tables SET display_name=title WHERE title != ''")
 
     def _connect(self) -> sqlite3.Connection:
         con = sqlite3.connect(self.path)
@@ -252,17 +256,17 @@ class ConversationStore:
 
     def result_table_settings(self, name: str, default_retention_ms: int) -> dict | None:
         """The user-visible name and retention in ms of a Result Table, or None if unknown.
-        A blank title falls back to the table's name."""
+        Until the user renames it, the name is the table's own."""
         with closing(self._connect()) as con:
-            row = con.execute("SELECT title, retention_ms FROM result_tables WHERE name=?", (name,)).fetchone()
+            row = con.execute("SELECT display_name, retention_ms FROM result_tables WHERE name=?", (name,)).fetchone()
         if row is None:
             return None
-        return {"title": row["title"] or name, "retention_ms": row["retention_ms"] if row["retention_ms"] is not None else default_retention_ms}
+        return {"title": row["display_name"] or name, "retention_ms": row["retention_ms"] if row["retention_ms"] is not None else default_retention_ms}
 
     def update_result_table(self, name: str, title: str | None = None, retention_ms: int | None = None) -> None:
         with closing(self._connect()) as con, con:
             if title is not None:
-                con.execute("UPDATE result_tables SET title=? WHERE name=?", (title, name))
+                con.execute("UPDATE result_tables SET display_name=? WHERE name=?", (title, name))
             if retention_ms is not None:
                 con.execute("UPDATE result_tables SET retention_ms=? WHERE name=?", (retention_ms, name))
 

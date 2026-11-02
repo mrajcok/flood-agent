@@ -120,7 +120,7 @@ def test_deleting_a_conversation_removes_it_and_its_result_tables(build_agent, w
     client = web_client(build_agent(ScriptedLLM(*table_script(), [TextChunk("other")])))
     cid, body = ask(client, "top ports")
     other, _ = ask(client, "something else")
-    table = re.search(r"/api/results/(rt_\w+)/rows", client.get(f"/c/{cid}").text).group(1)
+    table = re.search(r"/api/results/([a-z0-9_]+)/rows", client.get(f"/c/{cid}").text).group(1)
     assert client.get(f"/api/results/{table}/rows").status_code == 200
 
     deleted = client.post(f"/c/{cid}/delete", follow_redirects=False)
@@ -251,7 +251,7 @@ def test_deleting_a_turn_removes_its_prompt_answer_and_result_tables_only(build_
     client = web_client(build_agent(ScriptedLLM(*table_script("reply-alpha"), [TextChunk("reply-beta")])))
     cid, _ = ask(client, "first question")
     ask(client, "second question", cid)
-    table = re.search(r"/api/results/(rt_\w+)/rows", client.get(f"/c/{cid}").text).group(1)
+    table = re.search(r"/api/results/([a-z0-9_]+)/rows", client.get(f"/c/{cid}").text).group(1)
     first, second = turn_ids(main_pane(client.get(f"/c/{cid}").text))
 
     deleted = client.post(f"/c/{cid}/turns/{first}/delete", follow_redirects=False)
@@ -273,7 +273,7 @@ def test_deleting_a_later_turn_leaves_an_earlier_turns_result_table_readable(
     cid, _ = ask(client, "first question")
     ask(client, "second question", cid)
     first, second = turn_ids(main_pane(client.get(f"/c/{cid}").text))
-    first_table = re.search(r"/api/results/(rt_\w+)/rows", client.get(f"/c/{cid}").text).group(1)
+    first_table = re.search(r"/api/results/([a-z0-9_]+)/rows", client.get(f"/c/{cid}").text).group(1)
 
     client.post(f"/c/{cid}/turns/{second}/delete")
 

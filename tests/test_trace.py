@@ -57,10 +57,10 @@ async def test_success_turn_trace_has_every_item(make_agent):
 
     (tc,) = of_kind(trace, "tool_call")
     assert tc["name"] == "run_query" and tc["sql"] == SQL and tc["duration_ms"] >= 0
-    assert tc["executed_sql"].startswith("CREATE TABLE results.rt_") and SQL in tc["executed_sql"]
+    assert tc["executed_sql"].startswith("CREATE TABLE results.") and SQL in tc["executed_sql"]
 
     (rt,) = of_kind(trace, "result_table")
-    assert rt["row_count"] == 2 and rt["name"].startswith("rt_")
+    assert rt["row_count"] == 2 and re.fullmatch(r"[a-z][a-z0-9_]*_\d{8}_\d{6}", rt["name"])
     assert rt["name"] == json.loads(tc["query_metadata"])["result_table"]
 
 
@@ -140,7 +140,7 @@ def test_trace_is_collapsed_details_in_stream_and_after_restart(build_agent, web
     assert page.count('class="trace"') == 1
     assert page.count('class="trace-part"') >= 3
     assert '<details class="trace-part" open><summary>Result Tables' in page
-    assert "CREATE TABLE results.rt_" in page and "test/model" in page
+    assert "CREATE TABLE results." in page and "test/model" in page
 
 
 def test_trace_content_is_html_escaped(build_agent, web_client):

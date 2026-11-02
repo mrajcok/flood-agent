@@ -145,7 +145,7 @@ def create_server(settings: ServerSettings) -> FastMCP:
         return json.dumps(
             queries.run_query(
                 settings.telemetry_db, settings.results_db, sql, settings.query_timeout_s,
-                _max_result_rows(ctx), allowed,
+                _max_result_rows(ctx), allowed, title,
             )
         )
 

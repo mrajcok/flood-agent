@@ -8,11 +8,35 @@ import ipaddress
 import re
 import sqlite3
 import time
-import uuid
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 
-RESULT_TABLE_RE = re.compile(r"^rt_[0-9a-f]{8}$")
+# <title slug>_<YYYYMMDD>_<HHMMSS>[_<n>]: lower-case letters, digits and underscores only, starting
+# with a letter, so the name is a valid unquoted identifier in SQLite and Ocient.
+RESULT_TABLE_RE = re.compile(r"^[a-z][a-z0-9_]{0,79}_\d{8}_\d{6}(?:_\d+)?$")
+_SLUG_MAX = 40
+
+
+def _timestamp() -> str:
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def _slug(title: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")[:_SLUG_MAX].strip("_") or "result"
+    return f"t_{slug}" if slug[0].isdigit() else slug
+
+
+def _free_name(con: sqlite3.Connection, title: str) -> str:
+    """`<slug>_<date>_<time>`, with `_2`, `_3`... when that name is already taken."""
+    base = f"{_slug(title)}_{_timestamp()}"
+    taken = {r[0] for r in con.execute("SELECT name FROM results.sqlite_master WHERE name LIKE ? ESCAPE '\\'",
+                                       (base.replace("_", "\\_") + "%",))}
+    name, n = base, 1
+    while name in taken:
+        n += 1
+        name = f"{base}_{n}"
+    return name
 
 _FORBIDDEN_WORDS = {
     "insert", "update", "delete", "drop", "create", "alter", "attach", "detach",
@@ -106,7 +130,7 @@ _QUALIFIED_RE = re.compile(r"\b(?:results|main|temp)\.\w+(?:\.\w+)?", re.I)
 def sanitize_error(message: str) -> str:
     """Strip quoted literals and numbers from an SQLite error before it reaches the LLM.
 
-    Authorizer denials ("access to results.rt_xxxx.col is prohibited", "not authorized") are
+    Authorizer denials ("access to results.<table>.col is prohibited", "not authorized") are
     replaced wholesale so no table or column name from a denied read (possibly another
     Conversation's) reaches the LLM; any other database-qualified reference is redacted."""
     if _DENIAL_RE.search(message):
@@ -203,6 +227,7 @@ def run_query(
     timeout_s: float,
     max_rows: int,
     allowed_tables: set[str] | None = None,
+    title: str = "",
 ) -> dict:
     """Run the SQL as CTAS into the results database. Returns Query Metadata only.
 
@@ -217,15 +242,21 @@ def run_query(
         select = validate_select(sql)
     except QueryRejected as e:
         return {"success": False, "error": str(e)}
-    name = f"rt_{uuid.uuid4().hex[:8]}"
     con = open_connection(telemetry_db, results_db, allowed_tables)
-    executed = f"CREATE TABLE results.{name} AS SELECT * FROM (\n{select}\n) LIMIT {int(max_rows)}"
+    executed = ""
     try:
+        name = _free_name(con, title)
         with _deadline(con, timeout_s) as timed_out:
-            try:
-                con.execute(executed)
-            except sqlite3.Error as e:
-                return _failure(e, timed_out(), timeout_s, executed_sql=executed)
+            for attempt in range(5):  # a concurrent query may take the name between check and create
+                executed = f"CREATE TABLE results.{name} AS SELECT * FROM (\n{select}\n) LIMIT {int(max_rows)}"
+                try:
+                    con.execute(executed)
+                    break
+                except sqlite3.Error as e:
+                    if attempt < 4 and f"table {name} already exists" in str(e):
+                        name = _free_name(con, title)
+                        continue
+                    return _failure(e, timed_out(), timeout_s, executed_sql=executed)
         try:
             con.set_authorizer(None)
             con.commit()

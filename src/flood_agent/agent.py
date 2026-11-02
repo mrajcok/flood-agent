@@ -36,7 +36,6 @@ class AgentConfig:
     model: str
     result_ttl_ms: int  # Result Tables expire this long after last Conversation activity
     query_timeout_s: float
-    max_result_rows: int
     chart_row_cap: int
     max_failed_attempts: int
     max_llm_steps: int
@@ -240,7 +239,6 @@ class Agent:
             results_db=self.config.results_db,
             app_db=self.store.path,
             query_timeout_s=self.config.query_timeout_s,
-            max_result_rows=self.config.max_result_rows,
             chart_row_cap=self.config.chart_row_cap,
         )
 
@@ -312,6 +310,7 @@ class Agent:
         self._raise_if_expired(result_table)
         data = queries.fetch_rows(self.config.results_db, result_table, columns, **page_args)
         data["formats"] = self.semantic_layer.column_formats(data["columns"])
+        data["truncated_to"] = self.store.truncated_to(result_table)
         return data
 
     def iter_all_rows(self, result_table: str):
@@ -325,14 +324,14 @@ class Agent:
         return queries.fetch_records(self.config.results_db, result_table, self.config.chart_row_cap)
 
     async def run_turn(
-        self, conversation: Conversation, user_message: str, max_result_rows: int | None = None
+        self, conversation: Conversation, user_message: str, max_result_rows: int
     ) -> AsyncIterator[Event]:
         """Run one turn on the Agent's MCP connection (`start()` first).
 
         The turn runs in a producer task. If the consumer stops early (client disconnect), the
         producer is cancelled and awaited; the MCP server keeps running.
 
-        `max_result_rows` overrides the configured row cap for this turn's queries."""
+        `max_result_rows` is the row cap for this turn's queries; the user chooses it in the UI."""
         if self._connection is None:
             raise RuntimeError("Agent not started: call `await agent.start()` or use `async with agent`")
         queue: asyncio.Queue = asyncio.Queue()
@@ -356,7 +355,7 @@ class Agent:
             await asyncio.gather(task, return_exceptions=True)
 
     async def _produce(
-        self, conversation: Conversation, user_message: str, queue: asyncio.Queue, max_result_rows: int | None
+        self, conversation: Conversation, user_message: str, queue: asyncio.Queue, max_result_rows: int
     ):
         try:
             await self._run(conversation, user_message, queue, max_result_rows)
@@ -367,7 +366,7 @@ class Agent:
             await queue.put(e)
 
     async def _run(
-        self, conversation: Conversation, user_message: str, queue: asyncio.Queue, max_result_rows: int | None
+        self, conversation: Conversation, user_message: str, queue: asyncio.Queue, max_result_rows: int
     ):
         self.sweep_expired()
         if conversation.id is None:
@@ -400,7 +399,7 @@ class Agent:
         await queue.put(TurnError(message, detail))
 
     async def _converse(
-        self, conversation, turn_id, user_message, trace: TraceBuilder, queue, max_result_rows: int | None = None
+        self, conversation, turn_id, user_message, trace: TraceBuilder, queue, max_result_rows: int
     ):
         connection = await self._ensure_connection()
         tools = connection.tools
@@ -464,7 +463,7 @@ class Agent:
 
     async def _run_tool(
         self, connection: McpConnection, c: ToolCallChunk, queue: asyncio.Queue, trace: TraceBuilder,
-        conversation_id: str, max_result_rows: int | None = None,
+        conversation_id: str, max_result_rows: int,
     ) -> tuple[str, dict, str | None, int]:
         """Execute one LLM tool call. Returns (content, args, executed_sql, failed 0/1).
 
@@ -584,7 +583,7 @@ class Agent:
             title = args.get("title", "")
             self.store.add_result_table(
                 conversation.id, payload["result_table"], title if isinstance(title, str) else "",
-                payload.get("columns", []), request,
+                payload.get("columns", []), request, payload.get("truncated_to"),
             )
         display = payload.get("display")
         if not display:

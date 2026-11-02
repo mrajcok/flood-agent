@@ -177,7 +177,7 @@ def config_for_test(tmp_path, telemetry_db, semantic_layer, **overrides) -> Agen
 def query_limits() -> dict:
     """timeout_s and max_rows for calling queries.run_query directly."""
     cfg = Settings().agent_config()
-    return {"timeout_s": cfg.query_timeout_s, "max_rows": cfg.max_result_rows}
+    return {"timeout_s": cfg.query_timeout_s, "max_rows": 1_000_000}
 
 
 @pytest.fixture
@@ -230,8 +230,10 @@ def mcp_children() -> list[int]:
     return found
 
 
-async def collect(agent: Agent, message: str, conversation: Conversation | None = None, **turn_options):
-    return [e async for e in agent.run_turn(conversation or Conversation(), message, **turn_options)]
+async def collect(
+    agent: Agent, message: str, conversation: Conversation | None = None, max_result_rows: int = 1_000_000
+):
+    return [e async for e in agent.run_turn(conversation or Conversation(), message, max_result_rows)]
 
 
 def text_of(events) -> str:

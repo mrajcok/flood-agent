@@ -76,7 +76,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
         return JSONResponse({"detail": "This result has expired and been deleted. Ask again to regenerate it."}, 410)
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-    pending: dict[str, tuple[Conversation, str, int | None]] = {}
+    pending: dict[str, tuple[Conversation, str, int]] = {}
 
     def sidebar(current: str | None) -> dict:
         return {
@@ -151,7 +151,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
         return RedirectResponse(f"/c/{conversation_id}", status_code=303)
 
     @app.post("/chat", response_class=HTMLResponse)
-    def chat(request: Request, message: str = Form(...), conversation_id: str = Form(""), max_rows: str = Form("")):
+    def chat(request: Request, message: str = Form(...), conversation_id: str = Form(""), max_rows: str = Form(...)):
         max_result_rows = _parse_max_rows(max_rows)
         if conversation_id:
             try:
@@ -262,11 +262,9 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
     return app
 
 
-def _parse_max_rows(raw: str) -> int | None:
-    """The "Max result rows" choice: blank means the configured default, otherwise a positive integer."""
+def _parse_max_rows(raw: str) -> int:
+    """The "Max result rows" choice (the only source of the row cap): a positive integer."""
     raw = raw.strip().replace(",", "")
-    if not raw:
-        return None
     if not raw.isascii() or not raw.isdigit() or int(raw) < 1:
         raise HTTPException(422, "Max result rows must be a whole number of at least 1")
     return int(raw)

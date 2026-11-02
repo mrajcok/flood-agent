@@ -4,7 +4,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
-from conftest import ScriptedLLM, collect, last_tool_result, tool_call
+from conftest import ScriptedLLM, collect, tool_call
 from pydantic import ValidationError
 
 from flood_agent.agent import STEP_LIMIT_MESSAGE, Agent, TextDelta
@@ -23,7 +23,7 @@ def test_the_toml_defaults_alone_are_enough_to_start():
     settings = Settings()
     cfg = settings.agent_config()
 
-    assert cfg.query_timeout_s > 0 and cfg.max_result_rows > 0 and cfg.chart_row_cap > 0
+    assert cfg.query_timeout_s > 0 and cfg.chart_row_cap > 0
     assert settings.max_failed_attempts >= 1 and settings.max_llm_steps >= 1
     with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
         settings.require_api_key()
@@ -40,7 +40,6 @@ def test_values_from_the_env_file_override_the_toml_defaults(tmp_path):
         SEMANTIC_LAYER=tmp_path / "s.yaml",
         RESULT_TTL_HOURS="1",
         QUERY_TIMEOUT_S="0.3",
-        MAX_RESULT_ROWS="2",
         CHART_ROW_CAP="5",
         MAX_FAILED_ATTEMPTS="5",
         MAX_LLM_STEPS="4",
@@ -58,25 +57,24 @@ def test_values_from_the_env_file_override_the_toml_defaults(tmp_path):
     assert cfg.semantic_layer == tmp_path / "s.yaml"
     assert cfg.result_ttl_ms == 3600 * 1000
     assert cfg.query_timeout_s == 0.3
-    assert cfg.max_result_rows == 2
     assert cfg.chart_row_cap == 5
     assert cfg.max_failed_attempts == 5
     assert (settings.max_llm_steps, settings.host, settings.port) == (4, "0.0.0.0", 9000)
 
 
 def test_the_real_environment_wins_over_the_env_file(tmp_path, monkeypatch):
-    env_file = write_env(tmp_path / ".env", MAX_RESULT_ROWS="2", QUERY_TIMEOUT_S="5")
-    monkeypatch.setenv("MAX_RESULT_ROWS", "7")
+    env_file = write_env(tmp_path / ".env", MAX_LLM_STEPS="2", QUERY_TIMEOUT_S="5")
+    monkeypatch.setenv("MAX_LLM_STEPS", "7")
     settings = Settings(_env_file=env_file)
 
-    assert settings.max_result_rows == 7  # from the environment
+    assert settings.max_llm_steps == 7  # from the environment
     assert settings.query_timeout_s == 5  # from the file
 
 
 def test_blank_values_are_treated_as_unset(tmp_path, monkeypatch):
     baseline = Settings()
     env_file = tmp_path / ".env"
-    env_file.write_text("QUERY_TIMEOUT_S=\nMAX_RESULT_ROWS=\nCHART_ROW_CAP=  \nTELEMETRY_DB=\nOPENROUTER_MODEL=\nMAX_LLM_STEPS=\n")
+    env_file.write_text("QUERY_TIMEOUT_S=\nCHART_ROW_CAP=  \nTELEMETRY_DB=\nOPENROUTER_MODEL=\nMAX_LLM_STEPS=\n")
     monkeypatch.setenv("MAX_FAILED_ATTEMPTS", "")
     settings = Settings(_env_file=env_file)
 
@@ -98,7 +96,6 @@ def test_dollar_signs_in_env_file_values_are_kept_literally(tmp_path):
         ("MAX_LLM_STEPS", "0"),
         ("QUERY_TIMEOUT_S", "0"),
         ("QUERY_TIMEOUT_S", "abc"),
-        ("MAX_RESULT_ROWS", "0"),
         ("CHART_ROW_CAP", "-1"),
         ("RESULT_TTL_HOURS", "0"),
         ("PORT", "70000"),
@@ -167,16 +164,6 @@ async def agent_from_env_file(tmp_path, telemetry_db, semantic_layer_path):
 
 def text_of(events):
     return "".join(e.text for e in events if isinstance(e, TextDelta))
-
-
-async def test_max_result_rows_from_the_env_file_reaches_the_mcp_server(agent_from_env_file):
-    async def refused(**env):
-        llm = ScriptedLLM([tool_call("run_query", sql="SELECT * FROM flows", title="t")], [TextChunk("ok")])
-        await collect(await agent_from_env_file(llm, **env), "q")
-        return last_tool_result(llm.calls[1])["success"] is False
-
-    assert await refused(MAX_RESULT_ROWS="2") is True
-    assert await refused() is False
 
 
 async def test_max_failed_attempts_from_the_env_file_sets_the_retry_limit(agent_from_env_file):

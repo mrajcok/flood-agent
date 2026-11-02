@@ -30,7 +30,7 @@ def test_chart_display_is_streamed_and_rows_served_from_chart_endpoint(build_age
         [TextChunk("chart")],
     )
     client = web_client(build_agent(llm))
-    posted = client.post("/chat", data={"message": "chart bytes"})
+    posted = client.post("/chat", data={"message": "chart bytes", "max_rows": "1000"})
     stream_url = posted.text.split('sse-connect="')[1].split('"')[0]
     body = client.get(stream_url).text
 
@@ -81,7 +81,7 @@ def test_reopening_rerenders_chart_display(build_agent, web_client):
         [TextChunk("chart")],
     )
     client = web_client(build_agent(llm))
-    posted = client.post("/chat", data={"message": "chart bytes"})
+    posted = client.post("/chat", data={"message": "chart bytes", "max_rows": "1000"})
     import re
 
     cid = re.search(r'name="conversation_id" value="([0-9a-f]+)"', posted.text).group(1)

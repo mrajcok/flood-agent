@@ -9,6 +9,7 @@ from mcp import ClientSession
 from flood_agent.agent import Conversation
 
 META_KEY = "flood_agent/conversation_id"
+CAP_KEY = "flood_agent/max_result_rows"
 
 
 @pytest.mark.subprocess
@@ -65,8 +66,8 @@ async def test_tool_calls_see_only_tables_of_the_meta_conversation(make_agent):
     own, missing, wrong, empty = await _raw_calls(
         agent,
         [
-            ("run_query", q, {META_KEY: conv.id}),
-            ("run_query", q, None),
+            ("run_query", q, {META_KEY: conv.id, CAP_KEY: 1000}),
+            ("run_query", q, {CAP_KEY: 1000}),
             ("show_table", {"result_table": table}, {META_KEY: "someone-else"}),
             ("show_table", {"result_table": table}, {META_KEY: ""}),
         ],
@@ -75,3 +76,12 @@ async def test_tool_calls_see_only_tables_of_the_meta_conversation(make_agent):
     assert not missing["success"]
     assert wrong == {"success": False, "error": "Unknown Result Table."}
     assert empty == wrong
+
+
+async def test_run_query_without_a_row_cap_in_meta_is_refused(make_agent):
+    agent = await make_agent(ScriptedLLM())
+    async with in_process_transport(agent._server_settings()) as (r, w), ClientSession(r, w) as session:
+        await session.initialize()
+        for meta in ({META_KEY: "c"}, {META_KEY: "c", CAP_KEY: 0}, {META_KEY: "c", CAP_KEY: "10"}):
+            res = await session.call_tool("run_query", {"sql": "SELECT 1", "title": "t"}, meta=meta)
+            assert res.isError

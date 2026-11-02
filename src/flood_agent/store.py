@@ -56,7 +56,8 @@ CREATE TABLE IF NOT EXISTS result_tables (
   title TEXT NOT NULL DEFAULT '',
   columns TEXT NOT NULL DEFAULT '[]',
   request TEXT NOT NULL DEFAULT '',
-  expired INTEGER NOT NULL DEFAULT 0
+  expired INTEGER NOT NULL DEFAULT 0,
+  truncated_to INTEGER
 );
 """
 
@@ -66,6 +67,7 @@ _RESULT_TABLE_MIGRATIONS = {
     "columns": "TEXT NOT NULL DEFAULT '[]'",
     "request": "TEXT NOT NULL DEFAULT ''",
     "expired": "INTEGER NOT NULL DEFAULT 0",
+    "truncated_to": "INTEGER",
 }
 
 
@@ -203,14 +205,21 @@ class ConversationStore:
 
     def add_result_table(
         self, conversation_id: str, name: str, title: str = "", columns: list[dict] | None = None,
-        request: str = "",
+        request: str = "", truncated_to: int | None = None,
     ) -> None:
+        """`truncated_to`: the row cap the table was cut to, or None if it is complete."""
         self._write(
-            "INSERT OR IGNORE INTO result_tables(name, conversation_id, created_at, title, columns, request)"
-            " VALUES (?,?,?,?,?,?)",
-            (name, conversation_id, self._now(), title, json.dumps(columns or []), request),
+            "INSERT OR IGNORE INTO result_tables(name, conversation_id, created_at, title, columns, request,"
+            " truncated_to) VALUES (?,?,?,?,?,?,?)",
+            (name, conversation_id, self._now(), title, json.dumps(columns or []), request, truncated_to),
             conversation_id,
         )
+
+    def truncated_to(self, name: str) -> int | None:
+        """The row cap the Result Table was cut to, or None if it is complete (or unknown)."""
+        with closing(self._connect()) as con:
+            row = con.execute("SELECT truncated_to FROM result_tables WHERE name=?", (name,)).fetchone()
+            return row["truncated_to"] if row else None
 
     def owns_result_table(self, conversation_id: str, name: str) -> bool:
         with closing(self._connect()) as con:

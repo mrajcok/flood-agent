@@ -10,9 +10,9 @@ from flood_agent.agent import Conversation, TextDelta, TraceEntry, TurnEnd
 from flood_agent.llm import TextChunk
 
 
-async def run_one(make_agent, sql, **limits):
+async def run_one(make_agent, sql, max_result_rows=1000, **limits):
     llm = ScriptedLLM([tool_call("run_query", sql=sql, title="t")], [TextChunk("ok")])
-    events = await collect(await make_agent(llm, **limits), "q")
+    events = await collect(await make_agent(llm, **limits), "q", max_result_rows=max_result_rows)
     return last_tool_result(llm.calls[1]), events
 
 
@@ -149,18 +149,25 @@ async def test_query_timeout_aborts_with_guidance(make_agent):
     assert "filter" in meta["error"].lower() or "aggregate" in meta["error"].lower()
 
 
-async def test_row_cap_refuses_with_guidance_and_leaves_no_table(make_agent, tmp_path):
+async def test_row_cap_keeps_the_first_rows_and_flags_the_table_truncated(make_agent, tmp_path):
     meta, _ = await run_one(make_agent, "SELECT * FROM flows", max_result_rows=2)
-    assert meta["success"] is False
-    assert "result_table" not in meta
-    assert "aggregate" in meta["error"].lower() or "filter" in meta["error"].lower()
+    assert meta["success"] is True
+    assert meta["row_count"] == 2 and meta["truncated_to"] == 2
+    assert "truncated" in meta["note"].lower()
     con = sqlite3.connect(tmp_path / "results.db")
-    assert con.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'").fetchone()[0] == 0
+    assert con.execute(f"SELECT COUNT(*) FROM {meta['result_table']}").fetchone()[0] == 2
 
 
-async def test_result_exactly_at_cap_is_allowed(make_agent):
-    meta, _ = await run_one(make_agent, "SELECT dport FROM flows LIMIT 2", max_result_rows=2)
+async def test_result_below_the_cap_is_not_flagged(make_agent):
+    meta, _ = await run_one(make_agent, "SELECT dport FROM flows LIMIT 2", max_result_rows=3)
     assert meta["success"] is True and meta["row_count"] == 2
+    assert "truncated_to" not in meta and "note" not in meta
+
+
+async def test_result_exactly_at_the_cap_is_assumed_truncated(make_agent):
+    # We cannot tell "exactly the cap" from "more than the cap" without fetching an extra row.
+    meta, _ = await run_one(make_agent, "SELECT dport FROM flows LIMIT 2", max_result_rows=2)
+    assert meta["success"] is True and meta["row_count"] == 2 and meta["truncated_to"] == 2
 
 
 def test_telemetry_database_is_unwritable_even_if_validation_bypassed(telemetry_db, tmp_path):
@@ -199,11 +206,8 @@ async def _run_with_turn_cap(make_agent, sql, turn_cap, **limits):
     return last_tool_result(llm.calls[1])
 
 
-async def test_a_turn_can_lower_the_row_cap_below_the_configured_default(make_agent):
-    meta = await _run_with_turn_cap(make_agent, SERIES_OF_5, 2, max_result_rows=1000)
-    assert meta["success"] is False and "2" in meta["error"]
-
-
-async def test_a_turn_can_raise_the_row_cap_above_the_configured_default(make_agent):
-    meta = await _run_with_turn_cap(make_agent, SERIES_OF_5, 5, max_result_rows=2)
-    assert meta["success"] is True and meta["row_count"] == 5
+async def test_each_turn_uses_its_own_row_cap(make_agent):
+    small = await _run_with_turn_cap(make_agent, SERIES_OF_5, 2)
+    assert small["row_count"] == 2 and small["truncated_to"] == 2
+    large = await _run_with_turn_cap(make_agent, SERIES_OF_5, 6)
+    assert large["row_count"] == 5 and "truncated_to" not in large

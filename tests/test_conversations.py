@@ -18,7 +18,7 @@ def table_script(reply="Here you go."):
 
 
 def ask(client, message, conversation_id=""):
-    posted = client.post("/chat", data={"message": message, "conversation_id": conversation_id})
+    posted = client.post("/chat", data={"message": message, "conversation_id": conversation_id, "max_rows": "1000"})
     assert posted.status_code == 200
     cid = re.search(r'name="conversation_id" value="([0-9a-f]+)"', posted.text).group(1)
     stream_url = posted.text.split('sse-connect="')[1].split('"')[0]
@@ -204,7 +204,7 @@ def test_sidebar_offers_a_delete_control_per_conversation(build_agent, web_clien
 
 def test_a_submitted_prompt_shows_a_thinking_spinner_until_the_first_event_arrives(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
-    posted = client.post("/chat", data={"message": "hello", "conversation_id": ""}).text
+    posted = client.post("/chat", data={"message": "hello", "conversation_id": "", "max_rows": "1000"}).text
     holder = re.search(r'<div sse-swap="([^"]*)" hx-swap="delete">\s*<span class="thinking" role="status"', posted)
     assert holder, "spinner removes itself when it receives an event"
     # whichever stream event arrives first removes it, including a stream that only ends
@@ -214,7 +214,7 @@ def test_a_submitted_prompt_shows_a_thinking_spinner_until_the_first_event_arriv
 def test_each_prompt_and_its_response_collapse_under_the_prompt(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM([TextChunk("reply-alpha")], [TextChunk("reply-beta")])))
     cid, _ = ask(client, "first question")
-    live = client.post("/chat", data={"message": "second question", "conversation_id": cid}).text
+    live = client.post("/chat", data={"message": "second question", "conversation_id": cid, "max_rows": "1000"}).text
     ask_stream = live.split('sse-connect="')[1].split('"')[0]
     client.get(ask_stream)
     assert 'class="turn" open' in live and '<summary class="user"><span>second question</span>' in live
@@ -239,7 +239,7 @@ def test_the_open_session_is_highlighted_in_the_sidebar(build_agent, web_client)
     assert current(client.get(f"/c/{second}").text) == [second]
     assert current(client.get("/").text) == []
     # the sidebar sent after a prompt is submitted marks that session too
-    posted = client.post("/chat", data={"message": "three", "conversation_id": first}).text
+    posted = client.post("/chat", data={"message": "three", "conversation_id": first, "max_rows": "1000"}).text
     assert current(posted) == [first]
 
 

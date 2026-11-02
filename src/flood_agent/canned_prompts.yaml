@@ -11,6 +11,8 @@
 #   `failed_tool_calls` or `notice` as "fails on purpose".
 #   A tool call may give `raw_arguments` (a raw string, sent as-is) instead of `args`; a step may
 #   give `error` (raised as the LLM error after its text streams).
+#   The too-many-rows prompt truncates at any "Max result rows" up to 1,000,000; chart-over-row-cap
+#   needs a "Max result rows" above the chart row cap (10,000), or its table is cut to the cap.
 #   Step text may contain `{count}` (the latest run_count_query count of the turn).
 #   Tool-call args may contain `{result_table}` (latest run_query Result Table) and
 #   `{result_table:-2}` (the one before it), anywhere inside the args, including nested Chart Specs.
@@ -195,10 +197,13 @@
               WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2000000)
               SELECT i FROM n
             title: Two million rows
-    - text: "That query returned too many rows, so no Result Table was created."
+    - tool_calls:
+        - name: show_table
+          args:
+            result_table: "{result_table}"
+    - text: "That query returned more rows than Max result rows, so the Result Table was truncated."
   expect:
-    displays: []
-    failed_tool_calls: 1
+    displays: [table]
 
 - id: chart-over-row-cap
   prompt: "Chart a Result Table above the chart row cap."

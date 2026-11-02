@@ -15,6 +15,7 @@ from flood_agent.llm import TextChunk
 
 CANNED = load_canned_prompts()
 PICKER = picker_entries(CANNED)
+FAKE_CAP = 20_000  # above the chart cap (for the chart-over-row-cap prompt), yet small enough to trip fast
 
 
 def fake_client(canned=CANNED) -> FakeClient:
@@ -32,16 +33,29 @@ class Recorder:
         return self.inner.stream_chat(messages, tools)
 
 
+async def test_the_too_many_rows_prompt_shows_a_table_truncated_to_the_row_cap(make_agent):
+    agent = await make_agent(fake_client(), model="fake")
+    canned = next(c for c in CANNED if c.id == "too-many-rows")
+
+    events = await collect(agent, canned.prompt, max_result_rows=FAKE_CAP)
+
+    shown = [e for e in events if isinstance(e, DisplayEvent)]
+    assert [e.kind for e in shown] == ["table"]
+    data = agent.fetch_rows(shown[0].result_table)
+    assert data["total"] == FAKE_CAP and data["truncated_to"] == FAKE_CAP
+    assert "truncated" in text_of(events).lower()
+
+
 @pytest.mark.parametrize("canned", CANNED, ids=lambda c: c.id)
 async def test_every_canned_prompt_produces_its_declared_outcome(canned, make_agent, telemetry_db):
     llm = Recorder(fake_client())
-    agent = await make_agent(llm, model="fake", max_result_rows=20_000)  # above the chart cap, yet small enough to trip fast
+    agent = await make_agent(llm, model="fake")
     conversation = Conversation()
     parent = parent_of(canned, CANNED)
     if parent:
-        await collect(agent, parent.prompt, conversation)
+        await collect(agent, parent.prompt, conversation, max_result_rows=FAKE_CAP)
 
-    events = await collect(agent, canned.prompt, conversation)
+    events = await collect(agent, canned.prompt, conversation, max_result_rows=FAKE_CAP)
 
     assert [e.kind for e in events if isinstance(e, DisplayEvent)] == list(canned.expect.displays)
     trace = next(e.trace for e in events if isinstance(e, TraceReady))
@@ -116,7 +130,7 @@ async def test_a_follow_up_whose_parent_query_failed_says_the_query_failed_not_r
     parent = parent_of(follow_up, CANNED)
     assert parent
     conversation = Conversation()
-    await collect(agent, parent.prompt, conversation)
+    await collect(agent, parent.prompt, conversation, max_result_rows=FAKE_CAP)
 
     events = await collect(agent, follow_up.prompt, conversation)
 
@@ -134,7 +148,7 @@ def test_fake_mode_page_shows_badge_and_clickable_canned_prompts(build_agent, we
     assert "Fake Mode — no LLM" in html
     assert "You can only use these canned prompts with Fake Mode" in html
     assert CANNED[0].prompt in html
-    created = client.post("/chat", data={"message": CANNED[0].prompt}).text
+    created = client.post("/chat", data={"message": CANNED[0].prompt, "max_rows": "1000"}).text
     cid = created.split('name="conversation_id" value="')[1].split('"')[0]
     reopened = client.get(f"/c/{cid}").text
     assert "Fake Mode — no LLM" in reopened and CANNED[0].prompt in reopened

@@ -88,9 +88,6 @@ class Settings(BaseSettings):
         gt=0, description="Result Tables are deleted this many hours after their Conversation's last activity."
     )
     query_timeout_s: float = Field(gt=0, description="A query running longer than this many seconds is aborted.")
-    max_result_rows: int = Field(
-        ge=1, description="A query producing more rows than this is refused (the LLM is told to aggregate or filter)."
-    )
     chart_row_cap: int = Field(ge=1, description="A chart over a Result Table with more rows than this is refused.")
     max_failed_attempts: int = Field(
         ge=1, description="Failed run_query / run_count_query attempts allowed per user turn before the Agent gives up."
@@ -141,7 +138,6 @@ class Settings(BaseSettings):
             model=model or self.openrouter_model,
             result_ttl_ms=int(self.result_ttl_hours * 3600 * 1000),
             query_timeout_s=self.query_timeout_s,
-            max_result_rows=self.max_result_rows,
             chart_row_cap=self.chart_row_cap,
             max_failed_attempts=self.max_failed_attempts,
             max_llm_steps=self.max_llm_steps,

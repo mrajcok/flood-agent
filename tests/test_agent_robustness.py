@@ -203,7 +203,7 @@ async def test_consumer_stopping_early_leaves_the_server_running_and_the_next_tu
     await agent.start()
     try:
         (server,) = mcp_children()
-        gen = agent.run_turn(Conversation(), "q")
+        gen = agent.run_turn(Conversation(), "q", 1000)
         async for event in gen:
             if isinstance(event, TextDelta):
                 break
@@ -427,7 +427,7 @@ async def test_agent_aclose_cancels_and_awaits_in_flight_turns(build_agent):
 
     agent = build_agent(ScriptedLLM(hang))
     await agent.start()
-    gen = agent.run_turn(Conversation(), "q")
+    gen = agent.run_turn(Conversation(), "q", 1000)
     first = asyncio.create_task(gen.__anext__())
     await asyncio.wait_for(started.wait(), 10)
     producers = set(agent._turn_tasks)

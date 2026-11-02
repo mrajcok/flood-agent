@@ -7,7 +7,7 @@ browser only through the Agent's internal data path.
 `create_server(settings)` builds the server from static `ServerSettings`. In production it runs
 as a stdio subprocess (`python -m flood_agent.mcp_server`) and reads those settings from the
 launch environment the Agent passes it: TELEMETRY_DB, RESULTS_DB, APP_DB, QUERY_TIMEOUT_S,
-MAX_RESULT_ROWS and CHART_ROW_CAP. There are no fallbacks. Most tests run it in-process
+and CHART_ROW_CAP. There are no fallbacks. Most tests run it in-process
 (`tests/conftest.py`).
 
 The Conversation id that limits which Result Tables a call may use arrives with every tool call in
@@ -38,7 +38,6 @@ class ServerSettings:
     results_db: Path
     app_db: Path | None
     query_timeout_s: float
-    max_result_rows: int
     chart_row_cap: int
 
     def to_env(self) -> dict[str, str]:
@@ -46,7 +45,6 @@ class ServerSettings:
             "TELEMETRY_DB": str(self.telemetry_db),
             "RESULTS_DB": str(self.results_db),
             "QUERY_TIMEOUT_S": str(self.query_timeout_s),
-            "MAX_RESULT_ROWS": str(self.max_result_rows),
             "CHART_ROW_CAP": str(self.chart_row_cap),
         }
         if self.app_db is not None:
@@ -60,7 +58,6 @@ class ServerSettings:
             results_db=Path(env["RESULTS_DB"]),
             app_db=Path(env["APP_DB"]) if env.get("APP_DB") else None,
             query_timeout_s=float(env["QUERY_TIMEOUT_S"]),
-            max_result_rows=int(env["MAX_RESULT_ROWS"]),
             chart_row_cap=int(env["CHART_ROW_CAP"]),
         )
 
@@ -82,11 +79,13 @@ def _conversation_id(ctx: Context) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _max_result_rows(ctx: Context, default: int) -> int:
-    """This turn's row cap from request `_meta`; the launch default if it is missing or invalid."""
+def _max_result_rows(ctx: Context) -> int:
+    """This turn's row cap from request `_meta`. There is no default: a call without a valid cap fails."""
     meta = ctx.request_context.meta
     value = getattr(meta, META_MAX_RESULT_ROWS, None) if meta else None
-    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 1 else default
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise ValueError("The request must carry a max_result_rows of at least 1 in its _meta.")
+    return value
 
 
 def _allowed_tables(app_db: Path | None, ctx: Context) -> set[str]:
@@ -146,7 +145,7 @@ def create_server(settings: ServerSettings) -> FastMCP:
         return json.dumps(
             queries.run_query(
                 settings.telemetry_db, settings.results_db, sql, settings.query_timeout_s,
-                _max_result_rows(ctx, settings.max_result_rows), allowed,
+                _max_result_rows(ctx), allowed,
             )
         )
 

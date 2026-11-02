@@ -19,7 +19,7 @@ def test_chat_page_stream_and_row_endpoint(build_agent, web_client):
     page = client.get("/")
     assert page.status_code == 200 and "htmx" in page.text and "alpinejs" in page.text
 
-    posted = client.post("/chat", data={"message": "show bytes by port"})
+    posted = client.post("/chat", data={"message": "show bytes by port", "max_rows": "1000"})
     assert posted.status_code == 200 and "show bytes by port" in posted.text
     stream_url = posted.text.split('sse-connect="')[1].split('"')[0]
 
@@ -48,7 +48,7 @@ def test_reopening_a_conversation_sweeps_expired_tables_once_not_per_display(bui
         steps += [[tool_call("run_query", f"q{i}", sql="SELECT dport, bytes FROM flows", title="t")], show]
     agent = build_agent(ScriptedLLM(*steps, [TextChunk("done")]))
     client = web_client(agent)
-    posted = client.post("/chat", data={"message": "show"})
+    posted = client.post("/chat", data={"message": "show", "max_rows": "1000"})
     client.get(posted.text.split('sse-connect="')[1].split('"')[0])
     cid = agent.store.list_conversations()[0]["id"]
 
@@ -66,7 +66,7 @@ def test_entering_the_client_starts_one_mcp_server_and_leaving_it_stops_it(build
     assert mcp_children() == []
     with TestClient(create_app(build_agent(llm))) as client:
         assert len(mcp_children()) == 1
-        posted = client.post("/chat", data={"message": "hi"})
+        posted = client.post("/chat", data={"message": "hi", "max_rows": "1000"})
         body = client.get(posted.text.split('sse-connect="')[1].split('"')[0]).text
         assert "Hello." in body and "event: end" in body
         assert len(mcp_children()) == 1
@@ -80,3 +80,37 @@ def test_app_startup_fails_when_the_mcp_server_cannot_start(build_agent, monkeyp
     with pytest.raises(Exception):
         with TestClient(create_app(agent)):
             pass
+
+
+def _rows_url_after_showing(client, max_rows):
+    posted = client.post("/chat", data={"message": "show", "max_rows": max_rows})
+    body = client.get(posted.text.split('sse-connect="')[1].split('"')[0]).text
+    return body.split('data-rows-url="')[1].split('"')[0]
+
+
+def test_row_endpoint_reports_the_cap_a_truncated_table_was_cut_to(build_agent, web_client):
+    def script():
+        return ScriptedLLM(
+            [tool_call("run_query", sql="SELECT dport FROM flows", title="t")],
+            lambda msgs: [tool_call("show_table", result_table=last_tool_result(msgs)["result_table"])],
+            [TextChunk("done")],
+        )
+
+    client = web_client(build_agent(script()))
+    truncated = client.get(_rows_url_after_showing(client, "2")).json()
+    assert truncated["total"] == 2 and truncated["truncated_to"] == 2
+
+    client = web_client(build_agent(script()))
+    complete = client.get(_rows_url_after_showing(client, "3000")).json()
+    assert complete["total"] == 3 and complete["truncated_to"] is None
+
+
+def test_table_display_has_a_truncation_badge_in_the_pager_line(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM()))
+    markup = client.get("/").text
+    assert "badge-truncated" in markup  # styled on the page
+    from flood_agent.web import TEMPLATES
+
+    template = TEMPLATES.get_template("display_table.html").render(rows_url="r", psv_url="p", result_table="t")
+    pager = template.split('<div class="pager">')[1].split("</div>")[0]
+    assert "truncated to" in pager and "Download PSV" in pager

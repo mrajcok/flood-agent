@@ -1,5 +1,5 @@
 <div class="display" data-rows-url="{{ rows_url }}" data-psv-url="{{ psv_url }}"
-     x-data="{ columns: [], rows: [], formats: {}, total: 0, page: 1, pageSize: 20,
+     x-data="{ columns: [], rows: [], formats: {}, total: 0, truncatedTo: null, page: 1, pageSize: 20,
                sort: null, dir: 'asc', loads: 0, loaded: false, error: false, expired: false,
                async load() {
                  try {
@@ -10,7 +10,7 @@
                    if (!r.ok) throw new Error(r.status);
                    const d = await r.json();
                    this.columns = d.columns; this.rows = d.rows; this.formats = d.formats;
-                   this.total = d.total; this.loads++; this.loaded = true; this.error = false;
+                   this.total = d.total; this.truncatedTo = d.truncated_to; this.loads++; this.loaded = true; this.error = false;
                  } catch (e) { this.error = true; }
                },
                init() { this.load(); },
@@ -32,6 +32,9 @@
       <span x-text="'Page ' + page + ' of ' + pages + ' (' + total + ' rows)'"></span>
       <button type="button" @click="go(page + 1)" :disabled="page >= pages">Next</button>
       <a :href="$el.closest('.display').dataset.psvUrl" download>Download PSV</a>
+      <span class="badge-truncated" x-show="truncatedTo" x-cloak
+            :title="'The query returned at least ' + (truncatedTo || 0).toLocaleString('en-US') + ' rows; only the first ' + (truncatedTo || 0).toLocaleString('en-US') + ' were kept.'"
+            x-text="'truncated to ' + (truncatedTo || 0).toLocaleString('en-US')"></span>
     </div>
     <table>
       <thead><tr><template x-for="(c, j) in columns" :key="c"><th :class="{ num: numeric(j) }" @click="sortBy(c)" style="cursor:pointer" :aria-sort="sort === c ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'"><span x-text="c"></span><span x-text="sort === c ? (dir === 'asc' ? ' ▲' : ' ▼') : ''"></span></th></template></tr></thead>

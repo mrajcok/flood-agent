@@ -81,7 +81,7 @@ async def test_flags_never_reach_the_llm(make_agent):
 
 
 def ask(client, message, conversation_id=""):
-    posted = client.post("/chat", data={"message": message, "conversation_id": conversation_id})
+    posted = client.post("/chat", data={"message": message, "conversation_id": conversation_id, "max_rows": "1000"})
     cid = re.search(r'name="conversation_id" value="([0-9a-f]+)"', posted.text).group(1)
     stream_url = posted.text.split('sse-connect="')[1].split('"')[0]
     return cid, client.get(stream_url).text

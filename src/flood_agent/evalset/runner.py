@@ -33,6 +33,9 @@ from flood_agent.evalset.compare import DEFAULT_TOLERANCE, Comparison, compare
 from flood_agent.evalset.golden import Question, load_golden, run_reference
 from flood_agent.llm import OpenRouterClient
 
+# Row cap for eval runs (the UI picker is the only other source of a cap); large so no golden answer is truncated.
+EVAL_MAX_RESULT_ROWS = 1_000_000
+
 CANDIDATE_MODELS = [
     "anthropic/claude-sonnet-5.5",
     "deepseek/deepseek-v4-pro-0813",
@@ -108,7 +111,7 @@ async def _run_question(model, q, ref, telemetry_db, semantic_layer, client_fact
     start = time.perf_counter()
     try:
         async with agent:
-            async for event in agent.run_turn(Conversation(), q.question):
+            async for event in agent.run_turn(Conversation(), q.question, EVAL_MAX_RESULT_ROWS):
                 if isinstance(event, TraceEntry) and event.kind == "query_error":
                     retries += 1
                 elif isinstance(event, TurnError):

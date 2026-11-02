@@ -14,7 +14,6 @@ semantic_layer = "semantic_layer.yaml"
 
 result_ttl_hours = 24
 query_timeout_s = 30
-max_result_rows = 1_000_000
 chart_row_cap = 10_000
 max_failed_attempts = 3
 max_llm_steps = 10

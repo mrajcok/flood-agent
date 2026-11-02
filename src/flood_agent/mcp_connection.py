@@ -103,14 +103,12 @@ class McpConnection:
             self._ready.set()
 
     async def call_tool(
-        self, name: str, arguments: dict, conversation_id: str, max_result_rows: int | None = None
+        self, name: str, arguments: dict, conversation_id: str, max_result_rows: int
     ) -> CallToolResult:
-        """Call a tool, sending the Conversation id (and this turn's row cap, if any) in request `_meta`."""
+        """Call a tool, sending the Conversation id and this turn's row cap in request `_meta`."""
         if self._session is None:
             raise RuntimeError("MCP connection is not running")
-        meta: dict = {META_CONVERSATION_ID: conversation_id}
-        if max_result_rows is not None:
-            meta[META_MAX_RESULT_ROWS] = max_result_rows
+        meta: dict = {META_CONVERSATION_ID: conversation_id, META_MAX_RESULT_ROWS: max_result_rows}
         return await self._session.call_tool(name, arguments, meta=meta)
 
     async def aclose(self) -> None:

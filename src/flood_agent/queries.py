@@ -163,9 +163,9 @@ _TIMEOUT_GUIDANCE = (
     "The query exceeded the {s:g} second time limit and was aborted. "
     "Aggregate the data (GROUP BY), narrow the etime time range, or add filters."
 )
-_ROWCAP_GUIDANCE = (
-    "The query would produce more than {n:,} rows, so no Result Table was created. "
-    "Aggregate the data (GROUP BY) or add filters to reduce the row count."
+_TRUNCATED_NOTE = (
+    "The Result Table was truncated to its first {n:,} rows; there are probably more. Do not present it as the "
+    "complete answer. For a top-N question, use ORDER BY with a LIMIT; otherwise aggregate (GROUP BY) or add filters."
 )
 
 
@@ -206,6 +206,9 @@ def run_query(
 ) -> dict:
     """Run the SQL as CTAS into the results database. Returns Query Metadata only.
 
+    At most `max_rows` rows are kept; a result of exactly `max_rows` rows is reported as truncated
+    (`truncated_to`, `note`).
+
     On failure the dict has a sanitised `error` (safe for the LLM) and, for SQLite errors,
     a `raw_error` that the caller must keep for the Trace and strip before the LLM.
     The SELECT may reference only the Result Tables in `allowed_tables` (the Conversation's own).
@@ -216,7 +219,7 @@ def run_query(
         return {"success": False, "error": str(e)}
     name = f"rt_{uuid.uuid4().hex[:8]}"
     con = open_connection(telemetry_db, results_db, allowed_tables)
-    executed = f"CREATE TABLE results.{name} AS SELECT * FROM (\n{select}\n) LIMIT {int(max_rows) + 1}"
+    executed = f"CREATE TABLE results.{name} AS SELECT * FROM (\n{select}\n) LIMIT {int(max_rows)}"
     try:
         with _deadline(con, timeout_s) as timed_out:
             try:
@@ -227,10 +230,6 @@ def run_query(
             con.set_authorizer(None)
             con.commit()
             count = con.execute(f"SELECT COUNT(*) FROM results.{name}").fetchone()[0]
-            if count > max_rows:
-                con.execute(f"DROP TABLE results.{name}")
-                con.commit()
-                return {"success": False, "error": _ROWCAP_GUIDANCE.format(n=max_rows), "executed_sql": executed}
             cols = [
                 {"name": r[1], "type": r[2] or "ANY"}
                 for r in con.execute(f"PRAGMA results.table_info({name})")
@@ -239,7 +238,12 @@ def run_query(
             return _failure(e, False, timeout_s, executed_sql=executed)
     finally:
         con.close()
-    return {"success": True, "result_table": name, "columns": cols, "row_count": count, "executed_sql": executed}
+    result = {"success": True, "result_table": name, "columns": cols, "row_count": count, "executed_sql": executed}
+    if count >= max_rows:
+        # Exactly `max_rows` rows are indistinguishable from "more than max_rows" without fetching an
+        # extra row, so we assume there are more.
+        result |= {"truncated_to": max_rows, "note": _TRUNCATED_NOTE.format(n=max_rows)}
+    return result
 
 
 _COUNT_GUIDANCE = (

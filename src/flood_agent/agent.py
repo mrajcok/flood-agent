@@ -54,6 +54,9 @@ class Conversation:
     messages: list[dict] = field(default_factory=list)
 
 
+DAY_MS = 24 * 3600 * 1000
+
+
 @dataclass
 class TextDelta:
     text: str
@@ -303,6 +306,23 @@ class Agent:
         if self.is_expired(result_table):
             raise ResultTableExpired(f"Result Table {result_table} has expired.")
 
+    def result_table_settings(self, result_table: str) -> dict:
+        """The Result Table's user-visible name and retention in days (KeyError if unknown)."""
+        found = self.store.result_table_settings(result_table, self.config.result_ttl_ms)
+        if found is None:
+            raise KeyError(result_table)
+        return {"title": found["title"], "retention_days": found["retention_ms"] / DAY_MS}
+
+    def update_result_table(
+        self, result_table: str, title: str | None = None, retention_days: float | None = None
+    ) -> dict:
+        """Rename and/or change retention of a live Result Table; returns the new settings."""
+        self._raise_if_expired(result_table)
+        self.result_table_settings(result_table)  # KeyError if unknown
+        self.store.update_result_table(
+            result_table, title, None if retention_days is None else max(1, round(retention_days * DAY_MS)))
+        return self.result_table_settings(result_table)
+
     def fetch_rows(self, result_table: str, columns: list[str] | None = None, **page_args) -> dict:
         """Internal data path used by the row-JSON endpoint. Not an LLM tool.
 
@@ -311,6 +331,10 @@ class Agent:
         data = queries.fetch_rows(self.config.results_db, result_table, columns, **page_args)
         data["formats"] = self.semantic_layer.column_formats(data["columns"])
         data["truncated_to"] = self.store.truncated_to(result_table)
+        try:
+            data.update(self.result_table_settings(result_table))
+        except KeyError:  # not owned by a Conversation: no user settings
+            data.update(title=result_table, retention_days=self.config.result_ttl_ms / DAY_MS)
         return data
 
     def iter_all_rows(self, result_table: str):

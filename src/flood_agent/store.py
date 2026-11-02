@@ -57,7 +57,8 @@ CREATE TABLE IF NOT EXISTS result_tables (
   columns TEXT NOT NULL DEFAULT '[]',
   request TEXT NOT NULL DEFAULT '',
   expired INTEGER NOT NULL DEFAULT 0,
-  truncated_to INTEGER
+  truncated_to INTEGER,
+  retention_ms INTEGER
 );
 """
 
@@ -68,6 +69,7 @@ _RESULT_TABLE_MIGRATIONS = {
     "request": "TEXT NOT NULL DEFAULT ''",
     "expired": "INTEGER NOT NULL DEFAULT 0",
     "truncated_to": "INTEGER",
+    "retention_ms": "INTEGER",
 }
 
 
@@ -240,12 +242,29 @@ class ConversationStore:
             return [{**dict(r), "columns": json.loads(r["columns"])} for r in rows]
 
     def due_for_expiry(self, ttl_ms: int) -> list[str]:
-        """Live Result Tables whose Conversation was last active more than `ttl_ms` ago."""
-        cutoff = self._now() - ttl_ms
+        """Live Result Tables whose Conversation was last active longer ago than the table's
+        retention (`ttl_ms` unless the user chose one)."""
+        now = self._now()
         with closing(self._connect()) as con:
             return [r[0] for r in con.execute(
                 "SELECT r.name FROM result_tables r JOIN conversations c ON c.id=r.conversation_id "
-                "WHERE r.expired=0 AND c.last_activity_at <= ?", (cutoff,))]
+                "WHERE r.expired=0 AND c.last_activity_at <= ? - COALESCE(r.retention_ms, ?)", (now, ttl_ms))]
+
+    def result_table_settings(self, name: str, default_retention_ms: int) -> dict | None:
+        """The user-visible name and retention in ms of a Result Table, or None if unknown.
+        A blank title falls back to the table's name."""
+        with closing(self._connect()) as con:
+            row = con.execute("SELECT title, retention_ms FROM result_tables WHERE name=?", (name,)).fetchone()
+        if row is None:
+            return None
+        return {"title": row["title"] or name, "retention_ms": row["retention_ms"] if row["retention_ms"] is not None else default_retention_ms}
+
+    def update_result_table(self, name: str, title: str | None = None, retention_ms: int | None = None) -> None:
+        with closing(self._connect()) as con, con:
+            if title is not None:
+                con.execute("UPDATE result_tables SET title=? WHERE name=?", (title, name))
+            if retention_ms is not None:
+                con.execute("UPDATE result_tables SET retention_ms=? WHERE name=?", (retention_ms, name))
 
     def mark_expired(self, names: list[str]) -> None:
         with closing(self._connect()) as con, con:

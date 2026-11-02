@@ -59,6 +59,15 @@
     .display th.num, .display td.num { text-align: right; }
     th, td { border: 0; border-bottom: 1px solid #ddd; padding: .25rem .6rem; text-align: left; }
     th { border-bottom-color: #999; }
+    .table-name { margin: .5rem 0 .25rem; font-size: .95rem; }
+    .table-name .name { font: inherit; font-weight: 600; color: #2a4ba0; background: none; border: 0; border-bottom: 1px dashed #4a6fd3; padding: 0 .1rem; cursor: text; }
+    .table-name .name::after { content: " \270E"; font-weight: 400; opacity: .7; }
+    .table-name .name:hover { background: #eef3fd; }
+    .table-name .editor { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+    .table-name input[type=text] { font: inherit; min-width: 16rem; padding: .2rem .5rem; border: 1px solid #b9c7e6; border-radius: .4rem; }
+    .table-name input[type=number] { font: inherit; width: 6rem; padding: .2rem .4rem; border: 1px solid #b9c7e6; border-radius: .4rem; }
+    .table-name select { font: inherit; padding: .2rem .4rem; border: 1px solid #b9c7e6; border-radius: .4rem; color: #2a4ba0; background: #eef3fd; }
+    .table-name .err { color: #a00; font-size: .85rem; }
     .pager { display: flex; gap: .75rem; align-items: center; font-size: .9rem; }
     .badge-truncated { padding: .1rem .6rem; border: 1px solid #e0c36a; border-radius: 999px; background: #fdf3d0; color: #7a5b00; font-size: .8rem; }
     .pager button { padding: .25rem .8rem; border: 1px solid #b9c7e6; border-radius: 999px; background: #eef3fd; color: #2a4ba0; font: inherit; cursor: pointer; }
@@ -126,7 +135,7 @@
       {% elif item.type == "trace" %}{% if item.flags %}{% with flags=item.flags %}{% include "flag_note.html" %}{% endwith %}{% endif %}{% with trace=item.trace %}{% include "trace.html" %}{% endwith %}
       {% elif item.type == "display" and item.expired %}<p class="expired"><em>expired</em> (this result has been deleted)</p>
       {% elif item.type == "display" and item.kind == "table" %}
-        {% with rows_url=item.rows_url, psv_url=item.psv_url, result_table=item.result_table, columns=item.columns %}{% include "display_table.html" %}{% endwith %}
+        {% with rows_url=item.rows_url, psv_url=item.psv_url, settings_url=item.settings_url, result_table=item.result_table, columns=item.columns %}{% include "display_table.html" %}{% endwith %}
       {% elif item.type == "display" and item.kind == "chart" %}
         {% with spec_json=item.spec_json %}{% include "display_chart.html" %}{% endwith %}
       {% endif %}

@@ -100,6 +100,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
                         **item,
                         "rows_url": f"/api/results/{item['result_table']}/rows",
                         "psv_url": f"/api/results/{item['result_table']}/psv",
+                        "settings_url": f"/api/results/{item['result_table']}/settings",
                         "expired": item["result_table"] in expired,
                     }
                 )
@@ -190,6 +191,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
                         html = TEMPLATES.get_template("display_table.html").render(
                             rows_url=f"/api/results/{ev.result_table}/rows",
                             psv_url=f"/api/results/{ev.result_table}/psv",
+                            settings_url=f"/api/results/{ev.result_table}/settings",
                             result_table=ev.result_table,
                             columns=ev.columns,
                         )
@@ -225,6 +227,21 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
             raise HTTPException(404, "unknown result table")
         except InvalidSort:
             raise HTTPException(400, "unknown sort column")
+
+    @app.post("/api/results/{result_table}/settings")
+    def result_table_settings(
+        result_table: str, title: str | None = Form(None), retention_days: str | None = Form(None)
+    ):
+        """Rename a Result Table and/or set how long it is kept (days after the Conversation's last activity)."""
+        if title is not None:
+            title = title.strip()
+            if not title or len(title) > MAX_TABLE_NAME:
+                raise HTTPException(422, f"a table name must be 1 to {MAX_TABLE_NAME} characters")
+        days = None if retention_days is None else _parse_retention_days(retention_days)
+        try:
+            return agent.update_result_table(result_table, title, days)
+        except KeyError:
+            raise HTTPException(404, "unknown result table")
 
     @app.get("/api/results/{result_table}/psv")
     def psv_download(result_table: str):
@@ -268,6 +285,20 @@ def _parse_max_rows(raw: str) -> int:
     if not raw.isascii() or not raw.isdigit() or int(raw) < 1:
         raise HTTPException(422, "Max result rows must be a whole number of at least 1")
     return int(raw)
+
+
+MAX_TABLE_NAME = 80
+MAX_RETENTION_DAYS = 3650
+
+
+def _parse_retention_days(raw: str) -> float:
+    try:
+        days = float(raw)
+    except ValueError:
+        days = 0.0
+    if not 0 < days <= MAX_RETENTION_DAYS:  # also rejects nan
+        raise HTTPException(422, f"retention must be more than 0 and at most {MAX_RETENTION_DAYS} days")
+    return days
 
 
 def _psv_safe(v):

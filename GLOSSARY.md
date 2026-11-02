@@ -38,6 +38,10 @@ _Avoid_: Schema (too narrow), data dictionary
 A table created from a single LLM-written query, scoped to one Conversation, holding that query's output so it never has to be returned to the LLM.
 _Avoid_: Temp table, query result, output table
 
+**Retention**:
+How many days after its Conversation's last activity a Result Table is kept before it expires. The user sets it per Result Table (default 1 day); the table's displayed name is editable alongside it.
+_Avoid_: TTL (in user-facing text)
+
 **Query Metadata**:
 What the LLM is told about a Result Table after a query runs: success or failure, column names and types, row count, and a value-free error message.
 _Avoid_: Query result, response

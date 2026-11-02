@@ -1,5 +1,24 @@
-<div class="display" data-rows-url="{{ rows_url }}" data-psv-url="{{ psv_url }}"
-     x-data="{ columns: [], rows: [], formats: {}, total: 0, truncatedTo: null, page: 1, pageSize: 20,
+<div class="display" data-rows-url="{{ rows_url }}" data-psv-url="{{ psv_url }}" data-settings-url="{{ settings_url }}"
+     x-data="{ title: '', retentionDays: 1, editing: false, draft: '', choice: '1', custom: 1, saveError: '',
+               presets: ['1', '7', '30', '365'],
+               edit() {
+                 this.draft = this.title; this.saveError = '';
+                 this.choice = this.presets.includes(String(this.retentionDays)) ? String(this.retentionDays) : 'custom';
+                 this.custom = this.retentionDays; this.editing = true;
+                 this.$nextTick(() => { this.$refs.nameInput.focus(); this.$refs.nameInput.select(); });
+               },
+               async save() {
+                 const days = this.choice === 'custom' ? this.custom : this.choice;
+                 const body = new URLSearchParams({ title: this.draft, retention_days: String(days) });
+                 try {
+                   const r = await fetch($el.dataset.settingsUrl, { method: 'POST', body });
+                   if (r.status === 410) { this.expired = true; this.loaded = false; this.editing = false; return; }
+                   if (!r.ok) { this.saveError = r.status === 422 ? 'Enter a name and a number of days between 0 and 3650.' : 'Could not save.'; return; }
+                   const d = await r.json();
+                   this.title = d.title; this.retentionDays = d.retention_days; this.editing = false;
+                 } catch (e) { this.saveError = 'Could not save.'; }
+               },
+               columns: [], rows: [], formats: {}, total: 0, truncatedTo: null, page: 1, pageSize: 20,
                sort: null, dir: 'asc', loads: 0, loaded: false, error: false, expired: false,
                async load() {
                  try {
@@ -10,6 +29,7 @@
                    if (!r.ok) throw new Error(r.status);
                    const d = await r.json();
                    this.columns = d.columns; this.rows = d.rows; this.formats = d.formats;
+                   this.title = d.title; this.retentionDays = d.retention_days;
                    this.total = d.total; this.truncatedTo = d.truncated_to; this.loads++; this.loaded = true; this.error = false;
                  } catch (e) { this.error = true; }
                },
@@ -27,6 +47,25 @@
   <p x-show="expired" x-cloak><em>expired</em> (this result has been deleted)</p>
   <p x-show="error" x-cloak>Could not load table.</p>
   <div x-show="loaded" x-cloak>
+    <div class="table-name">
+      <button type="button" class="name" x-show="!editing" @click="edit()" title="Click to rename this table or change how long it is kept" x-text="title"></button>
+      <form class="editor" x-show="editing" @submit.prevent="save()" @keydown.escape="editing = false">
+        <input type="text" x-ref="nameInput" x-model="draft" maxlength="80" required aria-label="Table name">
+        <label>Keep for
+          <select x-model="choice" aria-label="Retention">
+            <option value="1">1 day (default)</option>
+            <option value="7">7 days</option>
+            <option value="30">30 days</option>
+            <option value="365">365 days</option>
+            <option value="custom">Custom</option>
+          </select>
+        </label>
+        <span x-show="choice === 'custom'" x-cloak><input type="number" x-model="custom" min="0.01" max="3650" step="any" aria-label="Retention in days"> days</span>
+        <button type="submit">Save</button>
+        <button type="button" @click="editing = false">Cancel</button>
+        <span class="err" x-show="saveError" x-text="saveError"></span>
+      </form>
+    </div>
     <div class="pager">
       <button type="button" @click="go(page - 1)" :disabled="page <= 1">Prev</button>
       <span x-text="'Page ' + page + ' of ' + pages + ' (' + total + ' rows)'"></span>

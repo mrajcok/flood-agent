@@ -335,3 +335,37 @@ async def test_the_fake_count_reply_puts_thousands_commas_in_the_number():
     text = "".join([c.text async for c in fake_client().stream_chat(messages, []) if isinstance(c, TextChunk)])
 
     assert "17,392" in text and "17392" not in text
+
+
+WATCHLIST_PROMPT = "Which flows involve the IPs in lookup_watchlist?"
+
+
+def test_the_lookup_table_prompt_is_offered_in_fake_mode():
+    assert WATCHLIST_PROMPT in [c.prompt for c in CANNED]
+
+
+async def test_with_the_lookup_table_present_the_turn_describes_it_joins_it_and_shows_a_display(
+    make_agent, telemetry_db
+):
+    agent = await make_agent(fake_client(), model="fake")
+    with sqlite3.connect(telemetry_db) as db:
+        watched = db.execute("SELECT dip FROM flows LIMIT 1").fetchone()[0]
+    agent.add_lookup_table("watchlist", f"ip\n{watched}")
+
+    events = await collect(agent, WATCHLIST_PROMPT)
+
+    trace = next(e.trace for e in events if isinstance(e, TraceReady))
+    tools = [e["name"] for e in trace["entries"] if e["kind"] == "tool_call"]
+    assert tools[:2] == ["describe_table", "run_query"]
+    assert [e.kind for e in events if isinstance(e, DisplayEvent)] == ["table"]
+    assert not any(isinstance(e, TurnError) for e in events)
+
+
+async def test_with_the_lookup_table_absent_the_reply_explains_how_to_create_it_and_the_turn_does_not_fail(make_agent):
+    agent = await make_agent(fake_client(), model="fake")
+
+    events = await collect(agent, WATCHLIST_PROMPT)
+
+    assert "Add lookup table" in text_of(events)
+    assert not any(isinstance(e, TurnError) for e in events)
+    assert not [e for e in events if isinstance(e, DisplayEvent)]

@@ -30,7 +30,9 @@ from flood_agent.agent import (
     TurnEnd,
     resolve_chart_data,
 )
+from flood_agent.lookup_tables import InvalidLookupTable
 from flood_agent.queries import InvalidSort
+from flood_agent.store import TablesChoice
 from flood_agent.trace import split_system_prompt
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -125,18 +127,27 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
             {**sidebar(conversation_id), "items": history(conversation_id), "current_id": conversation_id},
         )
 
-    @app.post("/c/{conversation_id}/delete")
-    def delete_conversation(conversation_id: str):
+    @app.get("/c/{conversation_id}/delete-preview")
+    def delete_preview(conversation_id: str, turn_id: int | None = None):
+        if not agent.store.exists(conversation_id):
+            raise HTTPException(404, "unknown conversation")
         try:
-            agent.delete_conversation(conversation_id)
+            return agent.store.delete_preview(conversation_id, turn_id)
+        except KeyError:
+            raise HTTPException(404, "unknown turn")
+
+    @app.post("/c/{conversation_id}/delete")
+    def delete_conversation(conversation_id: str, tables: TablesChoice = Form("keep")):
+        try:
+            agent.delete_conversation(conversation_id, tables)
         except KeyError:
             raise HTTPException(404, "unknown conversation")
         return RedirectResponse("/", status_code=303)
 
     @app.post("/c/{conversation_id}/turns/{turn_id}/delete")
-    def delete_turn(conversation_id: str, turn_id: int):
+    def delete_turn(conversation_id: str, turn_id: int, tables: TablesChoice = Form("keep")):
         try:
-            agent.delete_turn(conversation_id, turn_id)
+            agent.delete_turn(conversation_id, turn_id, tables)
         except KeyError:
             raise HTTPException(404, "unknown turn")
         return RedirectResponse(f"/c/{conversation_id}", status_code=303)
@@ -147,9 +158,17 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
             raise HTTPException(404, "unknown conversation")
         title = title.strip()[:60]
         if not title:
-            raise HTTPException(422, "a session name cannot be blank")
+            raise HTTPException(422, "a conversation name cannot be blank")
         agent.store.rename_conversation(conversation_id, title)
         return RedirectResponse(f"/c/{conversation_id}", status_code=303)
+
+    @app.post("/api/lookup-tables")
+    def add_lookup_table(name: str = Form(""), rows: str = Form(""), overwrite: str = Form("")):
+        """Create a Lookup Table from pasted rows. Plain HTTP, never an MCP tool."""
+        try:
+            return agent.add_lookup_table(name, rows, overwrite=bool(overwrite))
+        except InvalidLookupTable as e:
+            raise HTTPException(422, str(e))
 
     @app.post("/chat", response_class=HTMLResponse)
     def chat(request: Request, message: str = Form(...), conversation_id: str = Form(""), max_rows: str = Form(...)):
@@ -230,18 +249,18 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
 
     @app.post("/api/results/{result_table}/settings")
     def result_table_settings(
-        result_table: str, title: str | None = Form(None), retention_days: str | None = Form(None)
+        result_table: str, name: str | None = Form(None), retention_days: str | None = Form(None)
     ):
-        """Rename a Result Table and/or set how long it is kept (days after the Conversation's last activity)."""
-        if title is not None:
-            title = title.strip()
-            if not title or len(title) > MAX_TABLE_NAME:
-                raise HTTPException(422, f"a table name must be 1 to {MAX_TABLE_NAME} characters")
+        """Rename a Result Table and/or set how long it is kept (days from its creation)."""
+        if name is not None:
+            name = name.strip()
         days = None if retention_days is None else _parse_retention_days(retention_days)
         try:
-            return agent.update_result_table(result_table, title, days)
+            return agent.update_result_table(result_table, name, days)
         except KeyError:
             raise HTTPException(404, "unknown result table")
+        except ValueError as e:
+            raise HTTPException(422, str(e))
 
     @app.get("/api/results/{result_table}/psv")
     def psv_download(result_table: str):
@@ -287,7 +306,6 @@ def _parse_max_rows(raw: str) -> int:
     return int(raw)
 
 
-MAX_TABLE_NAME = 80
 MAX_RETENTION_DAYS = 3650
 
 

@@ -130,7 +130,7 @@ async def test_table_and_chart_displays_come_in_order(make_agent):
     )
     events = await collect(await make_agent(llm), "both")
     assert [e.kind for e in displays(events)] == ["table", "chart"]
-    assert sorted(llm.tools_seen_names) == ["run_count_query", "run_query", "show_chart", "show_table"]
+    assert sorted(llm.tools_seen_names) == ["describe_table", "run_count_query", "run_query", "show_chart", "show_table"]
 
 
 async def test_no_telemetry_value_reaches_the_llm_with_charts(make_agent, telemetry_db):

@@ -12,24 +12,38 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-# <title slug>_<YYYYMMDD>_<HHMMSS>[_<n>]: lower-case letters, digits and underscores only, starting
-# with a letter, so the name is a valid unquoted identifier in SQLite and Ocient.
-RESULT_TABLE_RE = re.compile(r"^[a-z][a-z0-9_]{0,79}_\d{8}_\d{6}(?:_\d+)?$")
-_SLUG_MAX = 40
+from flood_agent import table_names
+
+
+def check_new_table_name(new: str) -> str | None:
+    """Why `new` cannot be a Result Table's name, or None when it can."""
+    if not table_names.is_identifier(new):
+        return f"A table name must {table_names.RULE}."
+    if table_names.is_reserved(new):
+        return "A table name cannot start with rt_ or lookup_; those are reserved."
+    return None
+
+
+def rename_table(results_db: Path, old: str, new: str) -> None:
+    """Rename a table in the results database; ValueError (changing nothing) if `new` is taken."""
+    con = sqlite3.connect(results_db)
+    try:
+        taken = {r[0].lower() for r in con.execute("SELECT name FROM sqlite_master")}
+        if new.lower() in taken:
+            raise ValueError(f"A table named {new} already exists.")
+        con.execute(f"ALTER TABLE {table_names.quote(old)} RENAME TO {table_names.quote(new)}")
+        con.commit()
+    finally:
+        con.close()
 
 
 def _timestamp() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
-def _slug(title: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")[:_SLUG_MAX].strip("_") or "result"
-    return f"t_{slug}" if slug[0].isdigit() else slug
-
-
-def _free_name(con: sqlite3.Connection, title: str) -> str:
-    """`<slug>_<date>_<time>`, with `_2`, `_3`... when that name is already taken."""
-    base = f"{_slug(title)}_{_timestamp()}"
+def _free_name(con: sqlite3.Connection) -> str:
+    """`rt_<date>_<time>`, with `_2`, `_3`... when that name is already taken."""
+    base = f"rt_{_timestamp()}"
     taken = {r[0] for r in con.execute("SELECT name FROM results.sqlite_master WHERE name LIKE ? ESCAPE '\\'",
                                        (base.replace("_", "\\_") + "%",))}
     name, n = base, 1
@@ -37,6 +51,7 @@ def _free_name(con: sqlite3.Connection, title: str) -> str:
         n += 1
         name = f"{base}_{n}"
     return name
+
 
 _FORBIDDEN_WORDS = {
     "insert", "update", "delete", "drop", "create", "alter", "attach", "detach",
@@ -153,8 +168,7 @@ def _authorizer(allowed_tables: set[str] | None = None):
     """Single authorizer enforcing both policies (SQLite allows only one per connection):
     1. action allow-list: SELECT/READ/FUNCTION/RECURSIVE, plus create/insert/update on the
        results database for the CTAS. No ATTACH, PRAGMA, DDL/DML elsewhere.
-    2. reads in the results database are limited to `allowed_tables` (the calling
-       Conversation's live Result Tables)."""
+    2. reads in the results database are limited to `allowed_tables` (the live tables)."""
     allowed = {t.lower() for t in allowed_tables or ()}
 
     def authorizer(action, arg1, arg2, dbname, source):
@@ -245,7 +259,7 @@ def run_query(
     con = open_connection(telemetry_db, results_db, allowed_tables)
     executed = ""
     try:
-        name = _free_name(con, title)
+        name = _free_name(con)
         with _deadline(con, timeout_s) as timed_out:
             for attempt in range(5):  # a concurrent query may take the name between check and create
                 executed = f"CREATE TABLE results.{name} AS SELECT * FROM (\n{select}\n) LIMIT {int(max_rows)}"
@@ -254,7 +268,7 @@ def run_query(
                     break
                 except sqlite3.Error as e:
                     if attempt < 4 and f"table {name} already exists" in str(e):
-                        name = _free_name(con, title)
+                        name = _free_name(con)
                         continue
                     return _failure(e, timed_out(), timeout_s, executed_sql=executed)
         try:
@@ -319,14 +333,30 @@ def run_count_query(
 
 
 def result_table_columns(results_db: Path, name: str) -> list[str] | None:
-    if not RESULT_TABLE_RE.match(name) or not Path(results_db).exists():
+    if not Path(results_db).exists():
         return None
     con = sqlite3.connect(f"file:{results_db}?mode=ro", uri=True)
     try:
-        cols = [r[1] for r in con.execute(f"PRAGMA table_info({name})")]
+        cols = [r[0] for r in con.execute("SELECT name FROM pragma_table_info(?)", (name,))]
     finally:
         con.close()
     return cols or None
+
+
+def describe_results_table(results_db: Path, name: str) -> dict | None:
+    """Column names and types plus row count of a table in the results database, never rows.
+    The caller has already checked that `name` is a registered, live table."""
+    if not Path(results_db).exists():
+        return None
+    con = sqlite3.connect(f"file:{results_db}?mode=ro", uri=True)
+    try:
+        info = con.execute("SELECT name, type FROM pragma_table_info(?)", (name,)).fetchall()
+        if not info:
+            return None
+        count = con.execute(f"SELECT COUNT(*) FROM {table_names.quote(name)}").fetchone()[0]
+    finally:
+        con.close()
+    return {"columns": [{"name": n, "type": t or "ANY"} for n, t in info], "row_count": count}
 
 
 class InvalidSort(ValueError):
@@ -353,17 +383,17 @@ def fetch_rows(
     if sort is not None and sort not in all_cols:
         raise InvalidSort(sort)
     cols = [c for c in (columns or all_cols) if c in all_cols]
-    select = ", ".join(_q(c) for c in cols)
+    select = ", ".join(table_names.quote(c) for c in cols)
     order = ""
     if sort is not None:
-        order = f" ORDER BY {_q(sort)} {'DESC' if descending else 'ASC'}, rowid"
+        order = f" ORDER BY {table_names.quote(sort)} {'DESC' if descending else 'ASC'}, rowid"
     con = sqlite3.connect(f"file:{results_db}?mode=ro", uri=True)
     try:
-        total = con.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0]
+        total = con.execute(f"SELECT COUNT(*) FROM {table_names.quote(name)}").fetchone()[0]
         rows = [
             list(r)
             for r in con.execute(
-                f"SELECT {select} FROM {name}{order or ' ORDER BY rowid'} LIMIT ? OFFSET ?",
+                f"SELECT {select} FROM {table_names.quote(name)}{order or ' ORDER BY rowid'} LIMIT ? OFFSET ?",
                 (page_size, (page - 1) * page_size),
             )
         ]
@@ -377,7 +407,7 @@ def result_table_row_count(results_db: Path, name: str) -> int | None:
         return None
     con = sqlite3.connect(f"file:{results_db}?mode=ro", uri=True)
     try:
-        return con.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0]
+        return con.execute(f"SELECT COUNT(*) FROM {table_names.quote(name)}").fetchone()[0]
     finally:
         con.close()
 
@@ -399,13 +429,9 @@ def iter_all_rows(results_db: Path, name: str):
     def gen():
         try:
             yield from con.execute(
-                f"SELECT {', '.join(_q(c) for c in all_cols)} FROM {name} ORDER BY rowid"
+                f"SELECT {', '.join(table_names.quote(c) for c in all_cols)} FROM {table_names.quote(name)} ORDER BY rowid"
             )
         finally:
             con.close()
 
     return all_cols, gen()
-
-
-def _q(col: str) -> str:
-    return '"' + col.replace('"', '""') + '"'

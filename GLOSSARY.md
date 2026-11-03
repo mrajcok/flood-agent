@@ -35,11 +35,15 @@ The curated description of the Telemetry Database — tables, columns, units, en
 _Avoid_: Schema (too narrow), data dictionary
 
 **Result Table**:
-A table created from a single LLM-written query, scoped to one Conversation, holding that query's output so it never has to be returned to the LLM.
+A table created from a single LLM-written query in a Conversation, holding that query's output so it never has to be returned to the LLM. Any Conversation can query it by name until it expires. It starts with a default name (`rt_<date>_<time>`); a user who wants to keep a table usually renames it, and the new name is the one used in queries.
 _Avoid_: Temp table, query result, output table
 
+**Lookup Table**:
+A table the user creates by pasting rows (e.g. a list of IP addresses and descriptions), for queries in any Conversation to join or filter against. Its contents never reach the LLM.
+_Avoid_: Reference table, upload, Result Table (for this)
+
 **Retention**:
-How many days after its Conversation's last activity a Result Table is kept before it expires. The user sets it per Result Table (default 1 day); the table's displayed name is editable alongside it.
+How long after its creation a Result Table is kept before it expires (default 1 day). The user can change it per Result Table; using the table, or activity in any Conversation, does not extend it. Lookup Tables have no Retention.
 _Avoid_: TTL (in user-facing text)
 
 **Query Metadata**:
@@ -49,7 +53,7 @@ _Avoid_: Query result, response
 ## Conversation
 
 **Conversation**:
-One chat thread between a user and Flood Agent; owns its Result Tables.
+One chat thread between a user and Flood Agent; the Result Tables it creates belong to it. Deleting it lets the user choose whether those tables are deleted now or left to expire.
 _Avoid_: Session, thread
 
 **Chart Spec**:

@@ -41,6 +41,7 @@ def env(build_agent, web_client, semantic_layer_path):
     def table(sql=GEN):
         meta = queries.run_query(agent.config.telemetry_db, agent.config.results_db, sql, **query_limits())
         assert meta["success"], meta
+        agent.store.add_result_table(agent.store.create_conversation(), meta["result_table"])
         return meta["result_table"]
 
     return client, table

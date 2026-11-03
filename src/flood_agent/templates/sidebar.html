@@ -1,18 +1,46 @@
 <aside id="sidebar" {% if oob %}hx-swap-oob="true"{% endif %}>
-  <a class="new" href="/">New conversation</a>
+  <a class="new" href="/">New chat</a>
+  <div class="lookup" x-data="{ open: false, name: '', rows: '', overwrite: false, busy: false, error: '', done: null,
+       async submit() {
+         this.busy = true; this.error = ''; this.done = null;
+         const body = new URLSearchParams({ name: this.name, rows: this.rows });
+         if (this.overwrite) body.set('overwrite', 'on');
+         try {
+           const r = await fetch('/api/lookup-tables', { method: 'POST', body });
+           const data = await r.json();
+           if (r.ok) this.done = data; else this.error = data.detail || 'Could not add the table.';
+         } catch (e) { this.error = 'Could not add the table.'; }
+         this.busy = false;
+       } }">
+    <button type="button" class="add-lookup" @click="open = true; done = null; error = ''">Add lookup table</button>
+    <dialog x-effect="open ? $el.showModal() : $el.open && $el.close()" @close="open = false">
+      <form @submit.prevent="submit()">
+        <p class="error" x-show="error" x-text="error" x-cloak></p>
+        <label>Name <span class="prefix">lookup_</span><input type="text" x-model="name" maxlength="60" required pattern="[A-Za-z0-9_]+" aria-label="Lookup table name"></label>
+        <p class="hint">First row must be the column names. Separate columns with tab, comma or <code>|</code>.</p>
+        <textarea x-model="rows" rows="10" required aria-label="Rows"></textarea>
+        <label><input type="checkbox" x-model="overwrite"> Overwrite existing table</label>
+        <p class="done" x-show="done" x-cloak>
+          Added <b x-text="done && done.name"></b>: <span x-text="done && done.row_count"></span> rows,
+          columns <span x-text="done && done.columns.join(', ')"></span>.
+        </p>
+        <div class="actions"><button type="submit" :disabled="busy">Submit</button> <button type="button" @click="open = false">Cancel</button></div>
+      </form>
+    </dialog>
+  </div>
   <ul>
     {% for c in conversations %}
     <li x-data="{ open: false, editing: false }"{% if c.id == current_id %} class="current"{% endif %}>
       <a href="/c/{{ c.id }}" x-show="!editing">{{ c.title }}</a>
       <form class="rename" method="post" action="/c/{{ c.id }}/rename" x-show="editing" x-cloak>
-        <input type="text" name="title" value="{{ c.title }}" maxlength="60" required x-ref="title" aria-label="Session name"
+        <input type="text" name="title" value="{{ c.title }}" maxlength="60" required x-ref="title" aria-label="Conversation name"
                @keydown.escape="editing = false" @blur="editing = false">
       </form>
       <div class="menu" x-show="!editing" @click.outside="open = false">
-        <button type="button" class="dots" aria-label="Session options" aria-haspopup="menu" :aria-expanded="open" @click="open = !open">&hellip;</button>
+        <button type="button" class="dots" aria-label="Conversation options" aria-haspopup="menu" :aria-expanded="open" @click="open = !open">&hellip;</button>
         <div class="popup" role="menu" x-show="open" x-cloak>
           <button type="button" role="menuitem" @click="open = false; editing = true; $nextTick(() => { $refs.title.focus(); $refs.title.select(); })">Rename</button>
-          <form method="post" action="/c/{{ c.id }}/delete" @submit="if (!confirm('Delete this session and its results?')) $event.preventDefault()">
+          <form method="post" action="/c/{{ c.id }}/delete" class="delete-form" data-preview-url="/c/{{ c.id }}/delete-preview" data-confirm="Delete this conversation and its results?">
             <button type="submit" role="menuitem">Delete</button>
           </form>
         </div>

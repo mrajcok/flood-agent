@@ -36,7 +36,7 @@ def test_conversation_survives_restart_and_is_listed_in_sidebar(build_agent, web
 
     restarted = web_client(build_agent(ScriptedLLM()))  # new app, same files
     home = restarted.get("/").text
-    assert f'href="/c/{cid}"' in home and "Session 1" in home
+    assert f'href="/c/{cid}"' in home and "Conversation 1" in home
 
     reopened = restarted.get(f"/c/{cid}").text
     assert "top ports by bytes" in main_pane(reopened) and "Here you go." in reopened
@@ -97,25 +97,6 @@ def test_unknown_conversation_is_404(build_agent, web_client):
     assert client.get("/c/deadbeef").status_code == 404
 
 
-async def test_agent_cannot_display_another_conversations_result_table(make_agent):
-    from conftest import collect
-
-    from flood_agent.agent import Conversation, DisplayEvent
-
-    agent = await make_agent(ScriptedLLM(*table_script()))
-    first = Conversation()
-    events = await collect(agent, "q", first)
-    table = next(e.result_table for e in events if isinstance(e, DisplayEvent))
-
-    intruder = ScriptedLLM([tool_call("show_table", result_table=table)], [TextChunk("x")])
-    other = await make_agent(intruder)
-    events = await collect(other, "steal", Conversation())
-    assert not [e for e in events if isinstance(e, DisplayEvent)]
-
-    reopened = other.open_conversation(first.id)
-    assert [m["role"] for m in reopened.messages][0] == "user" and len(reopened.messages) == len(first.messages)
-
-
 def test_deleting_a_conversation_removes_it_and_its_result_tables(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM(*table_script(), [TextChunk("other")])))
     cid, body = ask(client, "top ports")
@@ -123,7 +104,7 @@ def test_deleting_a_conversation_removes_it_and_its_result_tables(build_agent, w
     table = re.search(r"/api/results/([a-z0-9_]+)/rows", client.get(f"/c/{cid}").text).group(1)
     assert client.get(f"/api/results/{table}/rows").status_code == 200
 
-    deleted = client.post(f"/c/{cid}/delete", follow_redirects=False)
+    deleted = client.post(f"/c/{cid}/delete", data={"tables": "delete_all"}, follow_redirects=False)
     assert deleted.status_code == 303 and deleted.headers["location"] == "/"
 
     assert client.get(f"/c/{cid}").status_code == 404
@@ -145,15 +126,15 @@ def sidebar_titles(client):
     return re.findall(r'<a href="/c/[0-9a-f]+"[^>]*>([^<]*)</a>', client.get("/").text)
 
 
-def test_conversations_are_named_session_1_session_2_and_numbers_are_not_reused(build_agent, web_client):
+def test_conversations_are_named_conversation_1_conversation_2_and_numbers_are_not_reused(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM([TextChunk("a")], [TextChunk("b")], [TextChunk("c")])))
     first, _ = ask(client, "one")
     ask(client, "two")
-    assert sorted(sidebar_titles(client)) == ["Session 1", "Session 2"]
+    assert sorted(sidebar_titles(client)) == ["Conversation 1", "Conversation 2"]
 
     client.post(f"/c/{first}/delete")
     ask(client, "three")
-    assert sorted(sidebar_titles(client)) == ["Session 2", "Session 3"]
+    assert sorted(sidebar_titles(client)) == ["Conversation 2", "Conversation 3"]
 
 
 def test_a_conversation_can_be_renamed(build_agent, web_client):
@@ -172,15 +153,15 @@ def test_rename_rejects_a_blank_title_and_an_unknown_conversation(build_agent, w
     client = web_client(build_agent(ScriptedLLM([TextChunk("a")])))
     cid, _ = ask(client, "one")
     assert client.post(f"/c/{cid}/rename", data={"title": "   "}).status_code == 422
-    assert sidebar_titles(client) == ["Session 1"]
+    assert sidebar_titles(client) == ["Conversation 1"]
     assert client.post("/c/nope/rename", data={"title": "x"}).status_code == 404
 
 
-def test_each_session_has_a_menu_offering_rename_and_delete(build_agent, web_client):
+def test_each_conversation_has_a_menu_offering_rename_and_delete(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
     cid, _ = ask(client, "hello")
     page = client.get("/").text
-    assert 'aria-label="Session options"' in page
+    assert 'aria-label="Conversation options"' in page
     assert f'action="/c/{cid}/rename"' in page and "Rename" in page
     assert f'action="/c/{cid}/delete"' in page and "Delete" in page
 
@@ -227,7 +208,7 @@ def test_each_prompt_and_its_response_collapse_under_the_prompt(build_agent, web
     assert turns[1].startswith('<summary class="user"><span>second question</span>') and "reply-beta" in turns[1]
 
 
-def test_the_open_session_is_highlighted_in_the_sidebar(build_agent, web_client):
+def test_the_open_conversation_is_highlighted_in_the_sidebar(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM([TextChunk("a")], [TextChunk("b")])))
     first, _ = ask(client, "one")
     second, _ = ask(client, "two")
@@ -254,7 +235,7 @@ def test_deleting_a_turn_removes_its_prompt_answer_and_result_tables_only(build_
     table = re.search(r"/api/results/([a-z0-9_]+)/rows", client.get(f"/c/{cid}").text).group(1)
     first, second = turn_ids(main_pane(client.get(f"/c/{cid}").text))
 
-    deleted = client.post(f"/c/{cid}/turns/{first}/delete", follow_redirects=False)
+    deleted = client.post(f"/c/{cid}/turns/{first}/delete", data={"tables": "delete_all"}, follow_redirects=False)
 
     assert deleted.status_code == 303 and deleted.headers["location"] == f"/c/{cid}"
     page = main_pane(client.get(f"/c/{cid}").text)
@@ -299,4 +280,13 @@ def test_each_prompt_has_an_x_with_a_confirmation_both_live_and_on_reopen(build_
     page = main_pane(client.get(f"/c/{cid}").text)
     summary = page.split("<summary")[1].split("</summary>")[0]
     assert "hello" in summary and 'action="/c/' in summary and "&times;" in summary
-    assert "confirm(" in summary
+    assert "data-preview-url" in summary and "data-confirm" in summary
+
+
+def test_sidebar_button_reads_new_chat_and_no_text_says_session(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM()))
+    ask(client, "hi")
+    page = client.get("/").text
+    assert re.search(r'class="new"[^>]*>New chat<', page)
+    assert "New conversation" not in page
+    assert "session" not in re.sub(r"<script.*?</script>", "", page, flags=re.S).lower()

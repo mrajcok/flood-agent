@@ -51,17 +51,16 @@ async def test_follow_up_query_can_select_from_previous_result_table(make_agent)
     assert agent.fetch_rows(d.result_table)["rows"] == [[8443]]
 
 
-async def test_other_conversations_result_tables_are_invisible_and_unqueryable(make_agent):
+async def test_other_conversations_live_result_table_is_unlisted_but_queryable(make_agent):
     agent, llm, conv, name = await run_first(make_agent)
     llm.steps = [
-        [tool_call("run_query", sql=f"SELECT * FROM {name}", title="peek")],
-        [TextChunk("failed")],
+        [tool_call("run_query", sql=f"SELECT dport FROM {name} WHERE total_bytes > 600000", title="peek")],
+        [TextChunk("ok")],
     ]
     await collect(agent, "other conversation question", Conversation())
-    assert name not in llm.calls[2][0]["content"]
-    result = last_tool_result(llm.calls[3])
-    assert result["success"] is False
-    assert name not in str(result)
+    system = llm.calls[2][0]["content"]
+    assert name not in system and "describe_table" in system
+    assert last_tool_result(llm.calls[3])["success"] is True
 
 
 async def test_chained_turns_never_leak_telemetry_values(make_agent, telemetry_db):
@@ -80,19 +79,42 @@ async def test_chained_turns_never_leak_telemetry_values(make_agent, telemetry_d
                     assert v not in m["content"], (v, m["role"])
 
 
-async def test_result_tables_expire_after_ttl_of_inactivity(make_agent):
+async def test_result_tables_expire_after_retention_from_creation_despite_later_turns(make_agent):
     clock = Clock()
     agent, llm, conv, name = await run_first(make_agent, clock=clock, result_ttl_ms=HOUR)
     clock.ms += HOUR - 1
     assert agent.fetch_rows(name)["rows"]  # still live
     llm.steps = [[TextChunk("hi")]]
-    await collect(agent, "keep alive", conv)  # activity resets the timer
-    clock.ms += HOUR - 1
-    assert agent.fetch_rows(name)["rows"]
+    await collect(agent, "later activity", conv)  # does not extend the table's life
     clock.ms += 2
     with pytest.raises(Exception) as exc:
         agent.fetch_rows(name)
     assert "expired" in str(exc.value).lower()
+
+
+async def test_querying_a_table_from_a_turn_does_not_extend_its_life(make_agent):
+    clock = Clock()
+    agent, llm, conv, name = await run_first(make_agent, clock=clock, result_ttl_ms=HOUR)
+    clock.ms += HOUR - 10
+    llm.steps = [[tool_call("run_query", sql=f"SELECT * FROM {name}", title="again")], [TextChunk("ok")]]
+    await collect(agent, "use it", conv)
+    clock.ms += 20
+    with pytest.raises(Exception) as exc:
+        agent.fetch_rows(name)
+    assert "expired" in str(exc.value).lower()
+
+
+async def test_sweep_expires_a_table_whose_conversation_is_gone(make_agent):
+    import sqlite3
+
+    clock = Clock()
+    agent, _, conv, name = await run_first(make_agent, clock=clock, result_ttl_ms=HOUR)
+    con = sqlite3.connect(agent.store.path)
+    con.execute("DELETE FROM conversations")
+    con.commit()
+    con.close()
+    clock.ms += HOUR + 1
+    assert agent.is_expired(name)
 
 
 async def test_expired_table_is_gone_from_prompt_and_unqueryable(make_agent):

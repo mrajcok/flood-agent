@@ -17,6 +17,7 @@ import time
 import uuid
 from contextlib import closing
 from pathlib import Path
+from typing import Literal
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversations (
@@ -58,8 +59,13 @@ CREATE TABLE IF NOT EXISTS result_tables (
   request TEXT NOT NULL DEFAULT '',
   expired INTEGER NOT NULL DEFAULT 0,
   truncated_to INTEGER,
-  retention_ms INTEGER,
-  display_name TEXT
+  retention_ms INTEGER
+);
+CREATE TABLE IF NOT EXISTS lookup_tables (
+  name TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL,
+  columns TEXT NOT NULL DEFAULT '[]',
+  row_count INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -71,8 +77,22 @@ _RESULT_TABLE_MIGRATIONS = {
     "expired": "INTEGER NOT NULL DEFAULT 0",
     "truncated_to": "INTEGER",
     "retention_ms": "INTEGER",
-    "display_name": "TEXT",
 }
+_LOOKUP_TABLE_MIGRATIONS = {"row_count": "INTEGER NOT NULL DEFAULT 0"}
+
+# Which of a Conversation's live Result Tables a delete also drops: none, those still named rt_*, or all.
+TablesChoice = Literal["keep", "delete_rt", "delete_all"]
+
+
+def _follow_rename(node, old: str, new: str):
+    """A saved Chart Spec with every {"name": old} data reference pointing at `new`."""
+    if isinstance(node, dict):
+        if node == {"name": old}:
+            return {"name": new}
+        return {k: _follow_rename(v, old, new) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_follow_rename(i, old, new) for i in node]
+    return node
 
 
 def _now() -> int:
@@ -87,12 +107,12 @@ class ConversationStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as con:
             con.executescript(SCHEMA)
-            have = {r[1] for r in con.execute("PRAGMA table_info(result_tables)")}
-            for col, decl in _RESULT_TABLE_MIGRATIONS.items():
-                if col not in have:
-                    con.execute(f"ALTER TABLE result_tables ADD COLUMN {col} {decl}")
-                    if col == "display_name":  # keep the names older databases already showed
-                        con.execute("UPDATE result_tables SET display_name=title WHERE title != ''")
+            for table, migrations in (("result_tables", _RESULT_TABLE_MIGRATIONS),
+                                      ("lookup_tables", _LOOKUP_TABLE_MIGRATIONS)):
+                have = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
+                for col, decl in migrations.items():
+                    if col not in have:
+                        con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
 
     def _connect(self) -> sqlite3.Connection:
         con = sqlite3.connect(self.path)
@@ -109,20 +129,20 @@ class ConversationStore:
             return cur.lastrowid or 0
 
     def create_conversation(self, title: str | None = None) -> str:
-        """`title` defaults to "Session N", N being one more than the highest number in use."""
+        """`title` defaults to "Conversation N", N being one more than the highest number in use."""
         cid, now = uuid.uuid4().hex, self._now()
-        title = title or self._next_session_title()
+        title = title or self._next_conversation_title()
         self._write(
             "INSERT INTO conversations(id, title, created_at, last_activity_at) VALUES (?,?,?,?)",
             (cid, title, now, now),
         )
         return cid
 
-    def _next_session_title(self) -> str:
+    def _next_conversation_title(self) -> str:
         with closing(self._connect()) as con:
             used = [int(m[1]) for (t,) in con.execute("SELECT title FROM conversations")
-                    if (m := re.fullmatch(r"Session (\d+)", t))]
-        return f"Session {max(used, default=0) + 1}"
+                    if (m := re.fullmatch(r"Conversation (\d+)", t))]
+        return f"Conversation {max(used, default=0) + 1}"
 
     def rename_conversation(self, conversation_id: str, title: str) -> None:
         self._write("UPDATE conversations SET title=? WHERE id=?", (title, conversation_id))
@@ -139,36 +159,75 @@ class ConversationStore:
             )
             return [dict(r) for r in rows]
 
-    def delete_conversation(self, conversation_id: str) -> list[str]:
-        """Remove a Conversation and everything it owns; returns the names of its Result Tables."""
+    def _live_tables(self, con, conversation_id: str) -> list[sqlite3.Row]:
+        return con.execute(
+            "SELECT name FROM result_tables "
+            "WHERE conversation_id=? AND expired=0", (conversation_id,)).fetchall()
+
+    def _turn_owned(self, con, conversation_id: str, turn_id: int) -> list[sqlite3.Row]:
+        """Live Result Tables a turn owns: a table belongs to the earliest turn whose messages
+        mention its whole name (`rt_X` is not a mention of `rt_X_2`)."""
+        bodies = con.execute(
+            "SELECT turn_id, body FROM messages WHERE conversation_id=? ORDER BY id", (conversation_id,)).fetchall()
+
+        shown = con.execute(
+            "SELECT turn_id, result_table FROM displays WHERE conversation_id=? ORDER BY id", (conversation_id,)
+        ).fetchall()  # a renamed table is only still named in Displays
+
+        def first_mention(name: str):
+            mention = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])")
+            turns = [b["turn_id"] for b in bodies if mention.search(b["body"])]
+            turns += [d["turn_id"] for d in shown if d["result_table"] == name]
+            return min(turns, default=None)
+
+        return [t for t in self._live_tables(con, conversation_id) if first_mention(t["name"]) == turn_id]
+
+    @staticmethod
+    def _choose(tables: list[sqlite3.Row], choice: TablesChoice) -> list[str]:
+        """The names to delete under `choice`: keep, delete_rt (still named rt_*) or delete_all."""
+        if choice == "delete_all":
+            return [t["name"] for t in tables]
+        if choice == "delete_rt":
+            return [t["name"] for t in tables if t["name"].startswith("rt_")]
+        return []
+
+    def delete_preview(self, conversation_id: str, turn_id: int | None = None) -> dict:
+        """Counts for the delete dialog: live Result Tables that would go under delete_all (`total`)
+        and under delete_rt (`rt`). KeyError if the turn is not in the Conversation."""
+        with closing(self._connect()) as con:
+            if turn_id is None:
+                tables = self._live_tables(con, conversation_id)
+            else:
+                if con.execute("SELECT 1 FROM turns WHERE id=? AND conversation_id=?",
+                               (turn_id, conversation_id)).fetchone() is None:
+                    raise KeyError(turn_id)
+                tables = self._turn_owned(con, conversation_id, turn_id)
+        return {"total": len(tables), "rt": len(self._choose(tables, "delete_rt"))}
+
+    def delete_conversation(self, conversation_id: str, tables: TablesChoice = "keep") -> list[str]:
+        """Remove a Conversation and everything it owns except the Result Tables the user keeps
+        (they outlive it until they expire); returns the names of the tables to drop. Dropped tables
+        stay registered as expired, so other Conversations' Displays of them render as expired."""
         with closing(self._connect()) as con, con:
-            names = [r[0] for r in con.execute(
-                "SELECT name FROM result_tables WHERE conversation_id=?", (conversation_id,))]
-            for table in ("displays", "messages", "turns", "result_tables"):
+            dropped = self._choose(self._live_tables(con, conversation_id), tables)
+            con.executemany("UPDATE result_tables SET expired=1 WHERE name=?", [(n,) for n in dropped])
+            for table in ("displays", "messages", "turns"):
                 con.execute(f"DELETE FROM {table} WHERE conversation_id=?", (conversation_id,))
             con.execute("DELETE FROM conversations WHERE id=?", (conversation_id,))
-        return names
+        return dropped
 
-    def delete_turn(self, conversation_id: str, turn_id: int) -> list[str]:
-        """Remove one prompt/answer exchange; returns the Result Tables it created (now expired).
-
-        A Result Table belongs to the earliest turn whose messages mention it, so a later turn
-        that merely queried it does not own it. Displays elsewhere that show a deleted table
-        render as expired."""
+    def delete_turn(self, conversation_id: str, turn_id: int, tables: TablesChoice = "keep") -> list[str]:
+        """Remove one prompt/answer exchange; returns the Result Tables it created that are to be
+        dropped (now expired). Displays elsewhere that show a dropped table render as expired."""
         with closing(self._connect()) as con, con:
             if con.execute("SELECT 1 FROM turns WHERE id=? AND conversation_id=?", (turn_id, conversation_id)).fetchone() is None:
                 raise KeyError(turn_id)
-            bodies = con.execute(
-                "SELECT turn_id, body FROM messages WHERE conversation_id=? ORDER BY id", (conversation_id,)
-            ).fetchall()
-            tables = [r[0] for r in con.execute(
-                "SELECT name FROM result_tables WHERE conversation_id=? AND expired=0", (conversation_id,))]
-            owned = [n for n in tables if next((b["turn_id"] for b in bodies if n in b["body"]), None) == turn_id]
-            con.executemany("UPDATE result_tables SET expired=1 WHERE name=?", [(n,) for n in owned])
+            dropped = self._choose(self._turn_owned(con, conversation_id, turn_id), tables)
+            con.executemany("UPDATE result_tables SET expired=1 WHERE name=?", [(n,) for n in dropped])
             for table in ("displays", "messages"):
                 con.execute(f"DELETE FROM {table} WHERE turn_id=?", (turn_id,))
             con.execute("DELETE FROM turns WHERE id=?", (turn_id,))
-        return owned
+        return dropped
 
     def start_turn(self, conversation_id: str, user_message: str) -> int:
         return self._write(
@@ -227,12 +286,6 @@ class ConversationStore:
             row = con.execute("SELECT truncated_to FROM result_tables WHERE name=?", (name,)).fetchone()
             return row["truncated_to"] if row else None
 
-    def owns_result_table(self, conversation_id: str, name: str) -> bool:
-        with closing(self._connect()) as con:
-            return con.execute(
-                "SELECT 1 FROM result_tables WHERE name=? AND conversation_id=?", (name, conversation_id)
-            ).fetchone() is not None
-
     def result_tables(self, conversation_id: str) -> list[str]:
         """Names of the Conversation's live (unexpired) Result Tables."""
         return [t["name"] for t in self.live_result_tables(conversation_id)]
@@ -246,29 +299,56 @@ class ConversationStore:
             return [{**dict(r), "columns": json.loads(r["columns"])} for r in rows]
 
     def due_for_expiry(self, ttl_ms: int) -> list[str]:
-        """Live Result Tables whose Conversation was last active longer ago than the table's
+        """Live Result Tables created longer ago than the table's
         retention (`ttl_ms` unless the user chose one)."""
         now = self._now()
         with closing(self._connect()) as con:
             return [r[0] for r in con.execute(
-                "SELECT r.name FROM result_tables r JOIN conversations c ON c.id=r.conversation_id "
-                "WHERE r.expired=0 AND c.last_activity_at <= ? - COALESCE(r.retention_ms, ?)", (now, ttl_ms))]
+                "SELECT name FROM result_tables "
+                "WHERE expired=0 AND created_at <= ? - COALESCE(retention_ms, ?)", (now, ttl_ms))]
 
     def result_table_settings(self, name: str, default_retention_ms: int) -> dict | None:
-        """The user-visible name and retention in ms of a Result Table, or None if unknown.
-        Until the user renames it, the name is the table's own."""
+        """The name and retention in ms of a Result Table, or None if unknown."""
         with closing(self._connect()) as con:
-            row = con.execute("SELECT display_name, retention_ms FROM result_tables WHERE name=?", (name,)).fetchone()
+            row = con.execute("SELECT retention_ms FROM result_tables WHERE name=?", (name,)).fetchone()
         if row is None:
             return None
-        return {"title": row["display_name"] or name, "retention_ms": row["retention_ms"] if row["retention_ms"] is not None else default_retention_ms}
+        return {"name": name, "retention_ms": row["retention_ms"] if row["retention_ms"] is not None else default_retention_ms}
 
-    def update_result_table(self, name: str, title: str | None = None, retention_ms: int | None = None) -> None:
+    def has_result_table(self, name: str) -> bool:
+        with closing(self._connect()) as con:
+            return con.execute("SELECT 1 FROM result_tables WHERE name=?", (name,)).fetchone() is not None
+
+    def rename_result_table(self, old: str, new: str) -> None:
+        """Make `new` the table's one name, in the registry and in the Displays that show it."""
         with closing(self._connect()) as con, con:
-            if title is not None:
-                con.execute("UPDATE result_tables SET display_name=? WHERE name=?", (title, name))
+            con.execute("UPDATE result_tables SET name=? WHERE name=?", (new, old))
+            for row in con.execute("SELECT id, definition FROM displays WHERE result_table=?", (old,)).fetchall():
+                definition = json.dumps(_follow_rename(json.loads(row["definition"]), old, new))
+                con.execute("UPDATE displays SET result_table=?, definition=? WHERE id=?", (new, definition, row["id"]))
+
+    def update_result_table(self, name: str, retention_ms: int | None = None) -> None:
+        with closing(self._connect()) as con, con:
             if retention_ms is not None:
                 con.execute("UPDATE result_tables SET retention_ms=? WHERE name=?", (retention_ms, name))
+
+    def register_lookup_table(self, name: str, columns: list[str], row_count: int) -> None:
+        """Record `name` as a Lookup Table (no Conversation, no expiry)."""
+        self._write("INSERT INTO lookup_tables(name, created_at, columns, row_count) VALUES (?,?,?,?) "
+                    "ON CONFLICT(name) DO UPDATE SET columns=excluded.columns, row_count=excluded.row_count",
+                    (name, self._now(), json.dumps(columns), row_count))
+
+    def lookup_tables(self) -> list[dict]:
+        """The Lookup Tables registry: name, created time, columns and row count."""
+        with closing(self._connect()) as con:
+            return [{**dict(r), "columns": json.loads(r["columns"])} for r in con.execute(
+                "SELECT name, created_at, columns, row_count FROM lookup_tables ORDER BY name")]
+
+    def is_lookup_table(self, name: str) -> bool:
+        """SQL table names ignore case, so this does too."""
+        with closing(self._connect()) as con:
+            return con.execute(
+                "SELECT 1 FROM lookup_tables WHERE name=? COLLATE NOCASE", (name,)).fetchone() is not None
 
     def mark_expired(self, names: list[str]) -> None:
         with closing(self._connect()) as con, con:

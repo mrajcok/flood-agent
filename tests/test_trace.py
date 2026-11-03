@@ -60,7 +60,7 @@ async def test_success_turn_trace_has_every_item(make_agent):
     assert tc["executed_sql"].startswith("CREATE TABLE results.") and SQL in tc["executed_sql"]
 
     (rt,) = of_kind(trace, "result_table")
-    assert rt["row_count"] == 2 and re.fullmatch(r"[a-z][a-z0-9_]*_\d{8}_\d{6}", rt["name"])
+    assert rt["row_count"] == 2 and re.fullmatch(r"rt_\d{8}_\d{6}", rt["name"])
     assert rt["name"] == json.loads(tc["query_metadata"])["result_table"]
 
 

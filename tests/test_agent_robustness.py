@@ -317,26 +317,40 @@ async def first_conversation_table(agent, llm):
     return agent.store.result_tables(conv.id)[0]
 
 
+def show_args(tool, name):
+    if tool == "show_table":
+        return {"result_table": name}
+    return {"vega_lite_spec": {"mark": "bar", "data": {"name": name}, "encoding": {"x": {"field": "dport"}}}}
+
+
 @pytest.mark.parametrize("tool", ["show_table", "show_chart"])
-async def test_show_tools_refuse_another_conversations_result_table(make_agent, tool):
+async def test_show_tools_display_another_conversations_live_result_table(make_agent, tool):
+    """ADR 0003: any Conversation may show any live Result Table by name."""
     llm = ScriptedLLM()
     agent = await make_agent(llm)
-    mine_elsewhere = await first_conversation_table(agent, llm)
+    elsewhere = await first_conversation_table(agent, llm)
 
-    def args(name):
-        if tool == "show_table":
-            return {"result_table": name}
-        return {"vega_lite_spec": {"mark": "bar", "data": {"name": name}, "encoding": {"x": {"field": "dport"}}}}
+    llm.steps = [[tool_call(tool, "c1", **show_args(tool, elsewhere))], [TextChunk("done")]]
+    events = await collect(agent, "other conversation", Conversation())
+    assert last_tool_result(llm.calls[-1])["success"] is True
+    assert [e.result_table for e in events if isinstance(e, DisplayEvent)] == [elsewhere]
 
-    llm.steps = [[tool_call(tool, "c1", **args(mine_elsewhere))], [tool_call(tool, "c2", **args("rt_deadbeef"))],
+
+@pytest.mark.parametrize("tool", ["show_table", "show_chart"])
+async def test_show_tools_refuse_expired_and_unknown_tables_alike(make_agent, tool):
+    llm = ScriptedLLM()
+    agent = await make_agent(llm)
+    gone = await first_conversation_table(agent, llm)
+    agent.store.mark_expired([gone])
+
+    llm.steps = [[tool_call(tool, "c1", **show_args(tool, gone))], [tool_call(tool, "c2", **show_args(tool, "rt_deadbeef"))],
                  [TextChunk("done")]]
     events = await collect(agent, "other conversation", Conversation())
-    foreign = tool_msgs(llm.calls[-2])[-1]
+    expired = tool_msgs(llm.calls[-2])[-1]
     missing = last_tool_result(llm.calls[-1])
-    assert foreign["success"] is False
-    # indistinguishable from a table that does not exist
-    assert foreign["error"] == missing["error"]
-    assert mine_elsewhere not in json.dumps(foreign)
+    assert expired["success"] is False
+    assert expired["error"] == missing["error"]  # an expired table is indistinguishable from a missing one
+    assert gone not in json.dumps(expired)
     assert not [e for e in events if isinstance(e, DisplayEvent)]
 
 

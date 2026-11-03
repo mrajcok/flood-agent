@@ -1,22 +1,31 @@
 <div class="display" data-rows-url="{{ rows_url }}" data-psv-url="{{ psv_url }}" data-settings-url="{{ settings_url }}"
-     x-data="{ title: '', retentionDays: 1, editing: false, draft: '', choice: '1', custom: 1, saveError: '',
+     x-data="{ name: '', urls: {}, copied: false, retentionDays: 1, editing: false, draft: '', choice: '1', custom: 1, saveError: '',
                presets: ['1', '7', '30', '365'],
                edit() {
-                 this.draft = this.title; this.saveError = '';
+                 this.draft = this.name; this.saveError = '';
                  this.choice = this.presets.includes(String(this.retentionDays)) ? String(this.retentionDays) : 'custom';
                  this.custom = this.retentionDays; this.editing = true;
                  this.$nextTick(() => { this.$refs.nameInput.focus(); this.$refs.nameInput.select(); });
                },
                async save() {
                  const days = this.choice === 'custom' ? this.custom : this.choice;
-                 const body = new URLSearchParams({ title: this.draft, retention_days: String(days) });
+                 const body = new URLSearchParams({ name: this.draft, retention_days: String(days) });
                  try {
-                   const r = await fetch($el.dataset.settingsUrl, { method: 'POST', body });
+                   const r = await fetch(this.urls.settings, { method: 'POST', body });
                    if (r.status === 410) { this.expired = true; this.loaded = false; this.editing = false; return; }
-                   if (!r.ok) { this.saveError = r.status === 422 ? 'Enter a name and a number of days between 0 and 3650.' : 'Could not save.'; return; }
+                   if (!r.ok) { this.saveError = r.status === 422 ? ((await r.json()).detail || 'Enter a valid name and a number of days between 0 and 3650.') : 'Could not save.'; return; }
                    const d = await r.json();
-                   this.title = d.title; this.retentionDays = d.retention_days; this.editing = false;
+                   this.follow(d.name); this.retentionDays = d.retention_days; this.editing = false;
                  } catch (e) { this.saveError = 'Could not save.'; }
+               },
+               follow(name) {
+                 // A rename changes the table's name in every URL; pages, sorting, PSV and later edits use the new one.
+                 const old = encodeURIComponent(this.name), now = encodeURIComponent(name);
+                 for (const k of Object.keys(this.urls)) this.urls[k] = this.urls[k].replace('/api/results/' + old + '/', '/api/results/' + now + '/');
+                 this.name = name;
+               },
+               async copyName() {
+                 try { await navigator.clipboard.writeText(this.name); this.copied = true; setTimeout(() => { this.copied = false; }, 1500); } catch (e) {}
                },
                columns: [], rows: [], formats: {}, total: 0, truncatedTo: null, page: 1, pageSize: 20,
                sort: null, dir: 'asc', loads: 0, loaded: false, error: false, expired: false,
@@ -24,16 +33,16 @@
                  try {
                    const q = new URLSearchParams({ page: this.page, page_size: this.pageSize });
                    if (this.sort) { q.set('sort', this.sort); q.set('dir', this.dir); }
-                   const r = await fetch($el.dataset.rowsUrl + '?' + q);
+                   const r = await fetch(this.urls.rows + '?' + q);
                    if (r.status === 410) { this.expired = true; this.loaded = false; return; }
                    if (!r.ok) throw new Error(r.status);
                    const d = await r.json();
                    this.columns = d.columns; this.rows = d.rows; this.formats = d.formats;
-                   this.title = d.title; this.retentionDays = d.retention_days;
+                   this.name = d.name; this.retentionDays = d.retention_days;
                    this.total = d.total; this.truncatedTo = d.truncated_to; this.loads++; this.loaded = true; this.error = false;
                  } catch (e) { this.error = true; }
                },
-               init() { this.load(); },
+               init() { this.urls = { rows: $el.dataset.rowsUrl, psv: $el.dataset.psvUrl, settings: $el.dataset.settingsUrl }; this.load(); },
                get pages() { return Math.max(1, Math.ceil(this.total / this.pageSize)); },
                go(p) { this.page = Math.min(Math.max(1, p), this.pages); this.load(); },
                sortBy(c) {
@@ -48,9 +57,10 @@
   <p x-show="error" x-cloak>Could not load table.</p>
   <div x-show="loaded" x-cloak>
     <div class="table-name">
-      <button type="button" class="name" x-show="!editing" @click="edit()" title="Click to rename this table or change how long it is kept" x-text="title"></button>
+      <button type="button" class="name" x-show="!editing" @click="edit()" title="Click to rename this table (its SQL name) or change how long it is kept" x-text="name"></button>
+      <button type="button" class="copy" x-show="!editing" @click="copyName()" title="Copy the SQL table name to the clipboard" x-text="copied ? 'Copied' : 'Copy'"></button>
       <form class="editor" x-show="editing" @submit.prevent="save()" @keydown.escape="editing = false">
-        <input type="text" x-ref="nameInput" x-model="draft" maxlength="80" required aria-label="Table name">
+        <input type="text" x-ref="nameInput" x-model="draft" maxlength="60" required aria-label="Table name (SQL)">
         <label>Keep for
           <select x-model="choice" aria-label="Retention">
             <option value="1">1 day (default)</option>
@@ -70,7 +80,7 @@
       <button type="button" @click="go(page - 1)" :disabled="page <= 1">Prev</button>
       <span x-text="'Page ' + page + ' of ' + pages + ' (' + total + ' rows)'"></span>
       <button type="button" @click="go(page + 1)" :disabled="page >= pages">Next</button>
-      <a :href="$el.closest('.display').dataset.psvUrl" download>Download PSV</a>
+      <a :href="urls.psv" download>Download PSV</a>
       <span class="badge-truncated" x-show="truncatedTo" x-cloak
             :title="'The query returned at least ' + (truncatedTo || 0).toLocaleString('en-US') + ' rows; only the first ' + (truncatedTo || 0).toLocaleString('en-US') + ' were kept.'"
             x-text="'truncated to ' + (truncatedTo || 0).toLocaleString('en-US')"></span>

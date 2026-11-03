@@ -51,6 +51,7 @@ class Step:
     text: str = ""
     tool_calls: tuple[Call, ...] = ()
     error: str | None = None  # raised as the LLM error after the text streams
+    if_previous_failed: str = ""  # reply with this text alone (no calls) if the turn's latest tool call failed
 
 
 @dataclass(frozen=True)
@@ -119,6 +120,8 @@ class FakeClient:
             step = canned.steps[step_index]
         else:
             step = Step(text=SCRIPT_ENDED)
+        if step.if_previous_failed and _latest_tool_call_failed(messages[last_user:]):
+            step = Step(text=step.if_previous_failed)
         try:  # don't send a broken call: say why there is nothing to show
             scope = self._scope(canned, messages, last_user)
             calls = [(c.name, self._arguments(c, scope)) for c in step.tool_calls]
@@ -180,6 +183,11 @@ class FakeClient:
         if isinstance(node, list):
             return [self._resolve(v, messages) for v in node]
         return node
+
+
+def _latest_tool_call_failed(messages: list[dict]) -> bool:
+    tool_messages = [m for m in messages if m["role"] == "tool"]
+    return bool(tool_messages) and not json.loads(tool_messages[-1]["content"]).get("success")
 
 
 def _run_parent_first_reply(parent: CannedPrompt) -> str:

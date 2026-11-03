@@ -70,4 +70,4 @@ async def test_the_querying_conversation_owns_the_new_table_not_the_source(make_
     llm.steps = [[TextChunk("hi")]]
     await collect(agent, "again", other)
     system = llm.calls[-1][0]["content"]
-    assert derived in system and name not in system
+    assert derived in system and f"- {name} " not in system

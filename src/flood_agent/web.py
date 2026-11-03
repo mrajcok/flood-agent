@@ -156,7 +156,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
     def add_lookup_table(name: str = Form(""), rows: str = Form(""), overwrite: str = Form("")):
         """Create a Lookup Table from pasted rows. Plain HTTP, never an MCP tool."""
         try:
-            return agent.add_lookup_table(name, rows)
+            return agent.add_lookup_table(name, rows, overwrite=bool(overwrite))
         except InvalidLookupTable as e:
             raise HTTPException(422, str(e))
 

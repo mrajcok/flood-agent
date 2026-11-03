@@ -296,7 +296,8 @@ class ConversationStore:
 
     def register_lookup_table(self, name: str, columns: list[str]) -> None:
         """Record `name` as a Lookup Table (no Conversation, no expiry)."""
-        self._write("INSERT INTO lookup_tables(name, created_at, columns) VALUES (?,?,?)",
+        self._write("INSERT INTO lookup_tables(name, created_at, columns) VALUES (?,?,?) "
+                    "ON CONFLICT(name) DO UPDATE SET columns=excluded.columns",
                     (name, self._now(), json.dumps(columns)))
 
     def lookup_table_names(self) -> set[str]:

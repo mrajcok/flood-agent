@@ -146,7 +146,7 @@ def test_fake_mode_page_shows_badge_and_clickable_canned_prompts(build_agent, we
     html = client.get("/").text
 
     assert "Fake Mode — no LLM" in html
-    assert "You can only use these canned prompts with Fake Mode" in html
+    assert "You can only use the following canned prompts with Fake Mode:" in html
     assert CANNED[0].prompt in html
     created = client.post("/chat", data={"message": CANNED[0].prompt, "max_rows": "1000"}).text
     cid = created.split('name="conversation_id" value="')[1].split('"')[0]

@@ -15,6 +15,33 @@ from pathlib import Path
 # Default Result Table names are rt_<YYYYMMDD>_<HHMMSS>[_<n>]; users may rename them (lower-case
 # letters, digits and underscores, starting with a letter: a valid unquoted identifier in SQLite and Ocient).
 RESULT_TABLE_RE = re.compile(r"^[a-z][a-z0-9_]{0,79}_\d{8}_\d{6}(?:_\d+)?$")
+# Any name a Result Table can carry after a user rename; callers also check it is registered.
+TABLE_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,79}$")
+MAX_RENAME_LEN = 60
+RESERVED_PREFIXES = ("rt_", "lookup_")
+
+
+def check_new_table_name(new: str) -> str | None:
+    """Why `new` cannot be a Result Table's name, or None when it can."""
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", new) or len(new) > MAX_RENAME_LEN:
+        return (f"A table name must be letters, digits and underscores, start with a letter, "
+                f"and be at most {MAX_RENAME_LEN} characters.")
+    if new.lower().startswith(RESERVED_PREFIXES):
+        return "A table name cannot start with rt_ or lookup_; those are reserved."
+    return None
+
+
+def rename_table(results_db: Path, old: str, new: str) -> None:
+    """Rename a table in the results database; ValueError (changing nothing) if `new` is taken."""
+    con = sqlite3.connect(results_db)
+    try:
+        taken = {r[0].lower() for r in con.execute("SELECT name FROM sqlite_master")}
+        if new.lower() in taken:
+            raise ValueError(f"A table named {new} already exists.")
+        con.execute(f'ALTER TABLE "{old}" RENAME TO "{new}"')
+        con.commit()
+    finally:
+        con.close()
 
 
 def _timestamp() -> str:
@@ -313,7 +340,7 @@ def run_count_query(
 
 
 def result_table_columns(results_db: Path, name: str) -> list[str] | None:
-    if not RESULT_TABLE_RE.match(name) or not Path(results_db).exists():
+    if not TABLE_NAME_RE.match(name) or not Path(results_db).exists():
         return None
     con = sqlite3.connect(f"file:{results_db}?mode=ro", uri=True)
     try:

@@ -150,7 +150,7 @@ class ConversationStore:
 
     def _live_tables(self, con, conversation_id: str) -> list[sqlite3.Row]:
         return con.execute(
-            "SELECT name, COALESCE(display_name, name) AS shown FROM result_tables "
+            "SELECT name FROM result_tables "
             "WHERE conversation_id=? AND expired=0", (conversation_id,)).fetchall()
 
     def _turn_owned(self, con, conversation_id: str, turn_id: int) -> list[sqlite3.Row]:
@@ -159,9 +159,15 @@ class ConversationStore:
         bodies = con.execute(
             "SELECT turn_id, body FROM messages WHERE conversation_id=? ORDER BY id", (conversation_id,)).fetchall()
 
+        shown = con.execute(
+            "SELECT turn_id, result_table FROM displays WHERE conversation_id=? ORDER BY id", (conversation_id,)
+        ).fetchall()  # a renamed table is only still named in Displays
+
         def first_mention(name: str):
             mention = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])")
-            return next((b["turn_id"] for b in bodies if mention.search(b["body"])), None)
+            turns = [b["turn_id"] for b in bodies if mention.search(b["body"])]
+            turns += [d["turn_id"] for d in shown if d["result_table"] == name]
+            return min(turns, default=None)
 
         return [t for t in self._live_tables(con, conversation_id) if first_mention(t["name"]) == turn_id]
 
@@ -171,7 +177,7 @@ class ConversationStore:
         if choice == "delete_all":
             return [t["name"] for t in tables]
         if choice == "delete_rt":
-            return [t["name"] for t in tables if t["shown"].startswith("rt_")]
+            return [t["name"] for t in tables if t["name"].startswith("rt_")]
         return []
 
     def delete_preview(self, conversation_id: str, turn_id: int | None = None) -> dict:

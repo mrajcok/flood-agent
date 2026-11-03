@@ -75,6 +75,17 @@ _RESULT_TABLE_MIGRATIONS = {
 }
 
 
+def _follow_rename(node, old: str, new: str):
+    """A saved Chart Spec with every {"name": old} data reference pointing at `new`."""
+    if isinstance(node, dict):
+        if node == {"name": old}:
+            return {"name": new}
+        return {k: _follow_rename(v, old, new) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_follow_rename(i, old, new) for i in node]
+    return node
+
+
 def _now() -> int:
     return int(time.time() * 1000)
 
@@ -91,8 +102,6 @@ class ConversationStore:
             for col, decl in _RESULT_TABLE_MIGRATIONS.items():
                 if col not in have:
                     con.execute(f"ALTER TABLE result_tables ADD COLUMN {col} {decl}")
-                    if col == "display_name":  # keep the names older databases already showed
-                        con.execute("UPDATE result_tables SET display_name=title WHERE title != ''")
 
     def _connect(self) -> sqlite3.Connection:
         con = sqlite3.connect(self.path)
@@ -291,15 +300,25 @@ class ConversationStore:
         """The user-visible name and retention in ms of a Result Table, or None if unknown.
         Until the user renames it, the name is the table's own."""
         with closing(self._connect()) as con:
-            row = con.execute("SELECT display_name, retention_ms FROM result_tables WHERE name=?", (name,)).fetchone()
+            row = con.execute("SELECT retention_ms FROM result_tables WHERE name=?", (name,)).fetchone()
         if row is None:
             return None
-        return {"title": row["display_name"] or name, "retention_ms": row["retention_ms"] if row["retention_ms"] is not None else default_retention_ms}
+        return {"title": name, "retention_ms": row["retention_ms"] if row["retention_ms"] is not None else default_retention_ms}
 
-    def update_result_table(self, name: str, title: str | None = None, retention_ms: int | None = None) -> None:
+    def has_result_table(self, name: str) -> bool:
+        with closing(self._connect()) as con:
+            return con.execute("SELECT 1 FROM result_tables WHERE name=?", (name,)).fetchone() is not None
+
+    def rename_result_table(self, old: str, new: str) -> None:
+        """Make `new` the table's one name, in the registry and in the Displays that show it."""
         with closing(self._connect()) as con, con:
-            if title is not None:
-                con.execute("UPDATE result_tables SET display_name=? WHERE name=?", (title, name))
+            con.execute("UPDATE result_tables SET name=? WHERE name=?", (new, old))
+            for row in con.execute("SELECT id, definition FROM displays WHERE result_table=?", (old,)).fetchall():
+                definition = json.dumps(_follow_rename(json.loads(row["definition"]), old, new))
+                con.execute("UPDATE displays SET result_table=?, definition=? WHERE id=?", (new, definition, row["id"]))
+
+    def update_result_table(self, name: str, retention_ms: int | None = None) -> None:
+        with closing(self._connect()) as con, con:
             if retention_ms is not None:
                 con.execute("UPDATE result_tables SET retention_ms=? WHERE name=?", (retention_ms, name))
 

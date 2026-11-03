@@ -110,14 +110,27 @@ def _allowed_tables(app_db: Path | None, ctx: Context) -> set[str]:
     return _live_result_tables(app_db, conversation_id) if conversation_id else set()
 
 
+def _lookup_tables(app_db: Path | None) -> set[str]:
+    """Registered Lookup Tables (registration, not the `lookup_` prefix, decides), read-only."""
+    if not app_db:
+        return set()
+    con = sqlite3.connect(f"file:{app_db}?mode=ro", uri=True, timeout=5)
+    try:
+        return {r[0] for r in con.execute("SELECT name FROM lookup_tables")}
+    finally:
+        con.close()
+
+
 def _readable_tables(app_db: Path | None) -> set[str]:
-    """Every table a query may read (ADR 0003): all live Result Tables, from any Conversation.
-    Lookup Tables join this set later."""
-    return _live_result_tables(app_db)
+    """Every table a query may read (ADR 0003): all live Result Tables, from any Conversation,
+    and every Lookup Table."""
+    return _live_result_tables(app_db) | _lookup_tables(app_db)
 
 
 def _table_kind(app_db: Path | None, name: str) -> str | None:
-    """The kind of a readable table, or None if there is no such readable table. Add `lookup` here."""
+    """The kind of a readable table (`lookup` or `result`), or None if there is no such readable table."""
+    if name in _lookup_tables(app_db):
+        return "lookup"
     return "result" if name in _live_result_tables(app_db) else None
 
 
@@ -183,7 +196,7 @@ def create_server(settings: ServerSettings) -> FastMCP:
         for any live table from any chat, not only those listed in your prompt. Never returns
         rows. Query it by name with run_query."""
         kind = _table_kind(settings.app_db, name)
-        described = queries.describe_results_table(settings.results_db, name) if kind == "result" else None
+        described = queries.describe_results_table(settings.results_db, name) if kind else None
         if described is None:
             return json.dumps({"success": False, "error": "No such table."})
         return json.dumps({"success": True, "name": name, "kind": kind, **described})

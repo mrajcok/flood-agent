@@ -1,5 +1,4 @@
 <aside id="sidebar" {% if oob %}hx-swap-oob="true"{% endif %}>
-  <a class="new" href="/">New chat</a>
   <div class="lookup" x-data="{ open: false, name: '', rows: '', overwrite: false, busy: false, error: '', done: null,
        async submit() {
          this.busy = true; this.error = ''; this.done = null;
@@ -24,10 +23,11 @@
           Added <b x-text="done && done.name"></b>: <span x-text="done && done.row_count"></span> rows,
           columns <span x-text="done && done.columns.join(', ')"></span>.
         </p>
-        <div class="actions"><button type="submit" :disabled="busy">Submit</button> <button type="button" @click="open = false">Cancel</button></div>
+        <div class="actions"><button type="submit" class="primary" :disabled="busy">Submit</button> <button type="button" @click="open = false">Cancel</button></div>
       </form>
     </dialog>
   </div>
+  <a class="new" href="/">New chat</a>
   <ul>
     {% for c in conversations %}
     <li x-data="{ open: false, editing: false }"{% if c.id == current_id %} class="current"{% endif %}>

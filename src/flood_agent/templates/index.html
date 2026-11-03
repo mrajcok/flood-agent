@@ -41,7 +41,7 @@
     #prompt-area { flex: 1; padding-right: .5rem; }
     aside a.new { display: block; padding: .5rem .75rem; border-radius: .6rem; background: #4a6fd3; color: #fff; text-align: center; text-decoration: none; }
     aside a.new:hover { background: #3b5cb8; }
-    aside .lookup { margin: .5rem 0; }
+    aside .lookup { margin: 0 0 .5rem; }
     aside .add-lookup { width: 100%; padding: .4rem .75rem; border-radius: .6rem; border: 1px solid #4a6fd3; background: transparent; color: inherit; cursor: pointer; }
     dialog { border: 1px solid #ccc; border-radius: .75rem; box-shadow: 0 8px 24px rgba(0,0,0,.2); padding: 1.25rem 1.5rem; }
     dialog::backdrop { background: rgba(0,0,0,.35); }
@@ -50,6 +50,16 @@
     dialog label:has(input[type=radio]), dialog label:has(input[type=checkbox]) { display: flex; align-items: baseline; gap: .5rem; }
     dialog [hidden] { display: none !important; }
     dialog .actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .25rem; }
+    dialog .actions button { font: inherit; font-size: .9rem; padding: .4rem 1.1rem; border-radius: .5rem; cursor: pointer;
+      border: 1px solid #c4c9d4; background: #fff; color: #333; }
+    dialog .actions button:hover { background: #f2f4f8; }
+    dialog .actions button:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 2px; }
+    dialog .actions button:disabled { opacity: .6; cursor: default; }
+    dialog .actions button.primary { border-color: #4a6fd3; background: #4a6fd3; color: #fff; }
+    dialog .actions button.primary:hover:not(:disabled) { background: #3b5cb8; border-color: #3b5cb8; }
+    dialog .actions button.danger { border-color: #c62828; background: #c62828; color: #fff; }
+    dialog .actions button.danger:hover { background: #a31f1f; border-color: #a31f1f; }
+    dialog .actions button.danger:focus-visible { outline-color: #c62828; }
     #delete-dialog { width: min(30rem, 90vw); }
     .lookup dialog { width: min(36rem, 90vw); }
     .lookup dialog textarea { width: 100%; box-sizing: border-box; font-family: monospace; }
@@ -182,7 +192,7 @@
       <label><input type="radio" name="choice" value="keep" checked> <span>Keep all tables; they age off per their retention</span></label>
       <label id="delete-rt-option"><input type="radio" name="choice" value="delete_rt"> <span>Delete only tables still named <code>rt_*</code> (<span id="delete-rt-count"></span>)</span></label>
       <label><input type="radio" name="choice" value="delete_all"> <span>Delete all its Result Tables (<span id="delete-all-count"></span>)</span></label>
-      <div class="actions"><button value="ok">Delete</button> <button value="cancel" formnovalidate>Cancel</button></div>
+      <div class="actions"><button value="ok" class="danger">Delete</button> <button value="cancel" formnovalidate>Cancel</button></div>
     </form>
   </dialog>
   <script>

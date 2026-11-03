@@ -30,6 +30,7 @@ from flood_agent.agent import (
     TurnEnd,
     resolve_chart_data,
 )
+from flood_agent.lookup_tables import InvalidLookupTable
 from flood_agent.queries import InvalidSort
 from flood_agent.trace import split_system_prompt
 
@@ -166,6 +167,14 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
             raise HTTPException(422, "a conversation name cannot be blank")
         agent.store.rename_conversation(conversation_id, title)
         return RedirectResponse(f"/c/{conversation_id}", status_code=303)
+
+    @app.post("/api/lookup-tables")
+    def add_lookup_table(name: str = Form(""), rows: str = Form(""), overwrite: str = Form("")):
+        """Create a Lookup Table from pasted rows. Plain HTTP, never an MCP tool."""
+        try:
+            return agent.add_lookup_table(name, rows)
+        except InvalidLookupTable as e:
+            raise HTTPException(422, str(e))
 
     @app.post("/chat", response_class=HTMLResponse)
     def chat(request: Request, message: str = Form(...), conversation_id: str = Form(""), max_rows: str = Form(...)):

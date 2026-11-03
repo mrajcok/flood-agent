@@ -61,6 +61,11 @@ CREATE TABLE IF NOT EXISTS result_tables (
   retention_ms INTEGER,
   display_name TEXT
 );
+CREATE TABLE IF NOT EXISTS lookup_tables (
+  name TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL,
+  columns TEXT NOT NULL DEFAULT '[]'
+);
 """
 
 # Columns added to result_tables after #8, for app databases created before then.
@@ -327,6 +332,15 @@ class ConversationStore:
         with closing(self._connect()) as con, con:
             if retention_ms is not None:
                 con.execute("UPDATE result_tables SET retention_ms=? WHERE name=?", (retention_ms, name))
+
+    def register_lookup_table(self, name: str, columns: list[str]) -> None:
+        """Record `name` as a Lookup Table (no Conversation, no expiry)."""
+        self._write("INSERT INTO lookup_tables(name, created_at, columns) VALUES (?,?,?)",
+                    (name, self._now(), json.dumps(columns)))
+
+    def lookup_table_names(self) -> set[str]:
+        with closing(self._connect()) as con:
+            return {r[0] for r in con.execute("SELECT name FROM lookup_tables")}
 
     def mark_expired(self, names: list[str]) -> None:
         with closing(self._connect()) as con, con:

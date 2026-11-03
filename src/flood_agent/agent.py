@@ -15,7 +15,7 @@ from typing import AsyncIterator, Callable
 from mcp import StdioServerParameters
 from mcp.types import TextContent
 
-from flood_agent import flagging, queries
+from flood_agent import flagging, lookup_tables, queries
 from flood_agent.llm import LLMClient, LLMError, TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
 from flood_agent.mcp_protocol import QUERY_TOOLS
@@ -307,6 +307,15 @@ class Agent:
     def _raise_if_expired(self, result_table: str) -> None:
         if self.is_expired(result_table):
             raise ResultTableExpired(f"Result Table {result_table} has expired.")
+
+    def add_lookup_table(self, suffix: str, text: str) -> dict:
+        """Create `lookup_<suffix>` from pasted rows and register it. Touches no Conversation, message
+        or Trace, and the LLM is told nothing. Raises `InvalidLookupTable` for a bad name or paste."""
+        name = lookup_tables.table_name(suffix)
+        parsed = lookup_tables.parse_rows(text)
+        lookup_tables.create_table(self.config.results_db, name, parsed)
+        self.store.register_lookup_table(name, parsed.columns)
+        return {"name": name, "row_count": len(parsed.rows), "columns": parsed.columns}
 
     def result_table_settings(self, result_table: str) -> dict:
         """The Result Table's user-visible name and retention in days (KeyError if unknown)."""

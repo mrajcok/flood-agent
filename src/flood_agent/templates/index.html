@@ -41,6 +41,13 @@
     #prompt-area { flex: 1; padding-right: .5rem; }
     aside a.new { display: block; padding: .5rem .75rem; border-radius: .6rem; background: #4a6fd3; color: #fff; text-align: center; text-decoration: none; }
     aside a.new:hover { background: #3b5cb8; }
+    aside .lookup { margin: .5rem 0; }
+    aside .add-lookup { width: 100%; padding: .4rem .75rem; border-radius: .6rem; border: 1px solid #4a6fd3; background: transparent; color: inherit; cursor: pointer; }
+    .lookup dialog { width: min(36rem, 90vw); }
+    .lookup dialog textarea { width: 100%; box-sizing: border-box; font-family: monospace; }
+    .lookup dialog .prefix { font-family: monospace; }
+    .lookup dialog .hint { font-size: .85rem; }
+    .lookup dialog .error { color: #b3261e; }
     aside ul { list-style: none; padding: 0; margin: .5rem 0; }
     aside li { display: flex; align-items: center; gap: .25rem; padding: 0 .4rem 0 .6rem; }
     aside li a { display: block; flex: 1; min-width: 0; padding: .25rem 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

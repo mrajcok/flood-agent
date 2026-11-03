@@ -36,7 +36,7 @@ def shown_table(build_agent, web_client):
 def test_rows_report_the_name_and_default_retention(build_agent, web_client):
     client, _, name = shown_table(build_agent, web_client)
     data = client.get(f"/api/results/{name}/rows").json()
-    assert data["title"] == name and re.fullmatch(r"bytes_per_port_\d{8}_\d{6}", name) and data["retention_days"] == 1
+    assert data["title"] == name and re.fullmatch(r"rt_\d{8}_\d{6}", name) and data["retention_days"] == 1
 
 
 def test_display_offers_name_and_retention_editor(build_agent, web_client):

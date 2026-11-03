@@ -1,5 +1,5 @@
 <div class="display" data-rows-url="{{ rows_url }}" data-psv-url="{{ psv_url }}" data-settings-url="{{ settings_url }}"
-     x-data="{ title: '', retentionDays: 1, editing: false, draft: '', choice: '1', custom: 1, saveError: '',
+     x-data="{ title: '', copied: false, retentionDays: 1, editing: false, draft: '', choice: '1', custom: 1, saveError: '',
                presets: ['1', '7', '30', '365'],
                edit() {
                  this.draft = this.title; this.saveError = '';
@@ -13,10 +13,13 @@
                  try {
                    const r = await fetch($el.dataset.settingsUrl, { method: 'POST', body });
                    if (r.status === 410) { this.expired = true; this.loaded = false; this.editing = false; return; }
-                   if (!r.ok) { this.saveError = r.status === 422 ? 'Enter a name and a number of days between 0 and 3650.' : 'Could not save.'; return; }
+                   if (!r.ok) { this.saveError = r.status === 422 ? ((await r.json()).detail || 'Enter a valid name and a number of days between 0 and 3650.') : 'Could not save.'; return; }
                    const d = await r.json();
                    this.title = d.title; this.retentionDays = d.retention_days; this.editing = false;
                  } catch (e) { this.saveError = 'Could not save.'; }
+               },
+               async copyName() {
+                 try { await navigator.clipboard.writeText(this.title); this.copied = true; setTimeout(() => { this.copied = false; }, 1500); } catch (e) {}
                },
                columns: [], rows: [], formats: {}, total: 0, truncatedTo: null, page: 1, pageSize: 20,
                sort: null, dir: 'asc', loads: 0, loaded: false, error: false, expired: false,
@@ -48,9 +51,10 @@
   <p x-show="error" x-cloak>Could not load table.</p>
   <div x-show="loaded" x-cloak>
     <div class="table-name">
-      <button type="button" class="name" x-show="!editing" @click="edit()" title="Click to rename this table or change how long it is kept" x-text="title"></button>
+      <button type="button" class="name" x-show="!editing" @click="edit()" title="Click to rename this table (its SQL name) or change how long it is kept" x-text="title"></button>
+      <button type="button" class="copy" x-show="!editing" @click="copyName()" title="Copy the SQL table name to the clipboard" x-text="copied ? 'Copied' : 'Copy'"></button>
       <form class="editor" x-show="editing" @submit.prevent="save()" @keydown.escape="editing = false">
-        <input type="text" x-ref="nameInput" x-model="draft" maxlength="80" required aria-label="Table name">
+        <input type="text" x-ref="nameInput" x-model="draft" maxlength="60" required aria-label="Table name (SQL)">
         <label>Keep for
           <select x-model="choice" aria-label="Retention">
             <option value="1">1 day (default)</option>

@@ -244,13 +244,13 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
         """Rename a Result Table and/or set how long it is kept (days after the Conversation's last activity)."""
         if title is not None:
             title = title.strip()
-            if not title or len(title) > MAX_TABLE_NAME:
-                raise HTTPException(422, f"a table name must be 1 to {MAX_TABLE_NAME} characters")
         days = None if retention_days is None else _parse_retention_days(retention_days)
         try:
             return agent.update_result_table(result_table, title, days)
         except KeyError:
             raise HTTPException(404, "unknown result table")
+        except ValueError as e:
+            raise HTTPException(422, str(e))
 
     @app.get("/api/results/{result_table}/psv")
     def psv_download(result_table: str):
@@ -296,7 +296,6 @@ def _parse_max_rows(raw: str) -> int:
     return int(raw)
 
 
-MAX_TABLE_NAME = 80
 MAX_RETENTION_DAYS = 3650
 
 

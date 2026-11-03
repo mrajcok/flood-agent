@@ -97,23 +97,26 @@ def test_unknown_conversation_is_404(build_agent, web_client):
     assert client.get("/c/deadbeef").status_code == 404
 
 
-async def test_agent_cannot_display_another_conversations_result_table(make_agent):
-    from conftest import collect
+def test_another_conversation_can_display_a_table_and_deleting_it_leaves_the_table(build_agent, web_client):
+    """ADR 0003: Conversation B may show A's Result Table; the Display is saved with B, but A still
+    owns the table, so deleting B (even with delete_all) does not drop it."""
+    client = web_client(build_agent(ScriptedLLM(
+        *table_script(),
+        lambda msgs: [tool_call("show_table", result_table=msgs[-1]["content"].split()[-1])],
+        [TextChunk("there it is")],
+    )))
+    a, _ = ask(client, "top ports")
+    table = re.search(r"/api/results/([a-z0-9_]+)/rows", client.get(f"/c/{a}").text).group(1)
 
-    from flood_agent.agent import Conversation, DisplayEvent
+    b, body = ask(client, f"show {table}")
+    assert f"/api/results/{table}/rows" in body
+    assert f"/api/results/{table}/rows" in client.get(f"/c/{b}").text  # the Display is saved with B
 
-    agent = await make_agent(ScriptedLLM(*table_script()))
-    first = Conversation()
-    events = await collect(agent, "q", first)
-    table = next(e.result_table for e in events if isinstance(e, DisplayEvent))
+    assert client.get(f"/c/{b}/delete-preview").json()["total"] == 0
+    client.post(f"/c/{b}/delete", data={"tables": "delete_all"})
+    assert client.get(f"/api/results/{table}/rows").status_code == 200
+    assert f"/api/results/{table}/rows" in client.get(f"/c/{a}").text
 
-    intruder = ScriptedLLM([tool_call("show_table", result_table=table)], [TextChunk("x")])
-    other = await make_agent(intruder)
-    events = await collect(other, "steal", Conversation())
-    assert not [e for e in events if isinstance(e, DisplayEvent)]
-
-    reopened = other.open_conversation(first.id)
-    assert [m["role"] for m in reopened.messages][0] == "user" and len(reopened.messages) == len(first.messages)
 
 
 def test_deleting_a_conversation_removes_it_and_its_result_tables(build_agent, web_client):

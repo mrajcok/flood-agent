@@ -92,13 +92,15 @@ class SemanticLayer:
             return (
                 "\n# Result Tables\nNone are available in this Conversation. Result Tables named in "
                 "earlier messages have expired and cannot be queried. If the user names another table, "
-                "call describe_table(name) to see its columns, then query it by name.\n"
+                "call describe_table(name) to see its columns, then query it by name; a live Result Table "
+                "from another chat can also be shown directly with show_table or show_chart.\n"
             )
         lines = [
             "\n# Result Tables",
             "Earlier results in this Conversation. Query them by name in run_query like any table "
             "(e.g. to break down or filter an earlier result). Others have expired. If the user names a "
-            "table not listed here, call describe_table(name) to see its columns, then query it by name.",
+            "table not listed here, call describe_table(name) to see its columns, then query it by name; a live "
+            "Result Table from another chat can also be shown directly with show_table or show_chart.",
         ]
         for t in tables:
             cols = ", ".join(f"{c['name']} {c['type']}" for c in t["columns"])

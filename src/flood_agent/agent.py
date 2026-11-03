@@ -657,14 +657,16 @@ class Agent:
         if not display:
             return []
         table = display["result_table"]
-        owned = self.store.owns_result_table(conversation.id, table)
+        # Any live Result Table may be shown (ADR 0003); the Display is saved with this
+        # Conversation, but the table stays owned by the one that created it.
+        live = self.store.has_result_table(table) and not self.store.is_expired(table)
         if display["kind"] == "chart":
             source = display["spec"]
             resolved = resolve_chart_data(source, table)
             trace.add("chart_spec", result_table=table, source_spec=source, spec=resolved)
             await queue.put(DisplayEvent("chart", table, spec=resolved, source_spec=source))
-            return [("chart", table, {"spec": source})] if owned else []
-        if not owned:
+            return [("chart", table, {"spec": source})] if live else []
+        if not live:
             return []
         await queue.put(DisplayEvent(display["kind"], table, display["columns"]))
         return [(display["kind"], table, {"columns": display["columns"]})]

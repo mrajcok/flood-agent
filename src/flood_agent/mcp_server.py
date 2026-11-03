@@ -103,13 +103,6 @@ def _live_result_tables(app_db: Path | None, conversation_id: str | None = None)
         con.close()
 
 
-def _allowed_tables(app_db: Path | None, ctx: Context) -> set[str]:
-    """The calling Conversation's own live Result Tables (what its Displays may show). Empty if
-    the Conversation id or APP_DB is missing."""
-    conversation_id = _conversation_id(ctx)
-    return _live_result_tables(app_db, conversation_id) if conversation_id else set()
-
-
 def _lookup_tables(app_db: Path | None) -> set[str]:
     """Registered Lookup Tables (registration, not the `lookup_` prefix, decides), read-only."""
     if not app_db:
@@ -204,11 +197,13 @@ def create_server(settings: ServerSettings) -> FastMCP:
 
     @mcp.tool()
     @_in_worker_thread
-    def show_table(result_table: str, ctx: Context, columns: list[str] | None = None) -> str:
-        """Show a Result Table to the user as a table Display. You will not see the rows."""
-        # Another Conversation's table is reported exactly like one that does not exist.
-        owned = result_table in _allowed_tables(settings.app_db, ctx)
-        available = queries.result_table_columns(settings.results_db, result_table) if owned else None
+    def show_table(result_table: str, columns: list[str] | None = None) -> str:
+        """Show a live Result Table, from any chat, to the user as a table Display. You will not
+        see the rows."""
+        # Any live Result Table may be shown (ADR 0003); an expired one is reported exactly like
+        # one that does not exist.
+        live = result_table in _live_result_tables(settings.app_db)
+        available = queries.result_table_columns(settings.results_db, result_table) if live else None
         if available is None:
             return json.dumps({"success": False, "error": "Unknown Result Table."})
         if columns is not None and not set(columns) <= set(available):
@@ -218,7 +213,7 @@ def create_server(settings: ServerSettings) -> FastMCP:
 
     @mcp.tool()
     @_in_worker_thread
-    def show_chart(vega_lite_spec: dict, ctx: Context) -> str:
+    def show_chart(vega_lite_spec: dict) -> str:
         """Show a Vega-Lite Chart Spec to the user as a chart Display. Its data must be
         {"name": "<result table>"}; never include data values. Aggregate first if the Result
         Table is large: a chart shows at most its first CHART_ROW_CAP rows. Use temporal x scales of type "utc" for epoch-ms time columns."""
@@ -226,8 +221,8 @@ def create_server(settings: ServerSettings) -> FastMCP:
         table = data.get("name") if isinstance(data, dict) else None
         if not isinstance(table, str):
             return json.dumps({"success": False, "error": "Missing data source. " + CHART_GUIDANCE})
-        owned = table in _allowed_tables(settings.app_db, ctx)
-        count = queries.result_table_row_count(settings.results_db, table) if owned else None
+        live = table in _live_result_tables(settings.app_db)
+        count = queries.result_table_row_count(settings.results_db, table) if live else None
         if count is None:
             return json.dumps({"success": False, "error": "Unknown Result Table. " + CHART_GUIDANCE})
         violation = _find_violation(vega_lite_spec, table)

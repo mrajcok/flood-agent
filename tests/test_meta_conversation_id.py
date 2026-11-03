@@ -52,7 +52,7 @@ async def _raw_calls(agent, calls):
     return out
 
 
-async def test_show_table_is_limited_to_the_meta_conversations_tables(make_agent):
+async def test_reads_and_displays_are_not_scoped_to_the_meta_conversation(make_agent):
     results = []
     llm = ScriptedLLM(
         [tool_call("run_query", sql="SELECT dport FROM flows", title="t")],
@@ -74,8 +74,7 @@ async def test_show_table_is_limited_to_the_meta_conversations_tables(make_agent
     )
     assert own["success"]
     assert missing["success"]  # reads are not scoped to a Conversation (ADR 0003)
-    assert wrong == {"success": False, "error": "Unknown Result Table."}
-    assert empty == wrong
+    assert wrong["success"] and empty["success"]  # nor are Displays of a live Result Table
 
 
 async def test_run_query_without_a_row_cap_in_meta_is_refused(make_agent):

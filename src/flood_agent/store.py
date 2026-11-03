@@ -286,12 +286,6 @@ class ConversationStore:
             row = con.execute("SELECT truncated_to FROM result_tables WHERE name=?", (name,)).fetchone()
             return row["truncated_to"] if row else None
 
-    def owns_result_table(self, conversation_id: str, name: str) -> bool:
-        with closing(self._connect()) as con:
-            return con.execute(
-                "SELECT 1 FROM result_tables WHERE name=? AND conversation_id=?", (name, conversation_id)
-            ).fetchone() is not None
-
     def result_tables(self, conversation_id: str) -> list[str]:
         """Names of the Conversation's live (unexpired) Result Tables."""
         return [t["name"] for t in self.live_result_tables(conversation_id)]

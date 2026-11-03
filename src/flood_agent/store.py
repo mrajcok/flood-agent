@@ -246,13 +246,13 @@ class ConversationStore:
             return [{**dict(r), "columns": json.loads(r["columns"])} for r in rows]
 
     def due_for_expiry(self, ttl_ms: int) -> list[str]:
-        """Live Result Tables whose Conversation was last active longer ago than the table's
+        """Live Result Tables created longer ago than the table's
         retention (`ttl_ms` unless the user chose one)."""
         now = self._now()
         with closing(self._connect()) as con:
             return [r[0] for r in con.execute(
-                "SELECT r.name FROM result_tables r JOIN conversations c ON c.id=r.conversation_id "
-                "WHERE r.expired=0 AND c.last_activity_at <= ? - COALESCE(r.retention_ms, ?)", (now, ttl_ms))]
+                "SELECT name FROM result_tables "
+                "WHERE expired=0 AND created_at <= ? - COALESCE(retention_ms, ?)", (now, ttl_ms))]
 
     def result_table_settings(self, name: str, default_retention_ms: int) -> dict | None:
         """The user-visible name and retention in ms of a Result Table, or None if unknown.

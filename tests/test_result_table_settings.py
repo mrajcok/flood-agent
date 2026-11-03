@@ -85,3 +85,15 @@ def test_settings_on_expired_table_is_410(build_agent, web_client):
     client, clock, name = shown_table(build_agent, web_client)
     clock.ms += DAY + 1
     assert client.post(f"/api/results/{name}/settings", data={"title": "x"}).status_code == 410
+
+
+def test_retention_change_moves_expiry_relative_to_creation(build_agent, web_client):
+    client, clock, name = shown_table(build_agent, web_client)
+    clock.ms += DAY // 2
+    client.post(f"/api/results/{name}/settings", data={"retention_days": "3"})
+    clock.ms += 2 * DAY  # day 2.5 after creation
+    assert client.get(f"/api/results/{name}/rows").status_code == 200
+    clock.ms += DAY // 2 - 1  # 1ms before day 3
+    assert client.get(f"/api/results/{name}/rows").status_code == 200
+    clock.ms += 2
+    assert client.get(f"/api/results/{name}/rows").status_code == 410

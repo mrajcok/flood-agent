@@ -1,17 +1,17 @@
 <aside id="sidebar" {% if oob %}hx-swap-oob="true"{% endif %}>
-  <div class="lookup" x-data="{ open: false, name: '', rows: '', overwrite: false, busy: false, error: '', done: null,
+  <div class="lookup" x-data="{ open: false, name: '', rows: '', overwrite: false, busy: false, error: '',
        async submit() {
-         this.busy = true; this.error = ''; this.done = null;
+         this.busy = true; this.error = '';
          const body = new URLSearchParams({ name: this.name, rows: this.rows });
          if (this.overwrite) body.set('overwrite', 'on');
          try {
            const r = await fetch('/api/lookup-tables', { method: 'POST', body });
            const data = await r.json();
-           if (r.ok) this.done = data; else this.error = data.detail || 'Could not add the table.';
+           if (r.ok) { this.$dispatch('lookup-added', data); this.open = false; this.name = ''; this.rows = ''; this.overwrite = false; } else this.error = data.detail || 'Could not add the table.';
          } catch (e) { this.error = 'Could not add the table.'; }
          this.busy = false;
        } }">
-    <button type="button" class="add-lookup" @click="open = true; done = null; error = ''">Add lookup table</button>
+    <button type="button" class="add-lookup" @click="open = true; error = ''">Add lookup table</button>
     <dialog x-effect="open ? $el.showModal() : $el.open && $el.close()" @close="open = false">
       <form @submit.prevent="submit()">
         <p class="error" x-show="error" x-text="error" x-cloak></p>
@@ -19,10 +19,6 @@
         <p class="hint">First row must be the column names. Separate columns with tab, comma or <code>|</code>.</p>
         <textarea x-model="rows" rows="10" required aria-label="Rows"></textarea>
         <label><input type="checkbox" x-model="overwrite"> Overwrite existing table</label>
-        <p class="done" x-show="done" x-cloak>
-          Added <b x-text="done && done.name"></b>: <span x-text="done && done.row_count"></span> rows,
-          columns <span x-text="done && done.columns.join(', ')"></span>.
-        </p>
         <div class="actions"><button type="submit" class="primary" :disabled="busy">Submit</button> <button type="button" @click="open = false">Cancel</button></div>
       </form>
     </dialog>

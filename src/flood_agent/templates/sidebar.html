@@ -17,7 +17,7 @@
       <form @submit.prevent="submit()">
         <p class="error" x-show="error" x-text="error" x-cloak></p>
         <label>Name <span class="prefix">lookup_</span><input type="text" x-model="name" maxlength="60" required pattern="[A-Za-z0-9_]+" aria-label="Lookup table name"></label>
-        <p class="hint">First row must be the column names. Separate columns with tab, comma or `|`.</p>
+        <p class="hint">First row must be the column names. Separate columns with tab, comma or <code>|</code>.</p>
         <textarea x-model="rows" rows="10" required aria-label="Rows"></textarea>
         <label><input type="checkbox" x-model="overwrite"> Overwrite existing table</label>
         <p class="done" x-show="done" x-cloak>

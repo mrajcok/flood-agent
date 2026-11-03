@@ -36,7 +36,7 @@ def shown_table(build_agent, web_client):
 def test_rows_report_the_name_and_default_retention(build_agent, web_client):
     client, _, name = shown_table(build_agent, web_client)
     data = client.get(f"/api/results/{name}/rows").json()
-    assert data["title"] == name and re.fullmatch(r"rt_\d{8}_\d{6}", name) and data["retention_days"] == 1
+    assert data["name"] == name and re.fullmatch(r"rt_\d{8}_\d{6}", name) and data["retention_days"] == 1
 
 
 def test_display_offers_name_and_retention_editor(build_agent, web_client):
@@ -50,18 +50,18 @@ def test_display_offers_name_and_retention_editor(build_agent, web_client):
 
 def test_rename_is_a_real_sql_rename(build_agent, web_client):
     client, _, name = shown_table(build_agent, web_client)
-    resp = client.post(f"/api/results/{name}/settings", data={"title": "  top_ports  "})
-    assert resp.status_code == 200 and resp.json()["title"] == "top_ports"
-    assert client.get("/api/results/top_ports/rows").json()["title"] == "top_ports"
+    resp = client.post(f"/api/results/{name}/settings", data={"name": "  top_ports  "})
+    assert resp.status_code == 200 and resp.json()["name"] == "top_ports"
+    assert client.get("/api/results/top_ports/rows").json()["name"] == "top_ports"
 
 
 def test_blank_name_and_bad_retention_are_rejected(build_agent, web_client):
     client, _, name = shown_table(build_agent, web_client)
     url = f"/api/results/{name}/settings"
-    assert client.post(url, data={"title": "   "}).status_code == 422
+    assert client.post(url, data={"name": "   "}).status_code == 422
     for bad in ("0", "-3", "abc", "nan", "inf", "100000"):
         assert client.post(url, data={"retention_days": bad}).status_code == 422, bad
-    assert client.post("/api/results/r_nope/settings", data={"title": "x"}).status_code == 404
+    assert client.post("/api/results/r_nope/settings", data={"name": "x"}).status_code == 404
     assert client.get(f"/api/results/{name}/rows").json()["retention_days"] == 1
 
 
@@ -84,7 +84,7 @@ def test_shorter_retention_expires_sooner(build_agent, web_client):
 def test_settings_on_expired_table_is_410(build_agent, web_client):
     client, clock, name = shown_table(build_agent, web_client)
     clock.ms += DAY + 1
-    assert client.post(f"/api/results/{name}/settings", data={"title": "x"}).status_code == 410
+    assert client.post(f"/api/results/{name}/settings", data={"name": "x"}).status_code == 410
 
 
 def test_retention_change_moves_expiry_relative_to_creation(build_agent, web_client):

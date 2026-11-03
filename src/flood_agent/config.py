@@ -85,7 +85,7 @@ class Settings(BaseSettings):
         description="Hand-authored Semantic Layer (the generator also writes window_start/window_end into it)."
     )
     result_ttl_hours: float = Field(
-        gt=0, description="Result Tables are deleted this many hours after their Conversation's last activity."
+        gt=0, description="Result Tables are deleted this many hours after they are created."
     )
     query_timeout_s: float = Field(gt=0, description="A query running longer than this many seconds is aborted.")
     chart_row_cap: int = Field(ge=1, description="A chart over a Result Table with more rows than this shows only its first rows.")

@@ -32,6 +32,7 @@ from flood_agent.agent import (
 )
 from flood_agent.lookup_tables import InvalidLookupTable
 from flood_agent.queries import InvalidSort
+from flood_agent.store import TablesChoice
 from flood_agent.trace import split_system_prompt
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -126,11 +127,6 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
             {**sidebar(conversation_id), "items": history(conversation_id), "current_id": conversation_id},
         )
 
-    def table_choice(tables: str) -> str:
-        if tables not in ("keep", "delete_rt", "delete_all"):
-            raise HTTPException(422, "tables must be keep, delete_rt or delete_all")
-        return tables
-
     @app.get("/c/{conversation_id}/delete-preview")
     def delete_preview(conversation_id: str, turn_id: int | None = None):
         if not agent.store.exists(conversation_id):
@@ -141,19 +137,17 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
             raise HTTPException(404, "unknown turn")
 
     @app.post("/c/{conversation_id}/delete")
-    def delete_conversation(conversation_id: str, tables: str = Form("keep")):
-        choice = table_choice(tables)
+    def delete_conversation(conversation_id: str, tables: TablesChoice = Form("keep")):
         try:
-            agent.delete_conversation(conversation_id, choice)
+            agent.delete_conversation(conversation_id, tables)
         except KeyError:
             raise HTTPException(404, "unknown conversation")
         return RedirectResponse("/", status_code=303)
 
     @app.post("/c/{conversation_id}/turns/{turn_id}/delete")
-    def delete_turn(conversation_id: str, turn_id: int, tables: str = Form("keep")):
-        choice = table_choice(tables)
+    def delete_turn(conversation_id: str, turn_id: int, tables: TablesChoice = Form("keep")):
         try:
-            agent.delete_turn(conversation_id, turn_id, choice)
+            agent.delete_turn(conversation_id, turn_id, tables)
         except KeyError:
             raise HTTPException(404, "unknown turn")
         return RedirectResponse(f"/c/{conversation_id}", status_code=303)
@@ -255,14 +249,14 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
 
     @app.post("/api/results/{result_table}/settings")
     def result_table_settings(
-        result_table: str, title: str | None = Form(None), retention_days: str | None = Form(None)
+        result_table: str, name: str | None = Form(None), retention_days: str | None = Form(None)
     ):
-        """Rename a Result Table and/or set how long it is kept (days after the Conversation's last activity)."""
-        if title is not None:
-            title = title.strip()
+        """Rename a Result Table and/or set how long it is kept (days from its creation)."""
+        if name is not None:
+            name = name.strip()
         days = None if retention_days is None else _parse_retention_days(retention_days)
         try:
-            return agent.update_result_table(result_table, title, days)
+            return agent.update_result_table(result_table, name, days)
         except KeyError:
             raise HTTPException(404, "unknown result table")
         except ValueError as e:

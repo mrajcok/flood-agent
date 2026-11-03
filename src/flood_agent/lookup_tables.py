@@ -6,20 +6,23 @@ Created by the web app over plain HTTP, never by the LLM. Registration in the ap
 
 import csv
 import io
-import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from flood_agent import table_names
+
 PREFIX = "lookup_"
-MAX_IDENT = 60
 MAX_ROWS = 100_000
 FEW = 3  # how many offenders a message lists
-_IDENT_RE = re.compile(rf"^[A-Za-z][A-Za-z0-9_]{{0,{MAX_IDENT - 1}}}$")
 
 
 class InvalidLookupTable(ValueError):
     """The paste or name cannot make a Lookup Table; the message is for the user."""
+
+
+class TableExists(InvalidLookupTable):
+    """`write_table` found the name taken and was not asked to replace it."""
 
 
 @dataclass(frozen=True)
@@ -29,11 +32,8 @@ class ParsedRows:
 
 
 def _check_identifier(value: str, what: str) -> None:
-    if not _IDENT_RE.match(value):
-        raise InvalidLookupTable(
-            f'{what} "{value}" is not allowed: use letters, digits and underscores, '
-            f"starting with a letter, at most {MAX_IDENT} characters."
-        )
+    if not table_names.is_identifier(value):
+        raise InvalidLookupTable(f'{what} "{value}" is not allowed: {table_names.RULE}.')
 
 
 def table_name(suffix: str) -> str:
@@ -63,6 +63,8 @@ def parse_rows(text: str) -> ParsedRows:
         cells = [c.strip() for c in rec]
         if any(cells):
             records.append((reader.line_num, cells))
+    if not records:  # only separators
+        raise InvalidLookupTable("Paste the column names and at least one row.")
     columns, body = records[0][1], records[1:]
     if not all(columns):
         raise InvalidLookupTable("Every column needs a name in the first row.")
@@ -90,31 +92,28 @@ def parse_rows(text: str) -> ParsedRows:
     return ParsedRows(columns, [[c or None for c in rec] for _, rec in body])
 
 
-def _q(identifier: str) -> str:
-    return '"' + identifier.replace('"', '""') + '"'
-
-
-def create_table(results_db: Path, name: str, parsed: ParsedRows, overwrite: bool = False, is_lookup: bool = False
-) -> None:
+def write_table(results_db: Path, name: str, parsed: ParsedRows, replace: bool) -> None:
     """Create and fill `name` (already validated by `table_name`) with all-TEXT columns.
 
-    A name already used is refused, unless `overwrite` and the existing table `is_lookup` (registered),
-    in which case drop, create and fill happen in one transaction: a failure leaves the old table."""
+    A name already used raises `TableExists` unless `replace`, in which case the old table is dropped.
+    Everything happens in one explicit transaction (sqlite3's default handling would auto-commit the
+    DROP and CREATE), so a failure at any point leaves the old table and its rows as they were."""
     Path(results_db).parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(results_db)
+    con = sqlite3.connect(results_db, isolation_level=None)
     try:
-        with con:
+        con.execute("BEGIN IMMEDIATE")
+        try:
             if con.execute("SELECT 1 FROM sqlite_master WHERE name=? COLLATE NOCASE", (name,)).fetchone():
-                if not is_lookup:
-                    raise InvalidLookupTable(f"A table named {name} already exists and is not a Lookup Table.")
-                if not overwrite:
-                    raise InvalidLookupTable(
-                        f"A table named {name} already exists. Tick Overwrite existing table to replace it."
-                    )
-                con.execute(f"DROP TABLE {_q(name)}")
-            cols = ", ".join(f"{_q(c)} TEXT" for c in parsed.columns)
-            con.execute(f"CREATE TABLE {_q(name)} ({cols})")
+                if not replace:
+                    raise TableExists(f"A table named {name} already exists.")
+                con.execute(f"DROP TABLE {table_names.quote(name)}")
+            cols = ", ".join(f"{table_names.quote(c)} TEXT" for c in parsed.columns)
+            con.execute(f"CREATE TABLE {table_names.quote(name)} ({cols})")
             marks = ", ".join("?" * len(parsed.columns))
-            con.executemany(f"INSERT INTO {_q(name)} VALUES ({marks})", parsed.rows)
+            con.executemany(f"INSERT INTO {table_names.quote(name)} VALUES ({marks})", parsed.rows)
+            con.execute("COMMIT")
+        except BaseException:
+            con.execute("ROLLBACK")
+            raise
     finally:
         con.close()

@@ -129,9 +129,10 @@ def _readable_tables(app_db: Path | None) -> set[str]:
 
 def _table_kind(app_db: Path | None, name: str) -> str | None:
     """The kind of a readable table (`lookup` or `result`), or None if there is no such readable table."""
-    if name in _lookup_tables(app_db):
+    wanted = name.lower()  # SQL table names ignore case
+    if wanted in {t.lower() for t in _lookup_tables(app_db)}:
         return "lookup"
-    return "result" if name in _live_result_tables(app_db) else None
+    return "result" if wanted in {t.lower() for t in _live_result_tables(app_db)} else None
 
 
 CHART_GUIDANCE = (

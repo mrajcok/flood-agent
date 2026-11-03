@@ -25,7 +25,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from flood_agent import queries
+from flood_agent import queries, table_names
 from flood_agent.agent import Agent, Conversation, TraceEntry, TurnError
 from flood_agent.config import Settings
 from flood_agent.evalset.client import UsageMeter
@@ -69,7 +69,7 @@ def _result_tables(results_db: Path) -> list[str]:
         names = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY rowid")]
     finally:
         con.close()
-    return [n for n in names if queries.RESULT_TABLE_RE.match(n)]
+    return [n for n in names if table_names.GENERATED_RE.fullmatch(n)]
 
 
 def _judge(q: Question, ref, results_db: Path) -> tuple[bool, str, int, str | None, int]:

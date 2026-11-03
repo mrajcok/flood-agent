@@ -40,7 +40,7 @@
         <button type="button" class="dots" aria-label="Conversation options" aria-haspopup="menu" :aria-expanded="open" @click="open = !open">&hellip;</button>
         <div class="popup" role="menu" x-show="open" x-cloak>
           <button type="button" role="menuitem" @click="open = false; editing = true; $nextTick(() => { $refs.title.focus(); $refs.title.select(); })">Rename</button>
-          <form method="post" action="/c/{{ c.id }}/delete" @submit="if (!confirm('Delete this conversation and its results?')) $event.preventDefault()">
+          <form method="post" action="/c/{{ c.id }}/delete" class="delete-form" data-preview-url="/c/{{ c.id }}/delete-preview" data-confirm="Delete this conversation and its results?">
             <button type="submit" role="menuitem">Delete</button>
           </form>
         </div>

@@ -12,7 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 PREFIX = "lookup_"
-_SUFFIX_RE = re.compile(r"^[A-Za-z0-9_]{1,60}$")
+MAX_IDENT = 60
+MAX_ROWS = 100_000
+FEW = 3  # how many offenders a message lists
+_IDENT_RE = re.compile(rf"^[A-Za-z][A-Za-z0-9_]{{0,{MAX_IDENT - 1}}}$")
 
 
 class InvalidLookupTable(ValueError):
@@ -25,51 +28,90 @@ class ParsedRows:
     rows: list[list[str | None]]
 
 
+def _check_identifier(value: str, what: str) -> None:
+    if not _IDENT_RE.match(value):
+        raise InvalidLookupTable(
+            f'{what} "{value}" is not allowed: use letters, digits and underscores, '
+            f"starting with a letter, at most {MAX_IDENT} characters."
+        )
+
+
 def table_name(suffix: str) -> str:
     """`lookup_<suffix>`, lower-cased. The name goes into SQL, so only [A-Za-z0-9_] is allowed."""
     suffix = suffix.strip()
-    if not _SUFFIX_RE.match(suffix):
-        raise InvalidLookupTable("A name must be 1 to 60 letters, digits or underscores.")
+    _check_identifier(suffix, "The table name")
     return PREFIX + suffix.lower()
+
+
+def _few(items: list[str]) -> str:
+    more = f" and {len(items) - FEW} more" if len(items) > FEW else ""
+    return ", ".join(items[:FEW]) + more
 
 
 def parse_rows(text: str) -> ParsedRows:
     """Header line first. Separator: tab if the header line has one, else `|`, else comma;
-    CSV-style quoting. Cells are trimmed, blank lines skipped, empty cells NULL."""
+    CSV-style quoting. Cells are trimmed, blank lines skipped, empty cells NULL.
+    Line numbers in messages count from 1 at the first line of the paste."""
     lines = [line for line in text.splitlines() if line.strip()]
     if not lines:
         raise InvalidLookupTable("Paste the column names and at least one row.")
     header = lines[0]
     sep = "\t" if "\t" in header else "|" if "|" in header else ","
-    records = [[c.strip() for c in rec] for rec in csv.reader(io.StringIO(text.lstrip("\r\n")), delimiter=sep)]
-    records = [rec for rec in records if any(rec)]
-    columns, body = records[0], records[1:]
-    if not body:
-        raise InvalidLookupTable("Paste at least one row after the column names.")
+    reader = csv.reader(io.StringIO(text), delimiter=sep)
+    records: list[tuple[int, list[str]]] = []
+    for rec in reader:
+        cells = [c.strip() for c in rec]
+        if any(cells):
+            records.append((reader.line_num, cells))
+    columns, body = records[0][1], records[1:]
     if not all(columns):
         raise InvalidLookupTable("Every column needs a name in the first row.")
+    for c in columns:
+        _check_identifier(c, "The column name")
     if len({c.lower() for c in columns}) != len(columns):
-        raise InvalidLookupTable("Column names must be different from each other.")
-    rows: list[list[str | None]] = []
-    for rec in body:
-        if len(rec) > len(columns):
-            raise InvalidLookupTable("A row has more cells than there are columns.")
-        rows.append([c or None for c in rec] + [None] * (len(columns) - len(rec)))
-    return ParsedRows(columns, rows)
+        repeated = sorted({c for c in columns if [x.lower() for x in columns].count(c.lower()) > 1})
+        raise InvalidLookupTable(f"Column names must be different from each other, ignoring case: {_few(repeated)}.")
+    if not body:
+        raise InvalidLookupTable("Paste at least one row after the column names.")
+    if len(body) > MAX_ROWS:
+        raise InvalidLookupTable(f"At most {MAX_ROWS:,} rows are allowed; the paste has {len(body):,}.")
+    bad = [str(n) for n, rec in body if len(rec) != len(columns)]
+    if bad:
+        raise InvalidLookupTable(
+            f"Every row needs {len(columns)} cells, like the column names. Check line {_few(bad)}."
+        )
+    seen: dict[str, list[str]] = {}
+    for n, rec in body:
+        if rec[0]:
+            seen.setdefault(rec[0], []).append(str(n))
+    dupes = [f"{v} (lines {', '.join(ns)})" for v, ns in seen.items() if len(ns) > 1]
+    if dupes:
+        raise InvalidLookupTable(f"Values in the first column must be different. Repeated: {_few(dupes)}.")
+    return ParsedRows(columns, [[c or None for c in rec] for _, rec in body])
 
 
 def _q(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
 
 
-def create_table(results_db: Path, name: str, parsed: ParsedRows) -> None:
-    """Create and fill `name` (already validated by `table_name`) with all-TEXT columns."""
+def create_table(results_db: Path, name: str, parsed: ParsedRows, overwrite: bool = False, is_lookup: bool = False
+) -> None:
+    """Create and fill `name` (already validated by `table_name`) with all-TEXT columns.
+
+    A name already used is refused, unless `overwrite` and the existing table `is_lookup` (registered),
+    in which case drop, create and fill happen in one transaction: a failure leaves the old table."""
     Path(results_db).parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(results_db)
     try:
         with con:
             if con.execute("SELECT 1 FROM sqlite_master WHERE name=? COLLATE NOCASE", (name,)).fetchone():
-                raise InvalidLookupTable("A table with that name already exists.")
+                if not is_lookup:
+                    raise InvalidLookupTable(f"A table named {name} already exists and is not a Lookup Table.")
+                if not overwrite:
+                    raise InvalidLookupTable(
+                        f"A table named {name} already exists. Tick Overwrite existing table to replace it."
+                    )
+                con.execute(f"DROP TABLE {_q(name)}")
             cols = ", ".join(f"{_q(c)} TEXT" for c in parsed.columns)
             con.execute(f"CREATE TABLE {_q(name)} ({cols})")
             marks = ", ".join("?" * len(parsed.columns))

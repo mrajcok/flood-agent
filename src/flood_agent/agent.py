@@ -308,12 +308,13 @@ class Agent:
         if self.is_expired(result_table):
             raise ResultTableExpired(f"Result Table {result_table} has expired.")
 
-    def add_lookup_table(self, suffix: str, text: str) -> dict:
+    def add_lookup_table(self, suffix: str, text: str, overwrite: bool = False) -> dict:
         """Create `lookup_<suffix>` from pasted rows and register it. Touches no Conversation, message
         or Trace, and the LLM is told nothing. Raises `InvalidLookupTable` for a bad name or paste."""
         name = lookup_tables.table_name(suffix)
         parsed = lookup_tables.parse_rows(text)
-        lookup_tables.create_table(self.config.results_db, name, parsed)
+        is_lookup = name in self.store.lookup_table_names()
+        lookup_tables.create_table(self.config.results_db, name, parsed, overwrite=overwrite, is_lookup=is_lookup)
         self.store.register_lookup_table(name, parsed.columns)
         return {"name": name, "row_count": len(parsed.rows), "columns": parsed.columns}
 

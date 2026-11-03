@@ -43,6 +43,14 @@
     aside a.new:hover { background: #3b5cb8; }
     aside .lookup { margin: .5rem 0; }
     aside .add-lookup { width: 100%; padding: .4rem .75rem; border-radius: .6rem; border: 1px solid #4a6fd3; background: transparent; color: inherit; cursor: pointer; }
+    dialog { border: 1px solid #ccc; border-radius: .75rem; box-shadow: 0 8px 24px rgba(0,0,0,.2); padding: 1.25rem 1.5rem; }
+    dialog::backdrop { background: rgba(0,0,0,.35); }
+    dialog form { flex-direction: column; align-items: stretch; gap: .75rem; margin: 0; }
+    dialog h3, dialog p { margin: 0; }
+    dialog label:has(input[type=radio]), dialog label:has(input[type=checkbox]) { display: flex; align-items: baseline; gap: .5rem; }
+    dialog [hidden] { display: none !important; }
+    dialog .actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .25rem; }
+    #delete-dialog { width: min(30rem, 90vw); }
     .lookup dialog { width: min(36rem, 90vw); }
     .lookup dialog textarea { width: 100%; box-sizing: border-box; font-family: monospace; }
     .lookup dialog .prefix { font-family: monospace; }
@@ -171,10 +179,10 @@
   <dialog id="delete-dialog" aria-labelledby="delete-title">
     <form method="dialog">
       <h3 id="delete-title">What should happen to its Result Tables?</h3>
-      <label><input type="radio" name="choice" value="keep" checked> Keep all tables; they age off per their retention</label><br>
-      <label id="delete-rt-option"><input type="radio" name="choice" value="delete_rt"> Delete only tables still named <code>rt_*</code> (<span id="delete-rt-count"></span>)</label><br>
-      <label><input type="radio" name="choice" value="delete_all"> Delete all its Result Tables (<span id="delete-all-count"></span>)</label>
-      <p><button value="ok">Delete</button> <button value="cancel" formnovalidate>Cancel</button></p>
+      <label><input type="radio" name="choice" value="keep" checked> <span>Keep all tables; they age off per their retention</span></label>
+      <label id="delete-rt-option"><input type="radio" name="choice" value="delete_rt"> <span>Delete only tables still named <code>rt_*</code> (<span id="delete-rt-count"></span>)</span></label>
+      <label><input type="radio" name="choice" value="delete_all"> <span>Delete all its Result Tables (<span id="delete-all-count"></span>)</span></label>
+      <div class="actions"><button value="ok">Delete</button> <button value="cancel" formnovalidate>Cancel</button></div>
     </form>
   </dialog>
   <script>

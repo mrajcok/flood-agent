@@ -125,18 +125,34 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
             {**sidebar(conversation_id), "items": history(conversation_id), "current_id": conversation_id},
         )
 
-    @app.post("/c/{conversation_id}/delete")
-    def delete_conversation(conversation_id: str):
+    def table_choice(tables: str) -> str:
+        if tables not in ("keep", "delete_rt", "delete_all"):
+            raise HTTPException(422, "tables must be keep, delete_rt or delete_all")
+        return tables
+
+    @app.get("/c/{conversation_id}/delete-preview")
+    def delete_preview(conversation_id: str, turn_id: int | None = None):
+        if not agent.store.exists(conversation_id):
+            raise HTTPException(404, "unknown conversation")
         try:
-            agent.delete_conversation(conversation_id)
+            return agent.store.delete_preview(conversation_id, turn_id)
+        except KeyError:
+            raise HTTPException(404, "unknown turn")
+
+    @app.post("/c/{conversation_id}/delete")
+    def delete_conversation(conversation_id: str, tables: str = Form("keep")):
+        choice = table_choice(tables)
+        try:
+            agent.delete_conversation(conversation_id, choice)
         except KeyError:
             raise HTTPException(404, "unknown conversation")
         return RedirectResponse("/", status_code=303)
 
     @app.post("/c/{conversation_id}/turns/{turn_id}/delete")
-    def delete_turn(conversation_id: str, turn_id: int):
+    def delete_turn(conversation_id: str, turn_id: int, tables: str = Form("keep")):
+        choice = table_choice(tables)
         try:
-            agent.delete_turn(conversation_id, turn_id)
+            agent.delete_turn(conversation_id, turn_id, choice)
         except KeyError:
             raise HTTPException(404, "unknown turn")
         return RedirectResponse(f"/c/{conversation_id}", status_code=303)

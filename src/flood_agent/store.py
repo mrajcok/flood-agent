@@ -139,36 +139,69 @@ class ConversationStore:
             )
             return [dict(r) for r in rows]
 
-    def delete_conversation(self, conversation_id: str) -> list[str]:
-        """Remove a Conversation and everything it owns; returns the names of its Result Tables."""
+    def _live_tables(self, con, conversation_id: str) -> list[sqlite3.Row]:
+        return con.execute(
+            "SELECT name, COALESCE(display_name, name) AS shown FROM result_tables "
+            "WHERE conversation_id=? AND expired=0", (conversation_id,)).fetchall()
+
+    def _turn_owned(self, con, conversation_id: str, turn_id: int) -> list[sqlite3.Row]:
+        """Live Result Tables a turn owns: a table belongs to the earliest turn whose messages
+        mention its whole name (`rt_X` is not a mention of `rt_X_2`)."""
+        bodies = con.execute(
+            "SELECT turn_id, body FROM messages WHERE conversation_id=? ORDER BY id", (conversation_id,)).fetchall()
+
+        def first_mention(name: str):
+            mention = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])")
+            return next((b["turn_id"] for b in bodies if mention.search(b["body"])), None)
+
+        return [t for t in self._live_tables(con, conversation_id) if first_mention(t["name"]) == turn_id]
+
+    @staticmethod
+    def _choose(tables: list[sqlite3.Row], choice: str) -> list[str]:
+        """The names to delete under `choice`: keep, delete_rt (still named rt_*) or delete_all."""
+        if choice == "delete_all":
+            return [t["name"] for t in tables]
+        if choice == "delete_rt":
+            return [t["name"] for t in tables if t["shown"].startswith("rt_")]
+        return []
+
+    def delete_preview(self, conversation_id: str, turn_id: int | None = None) -> dict:
+        """Counts for the delete dialog: live Result Tables that would go under delete_all (`total`)
+        and under delete_rt (`rt`). KeyError if the turn is not in the Conversation."""
+        with closing(self._connect()) as con:
+            if turn_id is None:
+                tables = self._live_tables(con, conversation_id)
+            else:
+                if con.execute("SELECT 1 FROM turns WHERE id=? AND conversation_id=?",
+                               (turn_id, conversation_id)).fetchone() is None:
+                    raise KeyError(turn_id)
+                tables = self._turn_owned(con, conversation_id, turn_id)
+        return {"total": len(tables), "rt": len(self._choose(tables, "delete_rt"))}
+
+    def delete_conversation(self, conversation_id: str, tables: str = "keep") -> list[str]:
+        """Remove a Conversation and everything it owns except the Result Tables the user keeps
+        (they outlive it until they expire); returns the names of the tables to drop."""
         with closing(self._connect()) as con, con:
-            names = [r[0] for r in con.execute(
-                "SELECT name FROM result_tables WHERE conversation_id=?", (conversation_id,))]
-            for table in ("displays", "messages", "turns", "result_tables"):
+            dropped = self._choose(self._live_tables(con, conversation_id), tables)
+            con.execute("DELETE FROM result_tables WHERE conversation_id=? AND (expired=1 OR name IN (%s))"
+                        % ",".join("?" * len(dropped)), (conversation_id, *dropped))
+            for table in ("displays", "messages", "turns"):
                 con.execute(f"DELETE FROM {table} WHERE conversation_id=?", (conversation_id,))
             con.execute("DELETE FROM conversations WHERE id=?", (conversation_id,))
-        return names
+        return dropped
 
-    def delete_turn(self, conversation_id: str, turn_id: int) -> list[str]:
-        """Remove one prompt/answer exchange; returns the Result Tables it created (now expired).
-
-        A Result Table belongs to the earliest turn whose messages mention it, so a later turn
-        that merely queried it does not own it. Displays elsewhere that show a deleted table
-        render as expired."""
+    def delete_turn(self, conversation_id: str, turn_id: int, tables: str = "keep") -> list[str]:
+        """Remove one prompt/answer exchange; returns the Result Tables it created that are to be
+        dropped (now expired). Displays elsewhere that show a dropped table render as expired."""
         with closing(self._connect()) as con, con:
             if con.execute("SELECT 1 FROM turns WHERE id=? AND conversation_id=?", (turn_id, conversation_id)).fetchone() is None:
                 raise KeyError(turn_id)
-            bodies = con.execute(
-                "SELECT turn_id, body FROM messages WHERE conversation_id=? ORDER BY id", (conversation_id,)
-            ).fetchall()
-            tables = [r[0] for r in con.execute(
-                "SELECT name FROM result_tables WHERE conversation_id=? AND expired=0", (conversation_id,))]
-            owned = [n for n in tables if next((b["turn_id"] for b in bodies if n in b["body"]), None) == turn_id]
-            con.executemany("UPDATE result_tables SET expired=1 WHERE name=?", [(n,) for n in owned])
+            dropped = self._choose(self._turn_owned(con, conversation_id, turn_id), tables)
+            con.executemany("UPDATE result_tables SET expired=1 WHERE name=?", [(n,) for n in dropped])
             for table in ("displays", "messages"):
                 con.execute(f"DELETE FROM {table} WHERE turn_id=?", (turn_id,))
             con.execute("DELETE FROM turns WHERE id=?", (turn_id,))
-        return owned
+        return dropped
 
     def start_turn(self, conversation_id: str, user_message: str) -> int:
         return self._write(

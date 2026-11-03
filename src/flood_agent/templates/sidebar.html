@@ -1,18 +1,18 @@
 <aside id="sidebar" {% if oob %}hx-swap-oob="true"{% endif %}>
-  <a class="new" href="/">New conversation</a>
+  <a class="new" href="/">New chat</a>
   <ul>
     {% for c in conversations %}
     <li x-data="{ open: false, editing: false }"{% if c.id == current_id %} class="current"{% endif %}>
       <a href="/c/{{ c.id }}" x-show="!editing">{{ c.title }}</a>
       <form class="rename" method="post" action="/c/{{ c.id }}/rename" x-show="editing" x-cloak>
-        <input type="text" name="title" value="{{ c.title }}" maxlength="60" required x-ref="title" aria-label="Session name"
+        <input type="text" name="title" value="{{ c.title }}" maxlength="60" required x-ref="title" aria-label="Conversation name"
                @keydown.escape="editing = false" @blur="editing = false">
       </form>
       <div class="menu" x-show="!editing" @click.outside="open = false">
-        <button type="button" class="dots" aria-label="Session options" aria-haspopup="menu" :aria-expanded="open" @click="open = !open">&hellip;</button>
+        <button type="button" class="dots" aria-label="Conversation options" aria-haspopup="menu" :aria-expanded="open" @click="open = !open">&hellip;</button>
         <div class="popup" role="menu" x-show="open" x-cloak>
           <button type="button" role="menuitem" @click="open = false; editing = true; $nextTick(() => { $refs.title.focus(); $refs.title.select(); })">Rename</button>
-          <form method="post" action="/c/{{ c.id }}/delete" @submit="if (!confirm('Delete this session and its results?')) $event.preventDefault()">
+          <form method="post" action="/c/{{ c.id }}/delete" @submit="if (!confirm('Delete this conversation and its results?')) $event.preventDefault()">
             <button type="submit" role="menuitem">Delete</button>
           </form>
         </div>

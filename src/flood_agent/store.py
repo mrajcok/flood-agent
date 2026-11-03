@@ -109,7 +109,7 @@ class ConversationStore:
             return cur.lastrowid or 0
 
     def create_conversation(self, title: str | None = None) -> str:
-        """`title` defaults to "Session N", N being one more than the highest number in use."""
+        """`title` defaults to "Conversation N", N being one more than the highest number in use."""
         cid, now = uuid.uuid4().hex, self._now()
         title = title or self._next_session_title()
         self._write(
@@ -121,8 +121,8 @@ class ConversationStore:
     def _next_session_title(self) -> str:
         with closing(self._connect()) as con:
             used = [int(m[1]) for (t,) in con.execute("SELECT title FROM conversations")
-                    if (m := re.fullmatch(r"Session (\d+)", t))]
-        return f"Session {max(used, default=0) + 1}"
+                    if (m := re.fullmatch(r"Conversation (\d+)", t))]
+        return f"Conversation {max(used, default=0) + 1}"
 
     def rename_conversation(self, conversation_id: str, title: str) -> None:
         self._write("UPDATE conversations SET title=? WHERE id=?", (title, conversation_id))

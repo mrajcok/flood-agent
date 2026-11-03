@@ -118,7 +118,7 @@ class ConversationStore:
             return cur.lastrowid or 0
 
     def create_conversation(self, title: str | None = None) -> str:
-        """`title` defaults to "Session N", N being one more than the highest number in use."""
+        """`title` defaults to "Conversation N", N being one more than the highest number in use."""
         cid, now = uuid.uuid4().hex, self._now()
         title = title or self._next_session_title()
         self._write(
@@ -130,8 +130,8 @@ class ConversationStore:
     def _next_session_title(self) -> str:
         with closing(self._connect()) as con:
             used = [int(m[1]) for (t,) in con.execute("SELECT title FROM conversations")
-                    if (m := re.fullmatch(r"Session (\d+)", t))]
-        return f"Session {max(used, default=0) + 1}"
+                    if (m := re.fullmatch(r"Conversation (\d+)", t))]
+        return f"Conversation {max(used, default=0) + 1}"
 
     def rename_conversation(self, conversation_id: str, title: str) -> None:
         self._write("UPDATE conversations SET title=? WHERE id=?", (title, conversation_id))
@@ -255,13 +255,13 @@ class ConversationStore:
             return [{**dict(r), "columns": json.loads(r["columns"])} for r in rows]
 
     def due_for_expiry(self, ttl_ms: int) -> list[str]:
-        """Live Result Tables whose Conversation was last active longer ago than the table's
+        """Live Result Tables created longer ago than the table's
         retention (`ttl_ms` unless the user chose one)."""
         now = self._now()
         with closing(self._connect()) as con:
             return [r[0] for r in con.execute(
-                "SELECT r.name FROM result_tables r JOIN conversations c ON c.id=r.conversation_id "
-                "WHERE r.expired=0 AND c.last_activity_at <= ? - COALESCE(r.retention_ms, ?)", (now, ttl_ms))]
+                "SELECT name FROM result_tables "
+                "WHERE expired=0 AND created_at <= ? - COALESCE(retention_ms, ?)", (now, ttl_ms))]
 
     def result_table_settings(self, name: str, default_retention_ms: int) -> dict | None:
         """The user-visible name and retention in ms of a Result Table, or None if unknown.

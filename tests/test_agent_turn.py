@@ -56,7 +56,7 @@ async def test_result_table_lives_in_results_db_with_tool_chosen_name(make_agent
     )
     await collect(await make_agent(llm), "q")
     name = last_tool_result(llm.calls[1])["result_table"]
-    assert re.fullmatch(r"[a-z][a-z0-9_]*_\d{8}_\d{6}(_\d+)?", name) and ";" not in name
+    assert re.fullmatch(r"rt_\d{8}_\d{6}(_\d+)?", name) and ";" not in name
 
     results = sqlite3.connect(tmp_path / "results.db")
     assert results.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0] == 2
@@ -97,7 +97,7 @@ async def test_failed_query_error_is_returned_without_data(make_agent):
 async def test_only_run_query_show_table_and_show_chart_are_llm_tools(make_agent):
     llm = ScriptedLLM([TextChunk("hi")])
     await collect(await make_agent(llm), "hello")
-    assert sorted(llm.tools_seen_names) == ["run_count_query", "run_query", "show_chart", "show_table"]
+    assert sorted(llm.tools_seen_names) == ["describe_table", "run_count_query", "run_query", "show_chart", "show_table"]
 
 
 async def test_system_prompt_contains_semantic_layer_and_now(make_agent):

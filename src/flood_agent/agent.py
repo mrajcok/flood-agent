@@ -283,7 +283,7 @@ class Agent:
             con.close()
 
     def sweep_expired(self) -> None:
-        """Delete Result Tables whose Conversation has been idle past the TTL.
+        """Delete Result Tables whose Retention has passed since their creation.
 
         Runs on app start, before each turn, and before any row read.
         """

@@ -12,8 +12,8 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-# <title slug>_<YYYYMMDD>_<HHMMSS>[_<n>]: lower-case letters, digits and underscores only, starting
-# with a letter, so the name is a valid unquoted identifier in SQLite and Ocient.
+# Default Result Table names are rt_<YYYYMMDD>_<HHMMSS>[_<n>]; users may rename them (lower-case
+# letters, digits and underscores, starting with a letter: a valid unquoted identifier in SQLite and Ocient).
 RESULT_TABLE_RE = re.compile(r"^[a-z][a-z0-9_]{0,79}_\d{8}_\d{6}(?:_\d+)?$")
 # Any name a Result Table can carry after a user rename; callers also check it is registered.
 TABLE_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,79}$")
@@ -42,21 +42,15 @@ def rename_table(results_db: Path, old: str, new: str) -> None:
         con.commit()
     finally:
         con.close()
-_SLUG_MAX = 40
 
 
 def _timestamp() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
-def _slug(title: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")[:_SLUG_MAX].strip("_") or "result"
-    return f"t_{slug}" if slug[0].isdigit() else slug
-
-
-def _free_name(con: sqlite3.Connection, title: str) -> str:
-    """`<slug>_<date>_<time>`, with `_2`, `_3`... when that name is already taken."""
-    base = f"{_slug(title)}_{_timestamp()}"
+def _free_name(con: sqlite3.Connection) -> str:
+    """`rt_<date>_<time>`, with `_2`, `_3`... when that name is already taken."""
+    base = f"rt_{_timestamp()}"
     taken = {r[0] for r in con.execute("SELECT name FROM results.sqlite_master WHERE name LIKE ? ESCAPE '\\'",
                                        (base.replace("_", "\\_") + "%",))}
     name, n = base, 1
@@ -64,6 +58,7 @@ def _free_name(con: sqlite3.Connection, title: str) -> str:
         n += 1
         name = f"{base}_{n}"
     return name
+
 
 _FORBIDDEN_WORDS = {
     "insert", "update", "delete", "drop", "create", "alter", "attach", "detach",
@@ -180,8 +175,7 @@ def _authorizer(allowed_tables: set[str] | None = None):
     """Single authorizer enforcing both policies (SQLite allows only one per connection):
     1. action allow-list: SELECT/READ/FUNCTION/RECURSIVE, plus create/insert/update on the
        results database for the CTAS. No ATTACH, PRAGMA, DDL/DML elsewhere.
-    2. reads in the results database are limited to `allowed_tables` (the calling
-       Conversation's live Result Tables)."""
+    2. reads in the results database are limited to `allowed_tables` (the live tables)."""
     allowed = {t.lower() for t in allowed_tables or ()}
 
     def authorizer(action, arg1, arg2, dbname, source):
@@ -272,7 +266,7 @@ def run_query(
     con = open_connection(telemetry_db, results_db, allowed_tables)
     executed = ""
     try:
-        name = _free_name(con, title)
+        name = _free_name(con)
         with _deadline(con, timeout_s) as timed_out:
             for attempt in range(5):  # a concurrent query may take the name between check and create
                 executed = f"CREATE TABLE results.{name} AS SELECT * FROM (\n{select}\n) LIMIT {int(max_rows)}"
@@ -281,7 +275,7 @@ def run_query(
                     break
                 except sqlite3.Error as e:
                     if attempt < 4 and f"table {name} already exists" in str(e):
-                        name = _free_name(con, title)
+                        name = _free_name(con)
                         continue
                     return _failure(e, timed_out(), timeout_s, executed_sql=executed)
         try:
@@ -354,6 +348,22 @@ def result_table_columns(results_db: Path, name: str) -> list[str] | None:
     finally:
         con.close()
     return cols or None
+
+
+def describe_results_table(results_db: Path, name: str) -> dict | None:
+    """Column names and types plus row count of a table in the results database, never rows.
+    The caller has already checked that `name` is a registered, live table."""
+    if not Path(results_db).exists():
+        return None
+    con = sqlite3.connect(f"file:{results_db}?mode=ro", uri=True)
+    try:
+        info = con.execute("SELECT name, type FROM pragma_table_info(?)", (name,)).fetchall()
+        if not info:
+            return None
+        count = con.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0]
+    finally:
+        con.close()
+    return {"columns": [{"name": n, "type": t or "ANY"} for n, t in info], "row_count": count}
 
 
 class InvalidSort(ValueError):

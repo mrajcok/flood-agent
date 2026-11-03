@@ -147,7 +147,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
             raise HTTPException(404, "unknown conversation")
         title = title.strip()[:60]
         if not title:
-            raise HTTPException(422, "a session name cannot be blank")
+            raise HTTPException(422, "a conversation name cannot be blank")
         agent.store.rename_conversation(conversation_id, title)
         return RedirectResponse(f"/c/{conversation_id}", status_code=303)
 

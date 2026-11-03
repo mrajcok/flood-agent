@@ -5,7 +5,7 @@ import sqlite3
 
 from conftest import ScriptedLLM, collect, query_limits, tool_call
 
-from flood_agent import queries
+from flood_agent import queries, table_names
 from flood_agent.agent import Conversation
 from flood_agent.llm import TextChunk
 
@@ -21,7 +21,7 @@ def test_name_ignores_the_title(telemetry_db, tmp_path):
     for title in ["Top 10 dest IPs", "évil_name; DROP TABLE flows", ""]:
         meta = run(telemetry_db, tmp_path, title)
         name = meta["result_table"]
-        assert NAME.fullmatch(name) and queries.RESULT_TABLE_RE.match(name), name
+        assert NAME.fullmatch(name) and table_names.GENERATED_RE.fullmatch(name), name
         assert f"results.{name} AS" in meta["executed_sql"]
 
 

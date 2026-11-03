@@ -32,7 +32,7 @@ def two_tables(build_agent, web_client, *extra):
     clock.ms += 2000  # distinct creation times
     ask(client, "second", cid)
     first, second = tables_in(client, cid)[:2]
-    client.post(f"/api/results/{second}/settings", data={"title": "keeper"})
+    client.post(f"/api/results/{second}/settings", data={"name": "keeper"})
     second = "keeper"
     return client, clock, cid, first, second
 

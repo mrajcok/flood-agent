@@ -167,7 +167,7 @@ def test_a_lookup_table_never_expires(build_agent, web_client):
 def test_sidebar_has_the_add_lookup_table_dialog(build_agent, web_client):
     html = web_client(build_agent(ScriptedLLM())).get("/").text
     assert "Add lookup table" in html
-    assert "First row must be the column names. Separate columns with tab, comma or `|`." in html
+    assert "First row must be the column names. Separate columns with tab, comma or <code>|</code>." in html
     assert "Overwrite existing table" in html
     assert "/api/lookup-tables" in html
 
@@ -185,7 +185,7 @@ def rejected(client, agent, name, paste, message, table="lookup_t", **kw):
     finally:
         con.close()
     assert found is None
-    assert table not in agent.store.lookup_table_names()
+    assert not agent.store.is_lookup_table(table)
 
 
 def test_bad_table_name_is_named_in_the_message(build_agent, web_client):
@@ -266,7 +266,7 @@ def test_overwrite_replaces_rows_and_columns(build_agent, web_client):
     assert r.status_code == 200
     assert r.json() == {"name": "lookup_hosts", "row_count": 2, "columns": ["name", "site"]}
     assert stored(agent, "lookup_hosts") == [["x", "y"], ["z", "w"]]
-    assert agent.store.lookup_table_names() == {"lookup_hosts"}
+    assert agent.store.is_lookup_table("lookup_hosts")
 
 
 def test_failed_overwrite_leaves_the_old_table_queryable(build_agent, web_client):
@@ -298,9 +298,97 @@ def test_overwrite_cannot_replace_a_result_table_or_other_table(build_agent, web
     r = add(client, "other", "x\n1", overwrite=True)
     assert r.status_code == 422
     assert stored(agent, "lookup_other") == [["keep"]]
-    assert "lookup_other" not in agent.store.lookup_table_names()
+    assert not agent.store.is_lookup_table("lookup_other")
 
 
 def test_dialog_shows_the_error_above_the_pasted_text_and_keeps_it(build_agent, web_client):
     html = web_client(build_agent(ScriptedLLM())).get("/").text
     assert html.index('class="error"') < html.index('aria-label="Rows"')
+
+
+def test_a_paste_of_only_separators_is_refused_like_an_empty_paste(build_agent, web_client):
+    agent = build_agent(ScriptedLLM())
+    client = web_client(agent)
+    for paste in [",,,", "|||\n|||", "\t\t", " , , \n,,"]:
+        r = add(client, "t", paste)
+        assert r.status_code == 422 and "column names" in r.json()["detail"]
+    assert not agent.store.is_lookup_table("lookup_t")
+
+
+def test_the_registry_records_name_columns_created_time_and_row_count(build_agent, web_client):
+    clock = Clock()
+    agent = build_agent(ScriptedLLM(), clock=clock)
+    client = web_client(agent)
+    add(client, "hosts", "ip,d\n1.1.1.1,a\n2.2.2.2,b")
+    assert agent.store.lookup_tables() == [
+        {"name": "lookup_hosts", "created_at": clock.ms, "columns": ["ip", "d"], "row_count": 2}]
+    add(client, "hosts", "name\nx\ny\nz", overwrite=True)
+    assert [(t["columns"], t["row_count"]) for t in agent.store.lookup_tables()] == [(["name"], 3)]
+
+
+def test_a_failure_while_writing_an_overwrite_keeps_the_old_table(build_agent, web_client, monkeypatch):
+    from flood_agent import lookup_tables
+
+    agent = build_agent(ScriptedLLM())
+    client = web_client(agent)
+    add(client, "hosts", "ip,d\n1.1.1.1,a\n2.2.2.2,b")
+    monkeypatch.setattr(lookup_tables, "parse_rows",
+                        lambda text: lookup_tables.ParsedRows(["x"], [["ok"], [object()]]))  # fails mid-insert
+    with pytest.raises(sqlite3.Error):
+        add(client, "hosts", "ignored", overwrite=True)
+    assert stored(agent, "lookup_hosts") == [["1.1.1.1", "a"], ["2.2.2.2", "b"]]
+    assert agent.store.lookup_tables()[0]["row_count"] == 2
+
+
+def test_a_failure_while_creating_leaves_no_half_made_table(build_agent, web_client, monkeypatch):
+    from flood_agent import lookup_tables
+
+    agent = build_agent(ScriptedLLM())
+    client = web_client(agent)
+    monkeypatch.setattr(lookup_tables, "parse_rows",
+                        lambda text: lookup_tables.ParsedRows(["x"], [["ok"], [object()]]))
+    with pytest.raises(sqlite3.Error):
+        add(client, "fresh", "ignored")
+    assert not agent.config.results_db.exists() or not stored_tables(agent)
+
+
+def stored_tables(agent):
+    con = sqlite3.connect(agent.config.results_db)
+    try:
+        return [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE name LIKE 'lookup_%'")]
+    finally:
+        con.close()
+
+
+def test_describe_table_ignores_the_case_of_the_name(build_agent, web_client):
+    llm = ScriptedLLM([describe("LOOKUP_Hosts")], [TextChunk("ok")])
+    agent = build_agent(llm)
+    client = web_client(agent)
+    add(client, "Hosts", "ip\n1.1.1.1")  # the name is stored lower-cased
+    run_turn(client)
+    described = last_tool_result(llm.calls[1])
+    assert described["success"] is True and described["kind"] == "lookup" and described["row_count"] == 1
+
+
+def test_overwrite_finds_the_existing_table_whatever_the_case_of_the_name(build_agent, web_client):
+    agent = build_agent(ScriptedLLM())
+    client = web_client(agent)
+    add(client, "hosts", "ip\n1.1.1.1")
+    assert add(client, "HOSTS", "ip\n2.2.2.2").status_code == 422
+    assert add(client, "HOSTS", "ip\n2.2.2.2", overwrite=True).status_code == 200
+    assert stored(agent, "lookup_hosts") == [["2.2.2.2"]]
+
+
+def test_a_lookup_table_is_not_served_by_the_result_table_endpoints(build_agent, web_client):
+    agent = build_agent(ScriptedLLM())
+    client = web_client(agent)
+    add(client, "hosts", "ip\n1.1.1.1")
+    # A name that merely looks like a generated one, and is not registered, is not served either.
+    con = sqlite3.connect(agent.config.results_db)
+    con.execute("CREATE TABLE lookup_x_20250101_120000 (a TEXT)")
+    con.execute("CREATE TABLE rt_20250101_120000 (a TEXT)")
+    con.commit()
+    con.close()
+    for name in ["lookup_hosts", "lookup_x_20250101_120000", "rt_20250101_120000"]:
+        for tail in ["rows", "psv", "chart-rows"]:
+            assert client.get(f"/api/results/{name}/{tail}").status_code == 404, (name, tail)

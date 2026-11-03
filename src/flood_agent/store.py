@@ -17,6 +17,7 @@ import time
 import uuid
 from contextlib import closing
 from pathlib import Path
+from typing import Literal
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversations (
@@ -58,13 +59,13 @@ CREATE TABLE IF NOT EXISTS result_tables (
   request TEXT NOT NULL DEFAULT '',
   expired INTEGER NOT NULL DEFAULT 0,
   truncated_to INTEGER,
-  retention_ms INTEGER,
-  display_name TEXT
+  retention_ms INTEGER
 );
 CREATE TABLE IF NOT EXISTS lookup_tables (
   name TEXT PRIMARY KEY,
   created_at INTEGER NOT NULL,
-  columns TEXT NOT NULL DEFAULT '[]'
+  columns TEXT NOT NULL DEFAULT '[]',
+  row_count INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -76,8 +77,11 @@ _RESULT_TABLE_MIGRATIONS = {
     "expired": "INTEGER NOT NULL DEFAULT 0",
     "truncated_to": "INTEGER",
     "retention_ms": "INTEGER",
-    "display_name": "TEXT",
 }
+_LOOKUP_TABLE_MIGRATIONS = {"row_count": "INTEGER NOT NULL DEFAULT 0"}
+
+# Which of a Conversation's live Result Tables a delete also drops: none, those still named rt_*, or all.
+TablesChoice = Literal["keep", "delete_rt", "delete_all"]
 
 
 def _follow_rename(node, old: str, new: str):
@@ -103,10 +107,12 @@ class ConversationStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as con:
             con.executescript(SCHEMA)
-            have = {r[1] for r in con.execute("PRAGMA table_info(result_tables)")}
-            for col, decl in _RESULT_TABLE_MIGRATIONS.items():
-                if col not in have:
-                    con.execute(f"ALTER TABLE result_tables ADD COLUMN {col} {decl}")
+            for table, migrations in (("result_tables", _RESULT_TABLE_MIGRATIONS),
+                                      ("lookup_tables", _LOOKUP_TABLE_MIGRATIONS)):
+                have = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
+                for col, decl in migrations.items():
+                    if col not in have:
+                        con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
 
     def _connect(self) -> sqlite3.Connection:
         con = sqlite3.connect(self.path)
@@ -125,14 +131,14 @@ class ConversationStore:
     def create_conversation(self, title: str | None = None) -> str:
         """`title` defaults to "Conversation N", N being one more than the highest number in use."""
         cid, now = uuid.uuid4().hex, self._now()
-        title = title or self._next_session_title()
+        title = title or self._next_conversation_title()
         self._write(
             "INSERT INTO conversations(id, title, created_at, last_activity_at) VALUES (?,?,?,?)",
             (cid, title, now, now),
         )
         return cid
 
-    def _next_session_title(self) -> str:
+    def _next_conversation_title(self) -> str:
         with closing(self._connect()) as con:
             used = [int(m[1]) for (t,) in con.execute("SELECT title FROM conversations")
                     if (m := re.fullmatch(r"Conversation (\d+)", t))]
@@ -177,7 +183,7 @@ class ConversationStore:
         return [t for t in self._live_tables(con, conversation_id) if first_mention(t["name"]) == turn_id]
 
     @staticmethod
-    def _choose(tables: list[sqlite3.Row], choice: str) -> list[str]:
+    def _choose(tables: list[sqlite3.Row], choice: TablesChoice) -> list[str]:
         """The names to delete under `choice`: keep, delete_rt (still named rt_*) or delete_all."""
         if choice == "delete_all":
             return [t["name"] for t in tables]
@@ -198,7 +204,7 @@ class ConversationStore:
                 tables = self._turn_owned(con, conversation_id, turn_id)
         return {"total": len(tables), "rt": len(self._choose(tables, "delete_rt"))}
 
-    def delete_conversation(self, conversation_id: str, tables: str = "keep") -> list[str]:
+    def delete_conversation(self, conversation_id: str, tables: TablesChoice = "keep") -> list[str]:
         """Remove a Conversation and everything it owns except the Result Tables the user keeps
         (they outlive it until they expire); returns the names of the tables to drop."""
         with closing(self._connect()) as con, con:
@@ -210,7 +216,7 @@ class ConversationStore:
             con.execute("DELETE FROM conversations WHERE id=?", (conversation_id,))
         return dropped
 
-    def delete_turn(self, conversation_id: str, turn_id: int, tables: str = "keep") -> list[str]:
+    def delete_turn(self, conversation_id: str, turn_id: int, tables: TablesChoice = "keep") -> list[str]:
         """Remove one prompt/answer exchange; returns the Result Tables it created that are to be
         dropped (now expired). Displays elsewhere that show a dropped table render as expired."""
         with closing(self._connect()) as con, con:
@@ -308,13 +314,12 @@ class ConversationStore:
                 "WHERE expired=0 AND created_at <= ? - COALESCE(retention_ms, ?)", (now, ttl_ms))]
 
     def result_table_settings(self, name: str, default_retention_ms: int) -> dict | None:
-        """The user-visible name and retention in ms of a Result Table, or None if unknown.
-        Until the user renames it, the name is the table's own."""
+        """The name and retention in ms of a Result Table, or None if unknown."""
         with closing(self._connect()) as con:
             row = con.execute("SELECT retention_ms FROM result_tables WHERE name=?", (name,)).fetchone()
         if row is None:
             return None
-        return {"title": name, "retention_ms": row["retention_ms"] if row["retention_ms"] is not None else default_retention_ms}
+        return {"name": name, "retention_ms": row["retention_ms"] if row["retention_ms"] is not None else default_retention_ms}
 
     def has_result_table(self, name: str) -> bool:
         with closing(self._connect()) as con:
@@ -333,15 +338,23 @@ class ConversationStore:
             if retention_ms is not None:
                 con.execute("UPDATE result_tables SET retention_ms=? WHERE name=?", (retention_ms, name))
 
-    def register_lookup_table(self, name: str, columns: list[str]) -> None:
+    def register_lookup_table(self, name: str, columns: list[str], row_count: int) -> None:
         """Record `name` as a Lookup Table (no Conversation, no expiry)."""
-        self._write("INSERT INTO lookup_tables(name, created_at, columns) VALUES (?,?,?) "
-                    "ON CONFLICT(name) DO UPDATE SET columns=excluded.columns",
-                    (name, self._now(), json.dumps(columns)))
+        self._write("INSERT INTO lookup_tables(name, created_at, columns, row_count) VALUES (?,?,?,?) "
+                    "ON CONFLICT(name) DO UPDATE SET columns=excluded.columns, row_count=excluded.row_count",
+                    (name, self._now(), json.dumps(columns), row_count))
 
-    def lookup_table_names(self) -> set[str]:
+    def lookup_tables(self) -> list[dict]:
+        """The Lookup Tables registry: name, created time, columns and row count."""
         with closing(self._connect()) as con:
-            return {r[0] for r in con.execute("SELECT name FROM lookup_tables")}
+            return [{**dict(r), "columns": json.loads(r["columns"])} for r in con.execute(
+                "SELECT name, created_at, columns, row_count FROM lookup_tables ORDER BY name")]
+
+    def is_lookup_table(self, name: str) -> bool:
+        """SQL table names ignore case, so this does too."""
+        with closing(self._connect()) as con:
+            return con.execute(
+                "SELECT 1 FROM lookup_tables WHERE name=? COLLATE NOCASE", (name,)).fetchone() is not None
 
     def mark_expired(self, names: list[str]) -> None:
         with closing(self._connect()) as con, con:

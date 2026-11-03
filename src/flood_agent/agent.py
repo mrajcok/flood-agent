@@ -15,13 +15,13 @@ from typing import AsyncIterator, Callable
 from mcp import StdioServerParameters
 from mcp.types import TextContent
 
-from flood_agent import flagging, lookup_tables, queries
+from flood_agent import flagging, lookup_tables, queries, table_names
 from flood_agent.llm import LLMClient, LLMError, TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
 from flood_agent.mcp_protocol import QUERY_TOOLS
 from flood_agent.mcp_server import ServerSettings
 from flood_agent.semantic_layer import SemanticLayer
-from flood_agent.store import ConversationStore
+from flood_agent.store import ConversationStore, TablesChoice
 from flood_agent.trace import TraceBuilder
 
 
@@ -260,26 +260,25 @@ class Agent:
             raise KeyError(conversation_id)
         return Conversation(conversation_id, repair_history(self.store.messages(conversation_id)))
 
-    def delete_conversation(self, conversation_id: str, tables: str = "keep") -> None:
+    def delete_conversation(self, conversation_id: str, tables: TablesChoice = "keep") -> None:
         """Delete a saved Conversation; `tables` (keep, delete_rt, delete_all) says which of its
         live Result Tables to drop (KeyError if unknown)."""
         if not self.store.exists(conversation_id):
             raise KeyError(conversation_id)
         self._drop_result_tables(self.store.delete_conversation(conversation_id, tables))
 
-    def delete_turn(self, conversation_id: str, turn_id: int, tables: str = "keep") -> None:
+    def delete_turn(self, conversation_id: str, turn_id: int, tables: TablesChoice = "keep") -> None:
         """Delete one prompt/answer exchange; `tables` says which Result Tables it created to drop
         (KeyError if unknown)."""
         self._drop_result_tables(self.store.delete_turn(conversation_id, turn_id, tables))
 
     def _drop_result_tables(self, names: list[str]) -> None:
-        names = [n for n in names if queries.TABLE_NAME_RE.match(n)]
         if not names or not self.config.results_db.exists():
             return
         con = sqlite3.connect(self.config.results_db)
         try:
             for n in names:
-                con.execute(f"DROP TABLE IF EXISTS {n}")
+                con.execute(f"DROP TABLE IF EXISTS {table_names.quote(n)}")
             con.commit()
         finally:
             con.close()
@@ -289,7 +288,7 @@ class Agent:
 
         Runs on app start, before each turn, and before any row read.
         """
-        names = [n for n in self.store.due_for_expiry(self.config.result_ttl_ms) if queries.TABLE_NAME_RE.match(n)]
+        names = self.store.due_for_expiry(self.config.result_ttl_ms)
         if not names:
             return
         self._drop_result_tables(names)
@@ -304,7 +303,10 @@ class Agent:
         self.sweep_expired()
         return self.store.expired_among(result_tables)
 
-    def _raise_if_expired(self, result_table: str) -> None:
+    def _require_live_result_table(self, result_table: str) -> None:
+        """KeyError unless the name is a registered Result Table; ResultTableExpired if it has expired."""
+        if not self.store.has_result_table(result_table):
+            raise KeyError(result_table)
         if self.is_expired(result_table):
             raise ResultTableExpired(f"Result Table {result_table} has expired.")
 
@@ -313,75 +315,80 @@ class Agent:
         or Trace, and the LLM is told nothing. Raises `InvalidLookupTable` for a bad name or paste."""
         name = lookup_tables.table_name(suffix)
         parsed = lookup_tables.parse_rows(text)
-        is_lookup = name in self.store.lookup_table_names()
-        lookup_tables.create_table(self.config.results_db, name, parsed, overwrite=overwrite, is_lookup=is_lookup)
-        self.store.register_lookup_table(name, parsed.columns)
+        registered = self.store.is_lookup_table(name)
+        try:
+            lookup_tables.write_table(self.config.results_db, name, parsed, replace=registered and overwrite)
+        except lookup_tables.TableExists:
+            raise lookup_tables.InvalidLookupTable(
+                f"A table named {name} already exists. Tick Overwrite existing table to replace it."
+                if registered else f"A table named {name} already exists and is not a Lookup Table."
+            )
+        # The registry is in the app database, a separate file, so it cannot join the results-database
+        # transaction. A crash between the two leaves a table the registry does not describe (its row
+        # count or columns stale, or a new table unregistered and so unreadable) until it is added again.
+        self.store.register_lookup_table(name, parsed.columns, len(parsed.rows))
         return {"name": name, "row_count": len(parsed.rows), "columns": parsed.columns}
 
     def result_table_settings(self, result_table: str) -> dict:
-        """The Result Table's user-visible name and retention in days (KeyError if unknown)."""
+        """The Result Table's name and retention in days (KeyError if unknown)."""
         found = self.store.result_table_settings(result_table, self.config.result_ttl_ms)
         if found is None:
             raise KeyError(result_table)
-        return {"title": found["title"], "retention_days": found["retention_ms"] / DAY_MS}
+        return {"name": found["name"], "retention_days": found["retention_ms"] / DAY_MS}
 
     def update_result_table(
-        self, result_table: str, title: str | None = None, retention_days: float | None = None
+        self, result_table: str, name: str | None = None, retention_days: float | None = None
     ) -> dict:
         """Rename (a real SQL rename) and/or change retention of a live Result Table.
 
-        Returns the new settings. ValueError, changing nothing, if the new name is not allowed.
-        Retention is unchanged by a rename."""
-        self._raise_if_expired(result_table)
-        self.result_table_settings(result_table)  # KeyError if unknown
-        if title is not None and title != result_table:
-            self._rename(result_table, title)
-            result_table = title
-        elif title is not None:
-            raise ValueError(f"The table is already named {title}.")
+        A `name` equal to the current one changes nothing. Returns the new settings. ValueError,
+        changing nothing, if the new name is not allowed. Retention is unchanged by a rename."""
+        self._require_live_result_table(result_table)
+        if name is not None and name != result_table:
+            self._rename(result_table, name)
+            result_table = name
         if retention_days is not None:
             self.store.update_result_table(result_table, max(1, round(retention_days * DAY_MS)))
         return self.result_table_settings(result_table)
 
     def _rename(self, old: str, new: str) -> None:
+        """Rename in the results database, then in the app database. These are two files, so if the
+        second step fails the first is undone."""
         problem = queries.check_new_table_name(new)
         if problem:
             raise ValueError(problem)
-        if self.store.has_result_table(new):
+        queries.rename_table(self.config.results_db, old, new)  # ValueError if `new` is taken
+        try:
+            self.store.rename_result_table(old, new)
+        except sqlite3.IntegrityError:  # `new` is the name of an expired table still in the registry
+            queries.rename_table(self.config.results_db, new, old)
             raise ValueError(f"A table named {new} already exists.")
-        queries.rename_table(self.config.results_db, old, new)
-        self.store.rename_result_table(old, new)
-
-    def _require_readable(self, result_table: str) -> None:
-        """KeyError unless the name is a Result Table (a generated name, or one the user renamed)."""
-        if not queries.RESULT_TABLE_RE.match(result_table) and not self.store.has_result_table(result_table):
-            raise KeyError(result_table)
+        except BaseException:
+            queries.rename_table(self.config.results_db, new, old)
+            raise
 
     def fetch_rows(self, result_table: str, columns: list[str] | None = None, **page_args) -> dict:
         """Internal data path used by the row-JSON endpoint. Not an LLM tool.
 
         Adds per-column display formats from the Semantic Layer."""
-        self._require_readable(result_table)
-        self._raise_if_expired(result_table)
+        self._require_live_result_table(result_table)
         data = queries.fetch_rows(self.config.results_db, result_table, columns, **page_args)
         data["formats"] = self.semantic_layer.column_formats(data["columns"])
         data["truncated_to"] = self.store.truncated_to(result_table)
         try:
             data.update(self.result_table_settings(result_table))
         except KeyError:  # not owned by a Conversation: no user settings
-            data.update(title=result_table, retention_days=self.config.result_ttl_ms / DAY_MS)
+            data.update(name=result_table, retention_days=self.config.result_ttl_ms / DAY_MS)
         return data
 
     def iter_all_rows(self, result_table: str):
         """Internal data path for PSV export of the full Result Table. Not an LLM tool."""
-        self._require_readable(result_table)
-        self._raise_if_expired(result_table)
+        self._require_live_result_table(result_table)
         return queries.iter_all_rows(self.config.results_db, result_table)
 
     def fetch_chart_rows(self, result_table: str) -> list[dict]:
         """Internal data path for the chart-rows endpoint (chart cap). Not an LLM tool."""
-        self._require_readable(result_table)
-        self._raise_if_expired(result_table)
+        self._require_live_result_table(result_table)
         return queries.fetch_records(self.config.results_db, result_table, self.config.chart_row_cap)
 
     async def run_turn(

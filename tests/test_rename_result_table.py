@@ -3,8 +3,9 @@
 import re
 
 import pytest
-from conftest import ScriptedLLM, last_tool_result, tool_call
+from conftest import ScriptedLLM, last_tool_result, query_limits, tool_call
 
+from flood_agent import queries
 from flood_agent.llm import TextChunk
 from flood_agent.web import TEMPLATES
 
@@ -42,14 +43,14 @@ def chat(client, message, cid=""):
 
 
 def rename(client, old, new):
-    return client.post(f"/api/results/{old}/settings", data={"title": new})
+    return client.post(f"/api/results/{old}/settings", data={"name": new})
 
 
 def test_rename_changes_the_name_everywhere_and_keeps_displays_loading(build_agent, web_client):
     client, cid, old = make(build_agent, web_client)
     resp = rename(client, old, "  top_ports ")
-    assert resp.status_code == 200 and resp.json()["title"] == "top_ports"
-    assert client.get("/api/results/top_ports/rows").json()["title"] == "top_ports"
+    assert resp.status_code == 200 and resp.json()["name"] == "top_ports"
+    assert client.get("/api/results/top_ports/rows").json()["name"] == "top_ports"
     assert client.get(f"/api/results/{old}/rows").status_code == 404
     assert client.get("/api/results/top_ports/chart-rows").json()[0]["dport"] == 8443
     assert client.get("/api/results/top_ports/psv").status_code == 200
@@ -86,10 +87,53 @@ def test_invalid_or_taken_names_are_rejected_and_nothing_changes(build_agent, we
     assert client.get(f"/api/results/{old}/rows").status_code == 200
 
 
-def test_renaming_to_another_result_table_is_rejected(build_agent, web_client):
-    client, cid, old = make(build_agent, web_client)
-    assert rename(client, old, old).status_code == 422
-    assert client.get(f"/api/results/{old}/rows").json()["title"] == old
+def test_saving_the_unchanged_name_with_a_new_retention_changes_only_the_retention(build_agent, web_client):
+    client, _, old = make(build_agent, web_client)
+    resp = client.post(f"/api/results/{old}/settings", data={"name": old, "retention_days": "7"})
+    assert resp.status_code == 200 and resp.json() == {"name": old, "retention_days": 7}
+    assert client.get(f"/api/results/{old}/rows").json()["retention_days"] == 7
+
+
+def two_tables(build_agent, web_client):
+    agent = build_agent(ScriptedLLM())
+    client = web_client(agent)
+    names = []
+    for _ in range(2):
+        meta = queries.run_query(agent.config.telemetry_db, agent.config.results_db, BY_PORT, **query_limits())
+        agent.store.add_result_table(agent.store.create_conversation(), meta["result_table"])
+        names.append(meta["result_table"])
+    return agent, client, names
+
+
+def test_renaming_to_another_result_tables_name_is_rejected_ignoring_case(build_agent, web_client):
+    _, client, (a, b) = two_tables(build_agent, web_client)
+    assert rename(client, a, "Mine").status_code == 200
+    resp = rename(client, b, "mine")
+    assert resp.status_code == 422 and "already exists" in resp.json()["detail"]
+    assert client.get(f"/api/results/{b}/rows").status_code == 200
+
+
+def test_a_failure_saving_the_rename_in_the_app_database_undoes_the_sql_rename(build_agent, web_client, monkeypatch):
+    agent, client, (a, _) = two_tables(build_agent, web_client)
+
+    def fail(old, new):
+        raise RuntimeError("app database unavailable")
+
+    monkeypatch.setattr(agent.store, "rename_result_table", fail)
+    with pytest.raises(RuntimeError):
+        rename(client, a, "mine")
+    assert client.get(f"/api/results/{a}/rows").status_code == 200
+    assert client.get("/api/results/mine/rows").status_code == 404
+
+
+def test_the_display_follows_a_rename_for_paging_download_and_further_edits():
+    html = TEMPLATES.get_template("display_table.html").render(
+        rows_url="/r", psv_url="/p", result_table="t", columns=[], settings_url="/s")
+    # Every URL the Display uses is read from `urls`, which a save replaces from the server's new name;
+    # the data attributes are read once, at start.
+    assert html.count("dataset.") == 3
+    assert ':href="urls.psv"' in html and "urls.settings" in html and "urls.rows" in html
+    assert "this.follow(d.name)" in html.split("async save()")[1].split("follow(name)")[0]
 
 
 def test_retention_survives_a_rename(build_agent, web_client):

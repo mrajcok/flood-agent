@@ -148,8 +148,7 @@ def _authorizer(allowed_tables: set[str] | None = None):
     """Single authorizer enforcing both policies (SQLite allows only one per connection):
     1. action allow-list: SELECT/READ/FUNCTION/RECURSIVE, plus create/insert/update on the
        results database for the CTAS. No ATTACH, PRAGMA, DDL/DML elsewhere.
-    2. reads in the results database are limited to `allowed_tables` (the calling
-       Conversation's live Result Tables)."""
+    2. reads in the results database are limited to `allowed_tables` (the live tables)."""
     allowed = {t.lower() for t in allowed_tables or ()}
 
     def authorizer(action, arg1, arg2, dbname, source):
@@ -322,6 +321,22 @@ def result_table_columns(results_db: Path, name: str) -> list[str] | None:
     finally:
         con.close()
     return cols or None
+
+
+def describe_results_table(results_db: Path, name: str) -> dict | None:
+    """Column names and types plus row count of a table in the results database, never rows.
+    The caller has already checked that `name` is a registered, live table."""
+    if not Path(results_db).exists():
+        return None
+    con = sqlite3.connect(f"file:{results_db}?mode=ro", uri=True)
+    try:
+        info = con.execute("SELECT name, type FROM pragma_table_info(?)", (name,)).fetchall()
+        if not info:
+            return None
+        count = con.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0]
+    finally:
+        con.close()
+    return {"columns": [{"name": n, "type": t or "ANY"} for n, t in info], "row_count": count}
 
 
 class InvalidSort(ValueError):

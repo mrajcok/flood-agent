@@ -108,7 +108,7 @@ async def test_llm_sees_only_the_question_and_no_telemetry_values(telemetry_db, 
     for value in all_telemetry_values(telemetry_db):
         if len(value) >= 4:
             assert value not in sent
-    assert llm.tools_seen_names == ["run_query", "run_count_query", "show_table", "show_chart"]
+    assert llm.tools_seen_names == ["run_query", "run_count_query", "describe_table", "show_table", "show_chart"]
 
 
 async def test_cost_and_tokens_come_from_client_usage(telemetry_db, semantic_layer_path, tmp_path):

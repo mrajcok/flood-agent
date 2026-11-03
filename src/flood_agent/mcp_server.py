@@ -88,20 +88,37 @@ def _max_result_rows(ctx: Context) -> int:
     return value
 
 
-def _allowed_tables(app_db: Path | None, ctx: Context) -> set[str]:
-    """The calling Conversation's live Result Tables, read live from the app database with a
-    read-only query (no DDL, no write lock). Empty if the Conversation id or APP_DB is missing."""
-    conversation_id = _conversation_id(ctx)
-    if not app_db or not conversation_id:
+def _live_result_tables(app_db: Path | None, conversation_id: str | None = None) -> set[str]:
+    """Live Result Tables read from the app database with a read-only query (no DDL, no write
+    lock): every Conversation's, or only `conversation_id`'s when given."""
+    if not app_db:
         return set()
+    sql, args = "SELECT name FROM result_tables WHERE expired=0", ()
+    if conversation_id is not None:
+        sql, args = sql + " AND conversation_id=?", (conversation_id,)
     con = sqlite3.connect(f"file:{app_db}?mode=ro", uri=True, timeout=5)
     try:
-        rows = con.execute(
-            "SELECT name FROM result_tables WHERE conversation_id=? AND expired=0", (conversation_id,)
-        )
-        return {r[0] for r in rows}
+        return {r[0] for r in con.execute(sql, args)}
     finally:
         con.close()
+
+
+def _allowed_tables(app_db: Path | None, ctx: Context) -> set[str]:
+    """The calling Conversation's own live Result Tables (what its Displays may show). Empty if
+    the Conversation id or APP_DB is missing."""
+    conversation_id = _conversation_id(ctx)
+    return _live_result_tables(app_db, conversation_id) if conversation_id else set()
+
+
+def _readable_tables(app_db: Path | None) -> set[str]:
+    """Every table a query may read (ADR 0003): all live Result Tables, from any Conversation.
+    Lookup Tables join this set later."""
+    return _live_result_tables(app_db)
+
+
+def _table_kind(app_db: Path | None, name: str) -> str | None:
+    """The kind of a readable table, or None if there is no such readable table. Add `lookup` here."""
+    return "result" if name in _live_result_tables(app_db) else None
 
 
 CHART_GUIDANCE = (
@@ -138,8 +155,8 @@ def create_server(settings: ServerSettings) -> FastMCP:
     def run_query(sql: str, title: str, ctx: Context) -> str:
         """Run a single read-only SELECT over the Telemetry Database. The output is stored in
         a new Result Table (named by the tool). Returns only Query Metadata, never rows."""
-        # The SELECT may reference only this Conversation's live Result Tables.
-        allowed = _allowed_tables(settings.app_db, ctx)
+        # The SELECT may reference any live Result Table (ADR 0003).
+        allowed = _readable_tables(settings.app_db)
         # A failed result may carry `raw_error`; the Agent strips it (keeping it for the Trace)
         # before anything is sent to the LLM.
         return json.dumps(
@@ -154,10 +171,22 @@ def create_server(settings: ServerSettings) -> FastMCP:
     def run_count_query(sql: str, ctx: Context) -> str:
         """Run a single read-only SELECT that returns one number, e.g. SELECT COUNT(*) FROM ...
         No Result Table is created; the count itself is returned to you and you may state it."""
-        allowed = _allowed_tables(settings.app_db, ctx)
+        allowed = _readable_tables(settings.app_db)
         return json.dumps(
             queries.run_count_query(settings.telemetry_db, settings.results_db, sql, settings.query_timeout_s, allowed)
         )
+
+    @mcp.tool()
+    @_in_worker_thread
+    def describe_table(name: str) -> str:
+        """Describe a table the user names: its kind, column names and types, and row count. Works
+        for any live table from any chat, not only those listed in your prompt. Never returns
+        rows. Query it by name with run_query."""
+        kind = _table_kind(settings.app_db, name)
+        described = queries.describe_results_table(settings.results_db, name) if kind == "result" else None
+        if described is None:
+            return json.dumps({"success": False, "error": "No such table."})
+        return json.dumps({"success": True, "name": name, "kind": kind, **described})
 
     @mcp.tool()
     @_in_worker_thread

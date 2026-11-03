@@ -271,7 +271,7 @@ class Agent:
         self._drop_result_tables(self.store.delete_turn(conversation_id, turn_id))
 
     def _drop_result_tables(self, names: list[str]) -> None:
-        names = [n for n in names if queries.RESULT_TABLE_RE.match(n)]
+        names = [n for n in names if queries.TABLE_NAME_RE.match(n)]
         if not names or not self.config.results_db.exists():
             return
         con = sqlite3.connect(self.config.results_db)
@@ -287,7 +287,7 @@ class Agent:
 
         Runs on app start, before each turn, and before any row read.
         """
-        names = [n for n in self.store.due_for_expiry(self.config.result_ttl_ms) if queries.RESULT_TABLE_RE.match(n)]
+        names = [n for n in self.store.due_for_expiry(self.config.result_ttl_ms) if queries.TABLE_NAME_RE.match(n)]
         if not names:
             return
         self._drop_result_tables(names)
@@ -316,17 +316,40 @@ class Agent:
     def update_result_table(
         self, result_table: str, title: str | None = None, retention_days: float | None = None
     ) -> dict:
-        """Rename and/or change retention of a live Result Table; returns the new settings."""
+        """Rename (a real SQL rename) and/or change retention of a live Result Table.
+
+        Returns the new settings. ValueError, changing nothing, if the new name is not allowed.
+        Retention is unchanged by a rename."""
         self._raise_if_expired(result_table)
         self.result_table_settings(result_table)  # KeyError if unknown
-        self.store.update_result_table(
-            result_table, title, None if retention_days is None else max(1, round(retention_days * DAY_MS)))
+        if title is not None and title != result_table:
+            self._rename(result_table, title)
+            result_table = title
+        elif title is not None:
+            raise ValueError(f"The table is already named {title}.")
+        if retention_days is not None:
+            self.store.update_result_table(result_table, max(1, round(retention_days * DAY_MS)))
         return self.result_table_settings(result_table)
+
+    def _rename(self, old: str, new: str) -> None:
+        problem = queries.check_new_table_name(new)
+        if problem:
+            raise ValueError(problem)
+        if self.store.has_result_table(new):
+            raise ValueError(f"A table named {new} already exists.")
+        queries.rename_table(self.config.results_db, old, new)
+        self.store.rename_result_table(old, new)
+
+    def _require_readable(self, result_table: str) -> None:
+        """KeyError unless the name is a Result Table (a generated name, or one the user renamed)."""
+        if not queries.RESULT_TABLE_RE.match(result_table) and not self.store.has_result_table(result_table):
+            raise KeyError(result_table)
 
     def fetch_rows(self, result_table: str, columns: list[str] | None = None, **page_args) -> dict:
         """Internal data path used by the row-JSON endpoint. Not an LLM tool.
 
         Adds per-column display formats from the Semantic Layer."""
+        self._require_readable(result_table)
         self._raise_if_expired(result_table)
         data = queries.fetch_rows(self.config.results_db, result_table, columns, **page_args)
         data["formats"] = self.semantic_layer.column_formats(data["columns"])
@@ -339,11 +362,13 @@ class Agent:
 
     def iter_all_rows(self, result_table: str):
         """Internal data path for PSV export of the full Result Table. Not an LLM tool."""
+        self._require_readable(result_table)
         self._raise_if_expired(result_table)
         return queries.iter_all_rows(self.config.results_db, result_table)
 
     def fetch_chart_rows(self, result_table: str) -> list[dict]:
         """Internal data path for the chart-rows endpoint (chart cap). Not an LLM tool."""
+        self._require_readable(result_table)
         self._raise_if_expired(result_table)
         return queries.fetch_records(self.config.results_db, result_table, self.config.chart_row_cap)
 

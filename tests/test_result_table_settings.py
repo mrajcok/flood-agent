@@ -48,11 +48,11 @@ def test_display_offers_name_and_retention_editor(build_agent, web_client):
     assert "days" in html and 'type="number"' in html
 
 
-def test_rename_persists(build_agent, web_client):
+def test_rename_is_a_real_sql_rename(build_agent, web_client):
     client, _, name = shown_table(build_agent, web_client)
-    resp = client.post(f"/api/results/{name}/settings", data={"title": "  Top ports  "})
-    assert resp.status_code == 200 and resp.json()["title"] == "Top ports"
-    assert client.get(f"/api/results/{name}/rows").json()["title"] == "Top ports"
+    resp = client.post(f"/api/results/{name}/settings", data={"title": "  top_ports  "})
+    assert resp.status_code == 200 and resp.json()["title"] == "top_ports"
+    assert client.get("/api/results/top_ports/rows").json()["title"] == "top_ports"
 
 
 def test_blank_name_and_bad_retention_are_rejected(build_agent, web_client):

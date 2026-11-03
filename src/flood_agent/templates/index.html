@@ -168,6 +168,44 @@
   </form>
   </main>
   </div>
+  <dialog id="delete-dialog" aria-labelledby="delete-title">
+    <form method="dialog">
+      <h3 id="delete-title">What should happen to its Result Tables?</h3>
+      <label><input type="radio" name="choice" value="keep" checked> Keep all tables; they age off per their retention</label><br>
+      <label id="delete-rt-option"><input type="radio" name="choice" value="delete_rt"> Delete only tables still named <code>rt_*</code> (<span id="delete-rt-count"></span>)</label><br>
+      <label><input type="radio" name="choice" value="delete_all"> Delete all its Result Tables (<span id="delete-all-count"></span>)</label>
+      <p><button value="ok">Delete</button> <button value="cancel" formnovalidate>Cancel</button></p>
+    </form>
+  </dialog>
+  <script>
+    // Deleting a Conversation or exchange: ask what to do with its live Result Tables, or fall back
+    // to the usual confirmation when it has none.
+    document.addEventListener("submit", async (event) => {
+      const form = event.target;
+      if (!form.classList || !form.classList.contains("delete-form") || form.dataset.confirmed) return;
+      event.preventDefault();
+      let counts = { total: 0, rt: 0 };
+      try { counts = await (await fetch(form.dataset.previewUrl)).json(); } catch (e) { /* fall back to the usual confirmation */ }
+      const finish = (choice) => {
+        let field = form.querySelector('input[name="tables"]');
+        if (!field) { field = document.createElement("input"); field.type = "hidden"; field.name = "tables"; form.appendChild(field); }
+        field.value = choice;
+        form.dataset.confirmed = "1";
+        form.submit();
+      };
+      if (!counts.total) { if (confirm(form.dataset.confirm)) finish("keep"); return; }
+      const dialog = document.getElementById("delete-dialog");
+      document.getElementById("delete-rt-count").textContent = counts.rt;
+      document.getElementById("delete-all-count").textContent = counts.total;
+      document.getElementById("delete-rt-option").hidden = counts.rt === counts.total;
+      dialog.querySelector('input[value="keep"]').checked = true;
+      dialog.returnValue = "";
+      dialog.onclose = () => {
+        if (dialog.returnValue === "ok") finish(dialog.querySelector('input[name="choice"]:checked').value);
+      };
+      dialog.showModal();
+    }, true);
+  </script>
   <script>
     // Keep the newest streamed content in view, unless the user has scrolled up to read.
     (function () {

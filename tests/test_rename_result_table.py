@@ -102,7 +102,7 @@ def test_retention_survives_a_rename(build_agent, web_client):
 def test_deleting_the_conversation_drops_the_renamed_table(build_agent, web_client):
     client, cid, old = make(build_agent, web_client)
     rename(client, old, "kept")
-    client.post(f"/c/{cid}/delete")
+    client.post(f"/c/{cid}/delete", data={"tables": "delete_all"})
     assert client.get("/api/results/kept/rows").status_code == 404
 
 

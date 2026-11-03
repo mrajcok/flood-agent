@@ -260,15 +260,17 @@ class Agent:
             raise KeyError(conversation_id)
         return Conversation(conversation_id, repair_history(self.store.messages(conversation_id)))
 
-    def delete_conversation(self, conversation_id: str) -> None:
-        """Delete a saved Conversation and drop its Result Tables (KeyError if unknown)."""
+    def delete_conversation(self, conversation_id: str, tables: str = "keep") -> None:
+        """Delete a saved Conversation; `tables` (keep, delete_rt, delete_all) says which of its
+        live Result Tables to drop (KeyError if unknown)."""
         if not self.store.exists(conversation_id):
             raise KeyError(conversation_id)
-        self._drop_result_tables(self.store.delete_conversation(conversation_id))
+        self._drop_result_tables(self.store.delete_conversation(conversation_id, tables))
 
-    def delete_turn(self, conversation_id: str, turn_id: int) -> None:
-        """Delete one prompt/answer exchange and the Result Tables it created (KeyError if unknown)."""
-        self._drop_result_tables(self.store.delete_turn(conversation_id, turn_id))
+    def delete_turn(self, conversation_id: str, turn_id: int, tables: str = "keep") -> None:
+        """Delete one prompt/answer exchange; `tables` says which Result Tables it created to drop
+        (KeyError if unknown)."""
+        self._drop_result_tables(self.store.delete_turn(conversation_id, turn_id, tables))
 
     def _drop_result_tables(self, names: list[str]) -> None:
         names = [n for n in names if queries.TABLE_NAME_RE.match(n)]

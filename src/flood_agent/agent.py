@@ -303,11 +303,15 @@ class Agent:
         self.sweep_expired()
         return self.store.expired_among(result_tables)
 
+    def _is_live_result_table(self, result_table: str) -> bool:
+        """A registered Result Table that has not expired (after sweeping)."""
+        return self.store.has_result_table(result_table) and not self.is_expired(result_table)
+
     def _require_live_result_table(self, result_table: str) -> None:
         """KeyError unless the name is a registered Result Table; ResultTableExpired if it has expired."""
         if not self.store.has_result_table(result_table):
             raise KeyError(result_table)
-        if self.is_expired(result_table):
+        if not self._is_live_result_table(result_table):
             raise ResultTableExpired(f"Result Table {result_table} has expired.")
 
     def add_lookup_table(self, suffix: str, text: str, overwrite: bool = False) -> dict:
@@ -659,7 +663,7 @@ class Agent:
         table = display["result_table"]
         # Any live Result Table may be shown (ADR 0003); the Display is saved with this
         # Conversation, but the table stays owned by the one that created it.
-        live = self.store.has_result_table(table) and not self.store.is_expired(table)
+        live = self._is_live_result_table(table)
         if display["kind"] == "chart":
             source = display["spec"]
             resolved = resolve_chart_data(source, table)

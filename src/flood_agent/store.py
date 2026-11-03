@@ -206,11 +206,11 @@ class ConversationStore:
 
     def delete_conversation(self, conversation_id: str, tables: TablesChoice = "keep") -> list[str]:
         """Remove a Conversation and everything it owns except the Result Tables the user keeps
-        (they outlive it until they expire); returns the names of the tables to drop."""
+        (they outlive it until they expire); returns the names of the tables to drop. Dropped tables
+        stay registered as expired, so other Conversations' Displays of them render as expired."""
         with closing(self._connect()) as con, con:
             dropped = self._choose(self._live_tables(con, conversation_id), tables)
-            con.execute("DELETE FROM result_tables WHERE conversation_id=? AND (expired=1 OR name IN (%s))"
-                        % ",".join("?" * len(dropped)), (conversation_id, *dropped))
+            con.executemany("UPDATE result_tables SET expired=1 WHERE name=?", [(n,) for n in dropped])
             for table in ("displays", "messages", "turns"):
                 con.execute(f"DELETE FROM {table} WHERE conversation_id=?", (conversation_id,))
             con.execute("DELETE FROM conversations WHERE id=?", (conversation_id,))

@@ -147,7 +147,8 @@ def test_deleting_the_conversation_drops_the_renamed_table(build_agent, web_clie
     client, cid, old = make(build_agent, web_client)
     rename(client, old, "kept")
     client.post(f"/c/{cid}/delete", data={"tables": "delete_all"})
-    assert client.get("/api/results/kept/rows").status_code == 404
+    gone = client.get("/api/results/kept/rows")
+    assert gone.status_code == 410 and "expired" in gone.json()["detail"].lower()
 
 
 def test_display_shows_the_sql_name_with_a_copy_button():

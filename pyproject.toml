@@ -40,6 +40,8 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 addopts = "-n auto"
+# tmp dirs live on tmpfs (tests/conftest.py): keep only those of failed tests.
+tmp_path_retention_policy = "failed"
 markers = [
     "subprocess: runs the MCP server as a real stdio subprocess",
     "network: needs internet access; skipped unless run with --network",

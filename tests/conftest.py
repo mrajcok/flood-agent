@@ -1,12 +1,14 @@
 """Shared fixtures: tiny seeded Telemetry Database, results DB, scripted fake LLM."""
 
 import copy
+import functools
 import hashlib
 import json
 import os
 import shutil
 import socket
 import sqlite3
+import sys
 import threading
 import time
 from contextlib import ExitStack, asynccontextmanager
@@ -25,6 +27,12 @@ from flood_agent.config import Settings
 from flood_agent.llm import TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_server import ServerSettings, create_server
 from flood_agent.web import create_app
+
+# SQLite fsyncs on every commit, and on a disk filesystem (WSL's ext4 especially) that was over
+# half the suite's time. Put pytest's temp root on tmpfs where there is one. Set at import, before
+# any tmp_path is made, so xdist workers (which inherit the environment) use it too.
+if os.access("/dev/shm", os.W_OK):
+    os.environ.setdefault("PYTEST_DEBUG_TEMPROOT", "/dev/shm")
 
 SCHEMA = """
 CREATE TABLE flows (
@@ -158,6 +166,18 @@ async def in_process_transport(settings: ServerSettings):
                 tg.cancel_scope.cancel()
 
 
+SPAWN_EVENTS = {"subprocess.Popen", "os.posix_spawn", "os.fork", "os.exec"}
+_spawns = [0]  # processes started in this worker so far
+
+
+def _count_spawns(event: str, args) -> None:
+    if event in SPAWN_EVENTS:
+        _spawns[0] += 1
+
+
+sys.addaudithook(_count_spawns)
+
+
 @pytest.fixture(autouse=True)
 def in_process_mcp_server(request, monkeypatch):
     """Agents run their MCP server in this process. Tests marked `subprocess` keep the real stdio
@@ -166,8 +186,10 @@ def in_process_mcp_server(request, monkeypatch):
         yield
         return
     monkeypatch.setattr(Agent, "_transport", lambda self: lambda: in_process_transport(self._server_settings()))
+    spawns = _spawns[0]
     yield
-    assert mcp_children() == [], "an unmarked test started an MCP server process; mark it `subprocess`"
+    # Scanning /proc costs a few ms, so only after a test that started a process.
+    assert _spawns[0] == spawns or mcp_children() == [], "an unmarked test started an MCP server process; mark it `subprocess`"
 
 
 @pytest.fixture(autouse=True)
@@ -178,10 +200,16 @@ def isolated_settings(monkeypatch):
         monkeypatch.delenv(name.upper(), raising=False)
 
 
+@functools.cache
+def default_agent_config() -> AgentConfig:
+    """Built once per worker: constructing Settings costs about 3 ms. Callers get copies (`replace`)."""
+    return Settings.from_defaults().agent_config()
+
+
 def config_for_test(tmp_path, telemetry_db, semantic_layer, **overrides) -> AgentConfig:
     """The defaults.toml settings, pointed at this test's files."""
     return replace(
-        Settings().agent_config(),
+        default_agent_config(),
         telemetry_db=telemetry_db,
         results_db=tmp_path / "results.db",
         app_db=tmp_path / "app.db",
@@ -192,7 +220,7 @@ def config_for_test(tmp_path, telemetry_db, semantic_layer, **overrides) -> Agen
 
 def query_limits() -> dict:
     """timeout_s and max_rows for calling queries.run_query directly."""
-    cfg = Settings().agent_config()
+    cfg = default_agent_config()
     return {"timeout_s": cfg.query_timeout_s, "max_rows": 1_000_000}
 
 

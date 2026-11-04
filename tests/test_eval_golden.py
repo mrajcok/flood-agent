@@ -1,12 +1,16 @@
 """The golden set: every reference query runs, is non-empty, and attack answers agree
 with the generator's attacks.json."""
 
+import hashlib
 import json
+import os
 import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
 
+from flood_agent import generator
 from flood_agent.evalset.golden import load_golden, run_reference
 from flood_agent.generator import generate
 
@@ -14,13 +18,36 @@ REAL_SL = Path(__file__).parent.parent / "semantic_layer.yaml"
 QUESTIONS = load_golden()
 
 
+SEED, SCALE = 1, 0.05  # default seed, reduced volume
+GENERATED = ("telemetry.db", "telemetry.db.attacks.json", "semantic_layer.yaml")
+
+
+def generated_once(cache_root: Path) -> Path:
+    """The generator's output (it is deterministic), cached across xdist workers and runs, keyed
+    by the generator's source, the real Semantic Layer and the seed and scale. Generating takes
+    over a second; each worker would otherwise pay it."""
+    key = hashlib.sha256(
+        Path(generator.__file__).read_bytes() + REAL_SL.read_bytes() + f"{SEED} {SCALE}".encode()
+    ).hexdigest()[:16]
+    done = cache_root / key
+    if not done.is_dir():
+        work = Path(tempfile.mkdtemp(dir=cache_root))
+        shutil.copy(REAL_SL, work / "semantic_layer.yaml")
+        generate(work / "telemetry.db", work / "semantic_layer.yaml", seed=SEED, scale=SCALE)
+        try:
+            os.rename(work, done)  # atomic; fails if another worker got there first
+        except OSError:
+            shutil.rmtree(work)
+    return done
+
+
 @pytest.fixture(scope="module")
-def built(tmp_path_factory):
+def built(tmp_path_factory, request):
+    src = generated_once(request.config.cache.mkdir("golden-db"))
     d = tmp_path_factory.mktemp("golden")
-    sl = d / "semantic_layer.yaml"
-    shutil.copy(REAL_SL, sl)
+    for name in GENERATED:
+        shutil.copy(src / name, d / name)
     db = d / "telemetry.db"
-    generate(db, sl, seed=1, scale=0.05)  # default seed, reduced volume
     return db, json.loads(Path(str(db) + ".attacks.json").read_text()), d
 
 

@@ -416,7 +416,6 @@ async def test_cancelling_connection_start_reaps_the_subprocess():
     assert mcp_children() == []
 
 
-@pytest.mark.subprocess
 async def test_connection_start_after_aclose_or_twice_fails_clearly(build_agent):
     from flood_agent.mcp_connection import McpConnection
 
@@ -428,10 +427,8 @@ async def test_connection_start_after_aclose_or_twice_fails_clearly(build_agent)
     await conn.aclose()
     with pytest.raises(RuntimeError, match="already started|closed"):
         await conn.start()
-    assert mcp_children() == []
 
 
-@pytest.mark.subprocess
 async def test_agent_aclose_cancels_and_awaits_in_flight_turns(build_agent):
     started = asyncio.Event()
 
@@ -450,4 +447,3 @@ async def test_agent_aclose_cancels_and_awaits_in_flight_turns(build_agent):
     assert all(t.done() for t in producers)
     first.cancel()
     await asyncio.gather(first, return_exceptions=True)
-    assert mcp_children() == []

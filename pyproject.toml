@@ -19,6 +19,7 @@ flood-agent-dev = "flood_agent.dev:main"
 
 [dependency-groups]
 dev = [
+    "playwright>=1.64.1",
     "pyright>=1.1.414",
     "pytest>=8",
     "pytest-asyncio>=0.23",
@@ -42,6 +43,7 @@ addopts = "-n auto"
 markers = [
     "subprocess: runs the MCP server as a real stdio subprocess",
     "network: needs internet access; skipped unless run with --network",
+    "browser: drives the real app in headless system Chrome (Playwright)",
 ]
 
 [tool.ruff]

@@ -4,6 +4,10 @@
 
 Before committing: `uv run ruff check --fix . && uv run pyright && uv run pytest -q`.
 
+## Browser tests
+
+To check UI behaviour (dialogs, Alpine/htmx interactions, layout), write a pytest test using the `live_page` fixture (`tests/conftest.py`): it serves the real app and returns a Playwright `page` in headless system Chrome. Example: `tests/test_dialogs_browser.py`. Such tests are auto-marked `browser` and skipped unless you pass `--browser`: run them with `uv run pytest -m browser --browser` after any UI change. Don't install Playwright browsers or hand-roll a server.
+
 ## Agent skills
 
 ### Issue tracker

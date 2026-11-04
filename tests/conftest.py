@@ -1,18 +1,24 @@
 """Shared fixtures: tiny seeded Telemetry Database, results DB, scripted fake LLM."""
 
 import copy
+import hashlib
 import json
 import os
 import shutil
+import socket
 import sqlite3
+import threading
+import time
 from contextlib import ExitStack, asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
 
 import anyio
 import pytest
+import uvicorn
 from fastapi.testclient import TestClient
 from mcp.shared.memory import create_client_server_memory_streams
+from playwright.sync_api import sync_playwright
 
 from flood_agent.agent import Agent, AgentConfig, Conversation, TextDelta
 from flood_agent.config import Settings
@@ -55,10 +61,20 @@ tables:
 
 def pytest_addoption(parser):
     parser.addoption("--network", action="store_true", help="also run tests marked `network` (need internet access)")
+    parser.addoption("--browser", action="store_true", help="also run tests marked `browser` (headless system Chrome)")
 
 
 def pytest_collection_modifyitems(config, items):
-    """The default run stays offline whatever -m expression is given; --network opts in."""
+    """Tests using `live_page` get the `browser` marker. `browser` and `network` tests are opt-in
+    (--browser, --network) whatever -m expression is given, so the default run stays fast and offline."""
+    for item in items:
+        if "live_page" in getattr(item, "fixturenames", ()):
+            item.add_marker(pytest.mark.browser)
+    if not config.getoption("--browser"):
+        skip_browser = pytest.mark.skip(reason="drives headless Chrome; run with --browser")
+        for item in items:
+            if "browser" in item.keywords:
+                item.add_marker(skip_browser)
     if config.getoption("--network"):
         return
     skip = pytest.mark.skip(reason="needs internet access; run with --network")
@@ -212,6 +228,90 @@ def web_client():
     (starting the Agent's MCP server) and is left again at teardown."""
     with ExitStack() as stack:
         yield lambda agent, **kwargs: stack.enter_context(TestClient(create_app(agent, **kwargs)))
+
+
+@pytest.fixture
+def live_server(build_agent):
+    """`live_server(agent=None, **app_kwargs)` -> base URL of the real app served by uvicorn on a free
+    port, for browser tests. Defaults to an Agent with a ScriptedLLM that has no steps."""
+    servers: list[tuple[uvicorn.Server, threading.Thread]] = []
+
+    def _start(agent: Agent | None = None, **app_kwargs) -> str:
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        app = create_app(agent or build_agent(ScriptedLLM()), **app_kwargs)
+        server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
+        thread = threading.Thread(target=server.run, daemon=True)
+        thread.start()
+        deadline = time.monotonic() + 15
+        while not server.started:
+            if not thread.is_alive() or time.monotonic() > deadline:
+                raise RuntimeError("live_server did not start")
+            time.sleep(0.02)
+        servers.append((server, thread))
+        return f"http://127.0.0.1:{port}"
+
+    yield _start
+    for server, thread in servers:
+        server.should_exit = True
+        thread.join(timeout=10)
+
+
+CDN_HOSTS = ("https://unpkg.com/**", "https://cdn.jsdelivr.net/**")
+
+
+@pytest.fixture(scope="module")
+def chrome():
+    """Headless system Chrome, shared by one test module's browser tests. Module scope, not session:
+    sync Playwright keeps an event loop running in the worker while it is alive, which breaks async
+    tests; pytest tears this down before the worker runs a test from another module. So keep async
+    tests out of browser test modules."""
+    playwright = sync_playwright().start()
+    browser = playwright.chromium.launch(channel="chrome")
+    yield browser
+    browser.close()
+    playwright.stop()
+
+
+@pytest.fixture
+def live_page(chrome, live_server, request):
+    """`live_page(path="/", agent=None)` -> a fresh page (its own browser context) in headless system
+    Chrome, opened on the live app. CDN scripts (htmx, Alpine, Vega) are served from pytest's cache
+    after the first download, so browser tests run offline once warmed; with a cold cache and no
+    internet they skip."""
+    cache_dir = request.config.cache.mkdir("cdn")
+    context = chrome.new_context()
+    page = context.new_page()
+    page.set_default_timeout(5000)  # the app is local: fail fast instead of Playwright's 30s
+
+    def serve_cached(route):
+        path = cache_dir / hashlib.sha256(route.request.url.encode()).hexdigest()
+        if not path.exists():
+            try:
+                response = route.fetch()
+            except Exception:
+                route.abort()
+                return
+            if not response.ok:
+                route.fulfill(response=response)
+                return
+            tmp = path.with_suffix(f".{os.getpid()}.tmp")
+            tmp.write_bytes(response.body())
+            os.replace(tmp, path)
+        route.fulfill(path=path, content_type="application/javascript")
+
+    for pattern in CDN_HOSTS:
+        page.route(pattern, serve_cached)
+
+    def _open(path: str = "/", agent: Agent | None = None):
+        page.goto(live_server(agent) + path)
+        if not page.evaluate("() => !!(window.Alpine && window.htmx)"):
+            pytest.skip("CDN scripts unavailable (no internet and nothing cached yet)")
+        return page
+
+    yield _open
+    context.close()
 
 
 def mcp_children() -> list[int]:

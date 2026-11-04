@@ -24,6 +24,12 @@
                  ['Result Tables', this.tables.result.filter(n => this.shown(n))]]
            .filter(([, names]) => names.length).map(([title, names]) => ({ title, names }));
        },
+       closeIfOutside(e) {
+         /* A click on the backdrop targets the <dialog> itself, but so does one on its padding: compare coordinates. */
+         if (e.target !== this.$refs.dialog) return;
+         const r = this.$refs.dialog.getBoundingClientRect();
+         if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) this.open = false;
+       },
        insertIntoChat(name) {
          try { navigator.clipboard.writeText(name).catch(() => {}); } catch (e) {}
          const input = document.querySelector('input[name=message]');
@@ -37,7 +43,7 @@
          input.dispatchEvent(new Event('input', { bubbles: true }));
        } }">
     <button type="button" class="sidebar-action" @click="open = true; load()">Show tables</button>
-    <dialog x-ref="dialog" aria-labelledby="show-tables-title" x-effect="open ? $el.showModal() : $el.open && $el.close()" @close="open = false">
+    <dialog x-ref="dialog" aria-labelledby="show-tables-title" x-effect="open ? $el.showModal() : $el.open && $el.close()" @close="open = false" @click="closeIfOutside($event)">
       <h3 id="show-tables-title">Tables you can query</h3>
       <div class="filters">
         <label><input type="checkbox" x-model="hideRt"> Hide <code>rt_</code> tables</label>

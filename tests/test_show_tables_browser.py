@@ -100,3 +100,33 @@ def test_copying_still_inserts_when_there_is_no_clipboard_api(live_page, tables)
     open_tables(page).get_by_role("button", name="Copy flows").click()
     expect(page.get_by_placeholder("Write a prompt")).to_have_value("flows")
     assert errors == []
+
+
+def test_dialog_top_stays_put_when_a_checkbox_changes_the_list(live_page, tables):
+    agent, _ = tables
+    page = live_page(agent=agent)
+    dialog = open_tables(page)
+    expect(names_in(dialog, "Result Tables")).to_have_count(2)
+    top = dialog.bounding_box()["y"]
+
+    dialog.get_by_label("Hide lookup_ tables").check()
+    expect(dialog.get_by_role("heading", name="Lookup Tables")).to_have_count(0)
+    assert dialog.bounding_box()["y"] == top
+    dialog.get_by_label("Hide rt_ tables").check()
+    expect(names_in(dialog, "Result Tables")).to_have_text(["ddos_victims"])
+    assert dialog.bounding_box()["y"] == top
+
+
+def test_clicking_outside_the_dialog_closes_it_but_clicking_inside_does_not(live_page, tables):
+    agent, _ = tables
+    page = live_page(agent=agent)
+    dialog = open_tables(page)
+    box = dialog.bounding_box()
+
+    # Inside: the dialog's own padding (the click target is the <dialog> itself) and its heading.
+    page.mouse.click(box["x"] + 4, box["y"] + 4)
+    dialog.get_by_role("heading", name="Tables you can query").click()
+    expect(dialog).to_have_attribute("open", "")
+
+    page.mouse.click(box["x"] + box["width"] + 20, box["y"] + box["height"] / 2)
+    expect(dialog).not_to_have_attribute("open", "")

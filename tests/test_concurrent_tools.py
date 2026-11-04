@@ -49,8 +49,10 @@ async def test_slow_query_does_not_block_other_conversations(make_agent):
     slow = asyncio.create_task(turn("slow"))
     await llm.served["slow"].wait()
     await asyncio.sleep(0.05)  # the tool call reaches the server's worker thread
+    fast_start = time.monotonic()
     await turn("fast")
     assert not slow.done(), "the slow query should still be running"
-    assert finished["fast"] < TIMEOUT_S / 2
+    # Timed from its own start, so a slow start of the slow turn (CPU contention) cannot fail it.
+    assert time.monotonic() - fast_start < TIMEOUT_S / 2
     await slow
     assert finished["slow"] >= TIMEOUT_S * 0.8

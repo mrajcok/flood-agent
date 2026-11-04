@@ -299,7 +299,8 @@ class ConversationStore:
             return [{**dict(r), "columns": json.loads(r["columns"])} for r in rows]
 
     def all_live_result_table_names(self) -> list[str]:
-        """Names of live (unexpired) Result Tables across all Conversations, deleted ones included, sorted."""
+        """Names of live (unexpired) Result Tables across all Conversations, including tables whose
+        Conversation was deleted, sorted."""
         with closing(self._connect()) as con:
             return [r[0] for r in con.execute("SELECT name FROM result_tables WHERE expired=0 ORDER BY name")]
 
@@ -348,6 +349,11 @@ class ConversationStore:
         with closing(self._connect()) as con:
             return [{**dict(r), "columns": json.loads(r["columns"])} for r in con.execute(
                 "SELECT name, created_at, columns, row_count FROM lookup_tables ORDER BY name")]
+
+    def lookup_table_names(self) -> list[str]:
+        """Names of the registered Lookup Tables, sorted."""
+        with closing(self._connect()) as con:
+            return [r[0] for r in con.execute("SELECT name FROM lookup_tables ORDER BY name")]
 
     def is_lookup_table(self, name: str) -> bool:
         """SQL table names ignore case, so this does too."""

@@ -2,21 +2,11 @@
 
 import re
 
-from conftest import ScriptedLLM, last_tool_result, tool_call
+from conftest import DAY, Clock, ScriptedLLM, last_tool_result, tool_call
 from test_conversations import ask, main_pane, table_script, turn_ids
 
 from flood_agent.llm import TextChunk
 from flood_agent.web import TEMPLATES
-
-DAY = 24 * 3_600_000
-
-
-class Clock:
-    def __init__(self, ms=1_000_000):
-        self.ms = ms
-
-    def __call__(self):
-        return self.ms
 
 
 def tables_in(client, cid):

@@ -3,19 +3,10 @@
 Plain HTTP for the web page, never an MCP tool, and names only (ADR 0001)."""
 
 import re
+import sqlite3
 
-from conftest import ScriptedLLM
+from conftest import DAY, Clock, ScriptedLLM
 from test_conversations import ask, table_script
-
-DAY = 24 * 3_600_000
-
-
-class Clock:
-    def __init__(self, ms=1_000_000):
-        self.ms = ms
-
-    def __call__(self):
-        return self.ms
 
 
 def table_of(client, cid):
@@ -65,9 +56,23 @@ def test_result_tables_past_their_retention_are_left_out(build_agent, web_client
     assert client.get(f"/api/results/{a_table}/rows").status_code == 410
 
 
-def test_listing_tables_creates_no_conversation_message_or_trace(build_agent, web_client):
+def app_db_counts(path):
+    """Conversations, turns, messages and saved Traces in the app database."""
+    con = sqlite3.connect(path)
+    try:
+        return [con.execute(sql).fetchone()[0] for sql in (
+            "SELECT COUNT(*) FROM conversations", "SELECT COUNT(*) FROM turns", "SELECT COUNT(*) FROM messages",
+            "SELECT COUNT(*) FROM turns WHERE trace IS NOT NULL")]
+    finally:
+        con.close()
+
+
+def test_listing_tables_creates_no_conversation_message_or_trace(build_agent, web_client, tmp_path):
     client, a, _, _, _ = two_conversations_with_tables(build_agent, web_client)
+    counts = app_db_counts(tmp_path / "app.db")
+    assert counts[0] == 2 and counts[3] == 2  # sanity: the setup did write Conversations and Traces
     home, conversation = client.get("/").text, client.get(f"/c/{a}").text
     assert client.get("/api/tables").status_code == 200
+    assert app_db_counts(tmp_path / "app.db") == counts
     assert client.get("/").text == home
     assert client.get(f"/c/{a}").text == conversation

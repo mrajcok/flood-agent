@@ -340,7 +340,7 @@ class Agent:
         self.sweep_expired()
         return {
             "telemetry": sorted(self.semantic_layer.table_names()),
-            "lookup": sorted(t["name"] for t in self.store.lookup_tables()),
+            "lookup": self.store.lookup_table_names(),
             "result": self.store.all_live_result_table_names(),
         }
 

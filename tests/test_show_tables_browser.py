@@ -3,19 +3,15 @@
 import pytest
 from conftest import ScriptedLLM
 from playwright.sync_api import expect
-from test_conversations import ask, table_script
-from test_show_tables import table_of
+from test_show_tables import two_conversations_with_tables
 
 
 @pytest.fixture
 def tables(build_agent, web_client):
     """Set up through HTTP: two Lookup Tables, a Result Table still named rt_* and one renamed ddos_victims.
     Returns (agent for the live app on the same files, the rt_* name)."""
-    client = web_client(build_agent(ScriptedLLM(*table_script(), *table_script())))
-    a, _ = ask(client, "top ports")
-    b, _ = ask(client, "top talkers")
-    rt_name = table_of(client, a)
-    client.post(f"/api/results/{table_of(client, b)}/settings", data={"name": "ddos_victims"})
+    client, _, _, rt_name, b_table = two_conversations_with_tables(build_agent, web_client)
+    client.post(f"/api/results/{b_table}/settings", data={"name": "ddos_victims"})
     for name in ("watch", "bad_ips"):
         client.post("/api/lookup-tables", data={"name": name, "rows": "ip\n10.0.0.1"})
     return build_agent(ScriptedLLM()), rt_name

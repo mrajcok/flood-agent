@@ -1,17 +1,21 @@
 <aside id="sidebar" {% if oob %}hx-swap-oob="true"{% endif %}>
-  <div class="show-tables" x-data="{ open: false, tables: null, error: '', hideRt: false, hideLookup: false,
-       init() {
-         try { this.hideRt = localStorage.getItem('showTables.hideRt') === '1'; this.hideLookup = localStorage.getItem('showTables.hideLookup') === '1'; } catch (e) {}
-         this.$watch('hideRt', v => { try { localStorage.setItem('showTables.hideRt', v ? '1' : '0'); } catch (e) {} });
-         this.$watch('hideLookup', v => { try { localStorage.setItem('showTables.hideLookup', v ? '1' : '0'); } catch (e) {} });
+  <div class="show-tables" x-data="{ open: false, tables: null, error: '', hideRt: false, hideLookup: false, request: 0,
+       init() { this.remember('hideRt'); this.remember('hideLookup'); },
+       remember(key) {
+         /* Keep a checkbox in localStorage; without storage it just starts unchecked. */
+         const item = 'showTables.' + key;
+         try { this[key] = localStorage.getItem(item) === '1'; } catch (e) {}
+         this.$watch(key, v => { try { localStorage.setItem(item, v ? '1' : '0'); } catch (e) {} });
        },
        async load() {
+         const request = ++this.request;  /* only the latest open's response is shown */
          this.tables = null; this.error = '';
          try {
            const r = await fetch('/api/tables');
            if (!r.ok) throw new Error(r.status);
-           this.tables = await r.json();
-         } catch (e) { this.error = 'Could not load the tables. Try again.'; }
+           const tables = await r.json();
+           if (request === this.request) this.tables = tables;
+         } catch (e) { if (request === this.request) this.error = 'Could not load the tables. Try again.'; }
        },
        shown(name) { return !(this.hideRt && name.startsWith('rt_')) && !(this.hideLookup && name.startsWith('lookup_')); },
        get sections() {
@@ -20,13 +24,11 @@
                  ['Result Tables', this.tables.result.filter(n => this.shown(n))]]
            .filter(([, names]) => names.length).map(([title, names]) => ({ title, names }));
        },
-       copy(name) {
+       insertIntoChat(name) {
          try { navigator.clipboard.writeText(name).catch(() => {}); } catch (e) {}
          const input = document.querySelector('input[name=message]');
          const value = input.value;
-         let start = input.selectionStart, end = input.selectionEnd;
-         if (start == null || end == null) start = end = value.length;
-         const before = value.slice(0, start), after = value.slice(end);
+         const before = value.slice(0, input.selectionStart), after = value.slice(input.selectionEnd);
          const head = before + (before && !/\s$/.test(before) ? ' ' : '') + name;
          input.value = head + (after && !/^\s/.test(after) ? ' ' : '') + after;
          this.$refs.dialog.close();
@@ -49,7 +51,7 @@
             <h4 x-text="section.title"></h4>
             <ul>
               <template x-for="name in section.names" :key="name">
-                <li><code x-text="name"></code><button type="button" class="copy" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into the chat'" @click="copy(name)">&#x29C9;</button></li>
+                <li><code x-text="name"></code><button type="button" class="copy" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into the chat'" @click="insertIntoChat(name)">&#x29C9;</button></li>
               </template>
             </ul>
           </section>

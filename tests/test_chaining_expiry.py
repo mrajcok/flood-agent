@@ -3,21 +3,13 @@
 import re
 
 import pytest
-from conftest import ScriptedLLM, all_telemetry_values, collect, last_tool_result, query_limits, tool_call
+from conftest import Clock, ScriptedLLM, all_telemetry_values, collect, last_tool_result, query_limits, tool_call
 
 from flood_agent.agent import Conversation, DisplayEvent
 from flood_agent.llm import TextChunk
 
 BY_PORT = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport"
 HOUR = 3_600_000
-
-
-class Clock:
-    def __init__(self, ms=1_000_000):
-        self.ms = ms
-
-    def __call__(self):
-        return self.ms
 
 
 async def run_first(make_agent, request="bytes per port please", **cfg):

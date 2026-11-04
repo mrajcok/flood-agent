@@ -170,6 +170,11 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
         except InvalidLookupTable as e:
             raise HTTPException(422, str(e))
 
+    @app.get("/api/tables")
+    def list_tables():
+        """Names of the tables the user can query, for the Show tables dialog. Plain HTTP, never an MCP tool."""
+        return agent.list_tables()
+
     @app.post("/chat", response_class=HTMLResponse)
     def chat(request: Request, message: str = Form(...), conversation_id: str = Form(""), max_rows: str = Form(...)):
         max_result_rows = _parse_max_rows(max_rows)

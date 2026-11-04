@@ -298,6 +298,11 @@ class ConversationStore:
                 "WHERE conversation_id=? AND expired=0 ORDER BY created_at, name", (conversation_id,))
             return [{**dict(r), "columns": json.loads(r["columns"])} for r in rows]
 
+    def all_live_result_table_names(self) -> list[str]:
+        """Names of live (unexpired) Result Tables across all Conversations, deleted ones included, sorted."""
+        with closing(self._connect()) as con:
+            return [r[0] for r in con.execute("SELECT name FROM result_tables WHERE expired=0 ORDER BY name")]
+
     def due_for_expiry(self, ttl_ms: int) -> list[str]:
         """Live Result Tables created longer ago than the table's
         retention (`ttl_ms` unless the user chose one)."""

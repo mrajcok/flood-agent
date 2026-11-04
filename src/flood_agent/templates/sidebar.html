@@ -1,4 +1,64 @@
 <aside id="sidebar" {% if oob %}hx-swap-oob="true"{% endif %}>
+  <div class="show-tables" x-data="{ open: false, tables: null, error: '', hideRt: false, hideLookup: false,
+       init() {
+         try { this.hideRt = localStorage.getItem('showTables.hideRt') === '1'; this.hideLookup = localStorage.getItem('showTables.hideLookup') === '1'; } catch (e) {}
+         this.$watch('hideRt', v => { try { localStorage.setItem('showTables.hideRt', v ? '1' : '0'); } catch (e) {} });
+         this.$watch('hideLookup', v => { try { localStorage.setItem('showTables.hideLookup', v ? '1' : '0'); } catch (e) {} });
+       },
+       async load() {
+         this.tables = null; this.error = '';
+         try {
+           const r = await fetch('/api/tables');
+           if (!r.ok) throw new Error(r.status);
+           this.tables = await r.json();
+         } catch (e) { this.error = 'Could not load the tables. Try again.'; }
+       },
+       shown(name) { return !(this.hideRt && name.startsWith('rt_')) && !(this.hideLookup && name.startsWith('lookup_')); },
+       get sections() {
+         if (!this.tables) return [];
+         return [['Telemetry', this.tables.telemetry], ['Lookup Tables', this.tables.lookup.filter(n => this.shown(n))],
+                 ['Result Tables', this.tables.result.filter(n => this.shown(n))]]
+           .filter(([, names]) => names.length).map(([title, names]) => ({ title, names }));
+       },
+       copy(name) {
+         try { navigator.clipboard.writeText(name).catch(() => {}); } catch (e) {}
+         const input = document.querySelector('input[name=message]');
+         const value = input.value;
+         let start = input.selectionStart, end = input.selectionEnd;
+         if (start == null || end == null) start = end = value.length;
+         const before = value.slice(0, start), after = value.slice(end);
+         const head = before + (before && !/\s$/.test(before) ? ' ' : '') + name;
+         input.value = head + (after && !/^\s/.test(after) ? ' ' : '') + after;
+         this.$refs.dialog.close();
+         input.focus();
+         input.setSelectionRange(head.length, head.length);
+         input.dispatchEvent(new Event('input', { bubbles: true }));
+       } }">
+    <button type="button" class="sidebar-action" @click="open = true; load()">Show tables</button>
+    <dialog x-ref="dialog" aria-labelledby="show-tables-title" x-effect="open ? $el.showModal() : $el.open && $el.close()" @close="open = false">
+      <h3 id="show-tables-title">Tables you can query</h3>
+      <div class="filters">
+        <label><input type="checkbox" x-model="hideRt"> Hide <code>rt_</code> tables</label>
+        <label><input type="checkbox" x-model="hideLookup"> Hide <code>lookup_</code> tables</label>
+      </div>
+      <div class="table-list">
+        <p x-show="!tables && !error">Loading&hellip;</p>
+        <p class="error" x-show="error" x-text="error" x-cloak></p>
+        <template x-for="section in sections" :key="section.title">
+          <section>
+            <h4 x-text="section.title"></h4>
+            <ul>
+              <template x-for="name in section.names" :key="name">
+                <li><code x-text="name"></code><button type="button" class="copy" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into the chat'" @click="copy(name)">&#x29C9;</button></li>
+              </template>
+            </ul>
+          </section>
+        </template>
+        <p x-show="tables && !sections.length" x-cloak>No tables to show.</p>
+      </div>
+      <div class="actions"><button type="button" @click="open = false">Close</button></div>
+    </dialog>
+  </div>
   <div class="lookup" x-data="{ open: false, name: '', rows: '', overwrite: false, busy: false, error: '',
        async submit() {
          this.busy = true; this.error = '';
@@ -11,7 +71,7 @@
          } catch (e) { this.error = 'Could not add the table.'; }
          this.busy = false;
        } }">
-    <button type="button" class="add-lookup" @click="open = true; error = ''">Add lookup table</button>
+    <button type="button" class="sidebar-action" @click="open = true; error = ''">Add lookup table</button>
     <dialog x-effect="open ? $el.showModal() : $el.open && $el.close()" @close="open = false">
       <form @submit.prevent="submit()">
         <p class="error" x-show="error" x-text="error" x-cloak></p>

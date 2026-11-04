@@ -333,6 +333,17 @@ class Agent:
         self.store.register_lookup_table(name, parsed.columns, len(parsed.rows))
         return {"name": name, "row_count": len(parsed.rows), "columns": parsed.columns}
 
+    def list_tables(self) -> dict[str, list[str]]:
+        """Names (only) of every table the user can query, by kind, each sorted: Telemetry Database
+        tables described in the Semantic Layer, Lookup Tables, and live Result Tables from every
+        Conversation. For the web page only; touches no Conversation, message or Trace."""
+        self.sweep_expired()
+        return {
+            "telemetry": sorted(self.semantic_layer.table_names()),
+            "lookup": sorted(t["name"] for t in self.store.lookup_tables()),
+            "result": self.store.all_live_result_table_names(),
+        }
+
     def result_table_settings(self, result_table: str) -> dict:
         """The Result Table's name and retention in days (KeyError if unknown)."""
         found = self.store.result_table_settings(result_table, self.config.result_ttl_ms)

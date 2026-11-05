@@ -83,8 +83,8 @@
                     <div class="row"><span class="row-actions">
                       <button type="button" class="copy" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into the chat'" @click="copy(name)">&#x29C9;</button>
                       <!-- Hidden, not removed, where not offered so the names line up across sections. -->
-                      <button type="button" class="edit" :style="section.editable ? '' : 'visibility: hidden'" :disabled="!section.editable" :aria-label="'Edit ' + name" :title="'Edit ' + name" @click="$dispatch('edit-lookup', name)">&#x270E;&#xFE0E;</button>
                       <button type="button" class="delete" :style="section.deletable ? '' : 'visibility: hidden'" :disabled="!section.deletable" :aria-label="'Delete ' + name" :title="'Delete ' + name" @click="confirming = name">&#x1F5D1;&#xFE0E;</button>
+                      <button type="button" class="edit" :style="section.editable ? '' : 'visibility: hidden'" :disabled="!section.editable" :aria-label="'Edit ' + name" :title="'Edit ' + name" @click="$dispatch('edit-lookup', name)">&#x270E;&#xFE0E;</button>
                       </span><code x-text="name"></code>
                       <template x-if="expiresIn(name)"><span class="expires" :title="'Retention: ' + retention(name)" x-text="expiresIn(name)"></span></template>
                     </div>

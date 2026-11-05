@@ -16,6 +16,8 @@ def test_pencil_shows_only_for_lookup_tables_and_opens_the_rows_to_edit(live_pag
     page = live_page(agent=agent)
     tables = open_tables(page)
     expect(row_in(tables, "flows").get_by_role("button", name="Edit flows")).to_be_hidden()
+    # Copy, delete, then the pencil just before the name.
+    expect(row_in(tables, "lookup_hosts").locator(".row-actions button")).to_have_class(["copy", "delete", "edit"])
     row_in(tables, "lookup_hosts").get_by_role("button", name="Edit lookup_hosts").click()
 
     dialog = edit_dialog(page)

@@ -20,7 +20,7 @@ def ask_for_a_table(build_agent, live_page, days=None):
 
 
 def edit(page, table):
-    page.get_by_role("button", name=table).click()
+    page.locator(".table-name .name").click()
     return page.get_by_label("Table name (SQL)"), page.get_by_label("Retention", exact=True)
 
 
@@ -40,7 +40,7 @@ def test_renaming_a_result_table_switches_its_retention_to_30_days(build_agent, 
     expect(retention).to_have_value("1")
     name.fill("keeper")
     page.get_by_role("button", name="Save").click()
-    expect(page.get_by_role("button", name="keeper")).to_be_visible()
+    expect(page.locator(".table-name .name")).to_have_text("keeper")
     assert retention_of(agent, "keeper") == 30
 
     # Renaming a Saved Table again leaves its Retention alone.
@@ -59,7 +59,7 @@ def test_a_retention_the_user_picks_in_the_same_edit_wins(build_agent, live_page
     name.fill("keeper")
     expect(retention).to_have_value("7")
     page.get_by_role("button", name="Save").click()
-    expect(page.get_by_role("button", name="keeper")).to_be_visible()
+    expect(page.locator(".table-name .name")).to_have_text("keeper")
     assert retention_of(agent, "keeper") == 7
 
 
@@ -69,3 +69,23 @@ def test_a_result_table_kept_longer_than_30_days_is_not_cut_back(build_agent, li
     expect(retention).to_have_value("365")
     name.fill("keeper")
     expect(retention).to_have_value("365")
+
+
+def test_the_copy_icon_next_to_the_table_name_inserts_it_into_the_chat_like_the_tables_dialog(build_agent, live_page):
+    _, page, table = ask_for_a_table(build_agent, live_page)
+    expect(page.get_by_role("button", name="Copy", exact=True)).to_have_count(0)  # the old text button is gone
+    chat = page.get_by_placeholder("Write a prompt")
+    chat.fill("count rows")
+    chat.evaluate("i => i.setSelectionRange(6, 6)")  # "count |rows"
+    copy = page.locator(".table-name").get_by_role("button", name="Copy " + table)
+    expect(copy).to_have_text("⧉")  # the Tables dialog's copy icon
+    copy.click()
+    expect(chat).to_have_value(f"count {table} rows")
+    expect(chat).to_be_focused()
+
+    page.locator(".table-name .name").click()  # rename it: the icon copies the new name
+    page.get_by_label("Table name (SQL)").fill("victims")
+    page.get_by_role("button", name="Save").click()
+    chat.fill("")
+    page.locator(".table-name").get_by_role("button", name="Copy victims").click()
+    expect(chat).to_have_value("victims")

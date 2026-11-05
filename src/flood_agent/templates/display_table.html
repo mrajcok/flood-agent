@@ -1,5 +1,5 @@
 <div class="display" data-rows-url="{{ rows_url }}" data-psv-url="{{ psv_url }}" data-settings-url="{{ settings_url }}"
-     x-data="{ name: '', urls: {}, copied: false, retentionDays: 1, editing: false, draft: '', choice: '1', custom: 1, saveError: '',
+     x-data="{ name: '', urls: {}, retentionDays: 1, editing: false, draft: '', choice: '1', custom: 1, saveError: '',
                originalChoice: '1', retentionTouched: false,
                presets: ['1', '7', '30', '365'],
                edit() {
@@ -32,9 +32,6 @@
                  for (const k of Object.keys(this.urls)) this.urls[k] = this.urls[k].replace('/api/results/' + old + '/', '/api/results/' + now + '/');
                  this.name = name;
                },
-               async copyName() {
-                 try { await navigator.clipboard.writeText(this.name); this.copied = true; setTimeout(() => { this.copied = false; }, 1500); } catch (e) {}
-               },
                columns: [], rows: [], formats: {}, total: 0, truncatedTo: null, page: 1, pageSize: 20,
                sort: null, dir: 'asc', loads: 0, loaded: false, error: false, expired: false,
                async load() {
@@ -66,7 +63,7 @@
   <div x-show="loaded" x-cloak>
     <div class="table-name">
       <button type="button" class="name" x-show="!editing" @click="edit()" title="Click to rename this table (its SQL name) or change how long it is kept" x-text="name"></button>
-      <button type="button" class="copy" x-show="!editing" @click="copyName()" title="Copy the SQL table name to the clipboard" x-text="copied ? 'Copied' : 'Copy'"></button>
+      <button type="button" class="copy" x-show="!editing" @click="insertIntoChat(name)" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into the chat'">&#x29C9;</button>
       <form class="editor" x-show="editing" @submit.prevent="save()" @keydown.escape="editing = false">
         <input type="text" x-ref="nameInput" x-model="draft" @input="renamed()" maxlength="60" required aria-label="Table name (SQL)">
         <label>Keep for

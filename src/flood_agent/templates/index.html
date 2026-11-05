@@ -110,6 +110,9 @@
     .table-name .name { font: inherit; font-weight: 600; color: #2a4ba0; background: none; border: 0; border-bottom: 1px dashed #4a6fd3; padding: 0 .1rem; cursor: text; }
     .table-name .name::after { content: " \270E"; font-weight: 400; opacity: .7; }
     .table-name .name:hover { background: #eef3fd; }
+    .table-name .copy { background: none; border: 0; color: #4a6fd3; cursor: pointer; font-size: 1rem; line-height: 1; padding: .15rem .3rem; border-radius: .3rem; }
+    .table-name .copy:hover { background: #dce7fb; }
+    .table-name .copy:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
     .table-name .editor { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
     .table-name input[type=text] { font: inherit; min-width: 16rem; padding: .2rem .5rem; border: 1px solid #b9c7e6; border-radius: .4rem; }
     .table-name input[type=number] { font: inherit; width: 6rem; padding: .2rem .4rem; border: 1px solid #b9c7e6; border-radius: .4rem; }
@@ -272,6 +275,21 @@
       };
       dialog.showModal();
     }, true);
+  </script>
+  <script>
+    // Copy a table name to the clipboard and insert it into the chat box at the cursor, spaced from
+    // the words around it; used by the Tables dialog and each table Display.
+    function insertIntoChat(name) {
+      try { navigator.clipboard.writeText(name).catch(() => {}); } catch (e) { /* no clipboard: still insert */ }
+      const input = document.querySelector("textarea[name=message]");
+      const value = input.value;
+      const before = value.slice(0, input.selectionStart), after = value.slice(input.selectionEnd);
+      const head = before + (before && !/\s$/.test(before) ? " " : "") + name;
+      input.value = head + (after && !/^\s/.test(after) ? " " : "") + after;
+      input.focus();
+      input.setSelectionRange(head.length, head.length);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
   </script>
   <script>
     // Keep the newest streamed content in view, unless the user has scrolled up to read.

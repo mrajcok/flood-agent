@@ -59,17 +59,9 @@
          const r = this.$refs.dialog.getBoundingClientRect();
          if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) this.open = false;
        },
-       insertIntoChat(name) {
-         try { navigator.clipboard.writeText(name).catch(() => {}); } catch (e) {}
-         const input = document.querySelector('textarea[name=message]');
-         const value = input.value;
-         const before = value.slice(0, input.selectionStart), after = value.slice(input.selectionEnd);
-         const head = before + (before && !/\s$/.test(before) ? ' ' : '') + name;
-         input.value = head + (after && !/^\s/.test(after) ? ' ' : '') + after;
-         this.$refs.dialog.close();
-         input.focus();
-         input.setSelectionRange(head.length, head.length);
-         input.dispatchEvent(new Event('input', { bubbles: true }));
+       copy(name) {
+         this.$refs.dialog.close();  /* first: a modal dialog keeps focus from the chat box */
+         insertIntoChat(name);
        } }">
     <button type="button" class="sidebar-action" @click="open = true; load()">Tables</button>
     <dialog x-ref="dialog" aria-labelledby="show-tables-title" x-effect="open ? $el.showModal() : $el.open && $el.close()" @close="open = false" @click="closeIfOutside($event)">
@@ -91,7 +83,7 @@
                     <div class="row"><code x-text="name"></code>
                       <template x-if="expiresIn(name)"><span class="expires" :title="'Retention: ' + retention(name)" x-text="expiresIn(name)"></span></template>
                       <span class="row-actions">
-                      <button type="button" class="copy" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into the chat'" @click="insertIntoChat(name)">&#x29C9;</button>
+                      <button type="button" class="copy" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into the chat'" @click="copy(name)">&#x29C9;</button>
                       <!-- Hidden, not removed, for Telemetry so the copy icons line up across sections. -->
                       <button type="button" class="delete" :style="section.deletable ? '' : 'visibility: hidden'" :disabled="!section.deletable" :aria-label="'Delete ' + name" :title="'Delete ' + name" @click="confirming = name">&#x1F5D1;&#xFE0E;</button>
                     </span></div>

@@ -150,7 +150,7 @@ def test_deleting_the_conversation_with_its_result_tables_keeps_the_saved_table(
     assert client.get("/api/results/kept/rows").status_code == 200
 
 
-def test_display_shows_the_sql_name_with_a_copy_button():
+def test_display_shows_the_sql_name_with_a_copy_icon_that_inserts_it_into_the_chat():
     html = TEMPLATES.get_template("display_table.html").render(
         rows_url="/r", psv_url="/p", result_table="t", columns=[], settings_url="/s")
-    assert "clipboard" in html and "Copy" in html
+    assert 'class="copy"' in html and "insertIntoChat(name)" in html

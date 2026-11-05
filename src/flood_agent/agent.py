@@ -62,6 +62,21 @@ class TextDelta:
     text: str
 
 
+class _TurnQueue(asyncio.Queue):
+    """A turn's event queue that remembers whether the reply so far ends mid-paragraph."""
+
+    mid_paragraph = False
+
+    def put_nowait(self, item) -> None:  # `put` goes through here too
+        if isinstance(item, TextDelta) and item.text:
+            self.mid_paragraph = not item.text.endswith("\n")
+        super().put_nowait(item)
+
+    async def put_notice(self, message: str) -> None:
+        """Stream a notice from the app (not the LLM) as its own paragraph."""
+        await self.put(TextDelta(("\n\n" if self.mid_paragraph else "") + message))
+
+
 @dataclass
 class DisplayEvent:
     kind: str
@@ -464,7 +479,7 @@ class Agent:
         `max_result_rows` is the row cap for this turn's queries; the user chooses it in the UI."""
         if self._connection is None:
             raise RuntimeError("Agent not started: call `await agent.start()` or use `async with agent`")
-        queue: asyncio.Queue = asyncio.Queue()
+        queue = _TurnQueue()
         task = asyncio.create_task(self._produce(conversation, user_message, queue, max_result_rows))
         self._turn_tasks.add(task)
         task.add_done_callback(self._turn_tasks.discard)
@@ -485,7 +500,7 @@ class Agent:
             await asyncio.gather(task, return_exceptions=True)
 
     async def _produce(
-        self, conversation: Conversation, user_message: str, queue: asyncio.Queue, max_result_rows: int
+        self, conversation: Conversation, user_message: str, queue: _TurnQueue, max_result_rows: int
     ):
         try:
             await self._run(conversation, user_message, queue, max_result_rows)
@@ -496,7 +511,7 @@ class Agent:
             await queue.put(e)
 
     async def _run(
-        self, conversation: Conversation, user_message: str, queue: asyncio.Queue, max_result_rows: int
+        self, conversation: Conversation, user_message: str, queue: _TurnQueue, max_result_rows: int
     ):
         self.sweep_expired()
         if conversation.id is None:
@@ -515,7 +530,7 @@ class Agent:
         self.store.save_trace(turn_id, finished)
         await queue.put(TraceReady(finished, turn_id))
 
-    async def _fail_turn(self, conversation, turn_id, trace: TraceBuilder, queue, error: BaseException) -> None:
+    async def _fail_turn(self, conversation, turn_id, trace: TraceBuilder, queue: _TurnQueue, error: BaseException) -> None:
         """A turn failed partway: tell the user, record it in the Trace and in the history."""
         error = _unwrap(error)
         detail = f"{type(error).__name__}: {error}"
@@ -525,7 +540,7 @@ class Agent:
             message = f"Sorry, something went wrong while handling that request ({type(error).__name__}). Please try again."
         trace.add("error", message=message, detail=detail)
         self._record(conversation, turn_id, {"role": "assistant", "content": message})
-        await queue.put(TextDelta(message))
+        await queue.put_notice(message)
         await queue.put(TurnError(message, detail))
 
     async def _converse(
@@ -587,9 +602,9 @@ class Agent:
             trace.add("step_limit", max_steps=self.config.max_llm_steps)
             await self._end_with_notice(conversation, turn_id, STEP_LIMIT_MESSAGE, queue)
 
-    async def _end_with_notice(self, conversation, turn_id, message: str, queue) -> None:
+    async def _end_with_notice(self, conversation, turn_id, message: str, queue: _TurnQueue) -> None:
         self._record(conversation, turn_id, {"role": "assistant", "content": message})
-        await queue.put(TextDelta(message))
+        await queue.put_notice(message)
 
     async def _run_tool(
         self, connection: McpConnection, c: ToolCallChunk, queue: asyncio.Queue, trace: TraceBuilder,

@@ -369,3 +369,24 @@ async def test_with_the_lookup_table_absent_the_reply_explains_how_to_create_it_
     assert "Create lookup table" in text_of(events)
     assert not any(isinstance(e, TurnError) for e in events)
     assert not [e for e in events if isinstance(e, DisplayEvent)]
+
+
+async def test_a_stream_that_breaks_partway_starts_its_error_on_a_new_paragraph(make_agent):
+    agent = await make_agent(fake_client(), model="fake")
+    canned = next(c for c in CANNED if c.id == "llm-stream-error")
+
+    events = await collect(agent, canned.prompt)
+
+    assert text_of(events) == (
+        "Let me look into that, and then\n\n"
+        "Sorry, I couldn't get a complete answer from the model. The response stream was cut off."
+    )
+
+
+async def test_a_canned_prompt_matches_despite_a_trailing_period_and_spaces(make_agent):
+    agent = await make_agent(fake_client(), model="fake")
+    canned = next(c for c in CANNED if c.id == "llm-stream-error")
+
+    events = await collect(agent, f"  {canned.prompt}. ")
+
+    assert "couldn't get a complete answer" in text_of(events)

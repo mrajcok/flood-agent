@@ -2,7 +2,7 @@
 #
 # Each entry is a fixed user message plus the scripted LLM replies that answer it.
 #   id      stable slug
-#   prompt  the exact user message: shown in the picker and matched exactly by the fake
+#   prompt  the user message: shown in the picker and matched by the fake exactly, bar surrounding spaces and a trailing period
 #   steps   one per simulated LLM call: `text` (streamed) and/or `tool_calls` (name + args)
 #   after   optional id of a parent Canned Prompt: the follow-up is listed indented under it and needs its Result Table
 #   expect  the declared outcome the test suite checks (`displays`: Display kinds in order)
@@ -94,7 +94,7 @@
     displays: [table]
 
 - id: bytes-over-time
-  prompt: Chart total bytes per hour over time.
+  prompt: Chart total bytes per hour over time
   steps:
     - tool_calls:
         - name: run_query
@@ -117,7 +117,7 @@
     displays: [chart]
 
 - id: bytes-by-port
-  prompt: Chart total bytes by destination port.
+  prompt: Chart total bytes by destination port
   steps:
     - tool_calls:
         - name: run_query
@@ -138,7 +138,7 @@
     displays: [chart]
 
 - id: chained-query
-  prompt: Total bytes by port, then show the top 3 ports from that result.
+  prompt: Total bytes by port, then show the top 3 ports from that result
   steps:
     - tool_calls:
         - name: run_query
@@ -159,7 +159,7 @@
     displays: [table]
 
 - id: concurrent-tables
-  prompt: Show me flows per destination port and bytes per destination IP together.
+  prompt: Show me flows per destination port and bytes per destination IP together
   steps:
     - tool_calls:
         - name: run_query
@@ -182,7 +182,7 @@
     displays: [table, table]
 
 - id: chart-top-destinations
-  prompt: Now chart those bytes by destination IP.
+  prompt: Now chart those bytes by destination IP
   after: top-destinations
   steps:
     - tool_calls:
@@ -199,7 +199,7 @@
     displays: [chart]
 
 - id: invalid-sql-retry
-  prompt: "Run a query with a typo, then retry."
+  prompt: "Run a query with a typo, then retry"
   steps:
     - text: "Let me count the flows."
       tool_calls:
@@ -218,7 +218,7 @@
     failed_tool_calls: 1
 
 - id: too-many-rows
-  prompt: "Run a query that returns too many rows."
+  prompt: "Run a query that returns Max result rows"
   steps:
     - tool_calls:
         - name: run_query
@@ -236,7 +236,7 @@
     displays: [table]
 
 - id: chart-over-row-cap
-  prompt: "Chart a Result Table above the chart row cap."
+  prompt: "Chart a Result Table above the chart row cap"
   steps:
     - tool_calls:
         - name: run_query
@@ -259,7 +259,7 @@
     displays: [chart]
 
 - id: chart-with-inline-data
-  prompt: "Chart a spec that embeds its own data values."
+  prompt: "Chart a spec that embeds its own data values"
   steps:
     - tool_calls:
         - name: run_query
@@ -283,7 +283,7 @@
     failed_tool_calls: 1
 
 - id: malformed-json-arguments
-  prompt: "Call a tool with malformed JSON arguments."
+  prompt: "Call a tool with malformed JSON arguments"
   steps:
     - tool_calls:
         - name: run_query
@@ -294,7 +294,7 @@
     failed_tool_calls: 1
 
 - id: repeated-failures
-  prompt: "Keep failing until the attempt limit ends the turn."
+  prompt: "Keep failing until the attempt limit ends the turn"
   steps:
     - tool_calls:
         - name: run_query
@@ -311,7 +311,7 @@
     notice: after several attempts
 
 - id: llm-stream-error
-  prompt: "The LLM stream breaks partway."
+  prompt: "The LLM stream breaks partway"
   steps:
     - text: "Let me look into that, and then"
       error: The response stream was cut off.

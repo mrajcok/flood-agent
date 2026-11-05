@@ -112,7 +112,7 @@ class FakeClient:
 
     async def stream_chat(self, messages: list[dict], tools: list[dict]) -> AsyncIterator[Chunk]:
         last_user = max(i for i, m in enumerate(messages) if m["role"] == "user")
-        canned = next((c for c in self.canned_prompts if c.prompt == messages[last_user]["content"]), None)
+        canned = next((c for c in self.canned_prompts if _same_prompt(c.prompt, messages[last_user]["content"])), None)
         step_index = sum(1 for m in messages[last_user:] if m["role"] == "assistant")
         if canned is None:
             step = Step(text=self._unmatched_reply())
@@ -145,7 +145,7 @@ class FakeClient:
         parent = parent_of(canned, self.canned_prompts)
         if parent is None:
             return messages[last_user:]
-        ran = [i for i, m in enumerate(messages[:last_user]) if m["role"] == "user" and m["content"] == parent.prompt]
+        ran = [i for i, m in enumerate(messages[:last_user]) if m["role"] == "user" and _same_prompt(m["content"], parent.prompt)]
         if not ran:
             raise ParentNotRun(parent)
         return messages[ran[-1] :]
@@ -183,6 +183,12 @@ class FakeClient:
         if isinstance(node, list):
             return [self._resolve(v, messages) for v in node]
         return node
+
+
+def _same_prompt(a: str, b: str) -> bool:
+    """Canned Prompts match exactly, except for surrounding spaces and one trailing period
+    (so a message sent before the prompts lost their periods still matches)."""
+    return a.strip().removesuffix(".").strip() == b.strip().removesuffix(".").strip()
 
 
 def _latest_tool_call_failed(messages: list[dict]) -> bool:

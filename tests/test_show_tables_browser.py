@@ -32,7 +32,7 @@ def test_tables_sits_above_add_lookup_and_lists_the_four_sections(live_page, tab
     agent, rt_name = tables
     page = live_page(agent=agent)
     show = page.get_by_role("button", name="Tables", exact=True)
-    add = page.get_by_role("button", name="Add lookup table")
+    add = page.get_by_role("button", name="Create lookup table")
     assert show.bounding_box()["y"] < add.bounding_box()["y"]  # type: ignore[index]
     assert show.evaluate("b => getComputedStyle(b).borderColor") == add.evaluate("b => getComputedStyle(b).borderColor")
 
@@ -202,9 +202,9 @@ def test_the_icons_come_just_before_each_name_and_the_expiry_is_right_aligned(li
     assert len(lefts) == 1  # every name starts at the same x, Telemetry included
     row = row_in(dialog, rt_name)
     copy, name, expires = (row.locator(s).bounding_box() for s in (".copy", "code", ".expires"))
-    delete = row.locator(".delete").bounding_box()
-    assert copy and delete and name and expires
-    assert copy["x"] < delete["x"] < name["x"] and name["x"] - (delete["x"] + delete["width"]) < 12
+    delete, edit = row.locator(".delete").bounding_box(), row.locator(".edit").bounding_box()
+    assert copy and delete and edit and name and expires
+    assert copy["x"] < delete["x"] < edit["x"] < name["x"] and name["x"] - (edit["x"] + edit["width"]) < 12
     list_right = dialog.locator(".table-list").bounding_box()
     assert list_right and list_right["x"] + list_right["width"] - (expires["x"] + expires["width"]) < 12
 
@@ -214,5 +214,5 @@ def test_the_table_buttons_use_the_same_font_as_new_chat(live_page, tables):
     page = live_page(agent=agent)
     font = "e => { const s = getComputedStyle(e); return [s.fontFamily, s.fontSize, s.fontWeight]; }"
     new_chat = page.get_by_role("link", name="New chat").evaluate(font)
-    for name in ("Tables", "Add lookup table"):
+    for name in ("Tables", "Create lookup table"):
         assert page.get_by_role("button", name=name, exact=True).evaluate(font) == new_chat

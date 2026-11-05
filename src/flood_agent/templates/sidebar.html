@@ -145,7 +145,7 @@
          } catch (e) { this.error = 'Could not save the table.'; }
          this.busy = false;
        } }" @edit-lookup.window="startEdit($event.detail)">
-    <button type="button" class="sidebar-action" @click="startAdd()">Add lookup table</button>
+    <button type="button" class="sidebar-action" @click="startAdd()">Create lookup table</button>
     <dialog x-effect="open ? $el.showModal() : $el.open && $el.close()" @close="open = false">
       <form @submit.prevent="submit()">
         <template x-if="editing"><h3>Edit <code x-text="editing"></code></h3></template>

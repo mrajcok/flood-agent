@@ -1,4 +1,4 @@
-"""The Add lookup table and delete-Conversation dialogs, driven in headless system Chrome."""
+"""The Create lookup table and delete-Conversation dialogs, driven in headless system Chrome."""
 
 from conftest import ScriptedLLM
 from playwright.sync_api import expect
@@ -8,7 +8,7 @@ from flood_agent.llm import TextChunk
 
 
 def add_lookup(page, name, rows):
-    page.get_by_role("button", name="Add lookup table").click()
+    page.get_by_role("button", name="Create lookup table").click()
     dialog = page.locator(".lookup dialog")
     dialog.get_by_label("Lookup table name").fill(name)
     dialog.get_by_label("Rows").fill(rows)

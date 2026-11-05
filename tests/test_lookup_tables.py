@@ -157,7 +157,7 @@ def test_a_lookup_table_never_expires(build_agent, web_client):
 
 def test_sidebar_has_the_add_lookup_table_dialog(build_agent, web_client):
     html = web_client(build_agent(ScriptedLLM())).get("/").text
-    assert "Add lookup table" in html
+    assert "Create lookup table" in html
     assert "First row must be the column names. Separate columns with tab, comma or <code>|</code>." in html
     assert "overwrite existing table" in html
     assert "/api/lookup-tables" in html

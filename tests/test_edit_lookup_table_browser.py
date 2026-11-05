@@ -60,9 +60,9 @@ def test_bad_edits_show_the_error_keep_the_separator_and_cancel_saves_nothing(li
     expect(dialog).not_to_have_attribute("open", "")
     assert stored(agent, "lookup_hosts") == [["10.0.0.1"]]
 
-    # Add lookup table afterwards is the plain add dialog again.
+    # Create lookup table afterwards is the plain add dialog again.
     page.keyboard.press("Escape")
-    page.get_by_role("button", name="Add lookup table").click()
+    page.get_by_role("button", name="Create lookup table").click()
     expect(dialog.get_by_label("Lookup table name")).to_have_value("")
     expect(dialog.get_by_label("Rows")).to_have_value("")
     expect(dialog.get_by_role("radio")).to_have_count(0)

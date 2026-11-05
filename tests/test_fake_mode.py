@@ -366,6 +366,6 @@ async def test_with_the_lookup_table_absent_the_reply_explains_how_to_create_it_
 
     events = await collect(agent, WATCHLIST_PROMPT)
 
-    assert "Add lookup table" in text_of(events)
+    assert "Create lookup table" in text_of(events)
     assert not any(isinstance(e, TurnError) for e in events)
     assert not [e for e in events if isinstance(e, DisplayEvent)]

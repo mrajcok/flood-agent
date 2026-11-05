@@ -102,7 +102,7 @@ def test_deleting_a_prompt_with_a_saved_table_says_the_saved_table_is_kept(build
     agent.update_result_table(table, "keeper")
     page.locator("aside ul li a").first.click()  # open the Conversation, so its prompts show their delete buttons
 
-    page.get_by_role("button", name="Delete this prompt and its answer").click()
+    page.get_by_role("button", name="Delete this turn").click()
     dialog = page.locator("#delete-dialog")
     expect(dialog).to_have_attribute("open", "")
     expect(dialog.locator("h3")).to_have_text("Delete this prompt and its answer?")

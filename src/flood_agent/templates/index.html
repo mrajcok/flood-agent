@@ -166,7 +166,7 @@
                     new MutationObserver(refresh).observe(document.getElementById('chat'), { childList: true, subtree: true, attributes: true, attributeFilter: ['open'] });
                     refresh()"
             @click="const open = !anyOpen; document.querySelectorAll('details.turn').forEach(d => d.open = open)"
-            x-text="anyOpen ? 'Collapse prompts' : 'Expand prompts'">Collapse prompts</button>
+            x-text="anyOpen ? 'Collapse turns' : 'Expand turns'">Collapse turns</button>
     <div class="max-rows" x-data="{ choice: '10000', custom: '' }">
       <label for="max-rows-choice">Max result rows</label>
       <select id="max-rows-choice" x-model="choice">

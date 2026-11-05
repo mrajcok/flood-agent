@@ -90,3 +90,15 @@ def test_pressing_escape_twice_clears_the_box_but_once_or_slowly_does_not(live_p
     expect(chat).to_have_value("")
     expect(chat).to_be_focused()
     expect(chat).to_have_js_property("offsetHeight", round(one_row))  # back to one row
+
+
+def test_the_collapse_button_toggles_between_collapse_turns_and_expand_turns(live_page, build_agent):
+    page = live_page(agent=build_agent(replies(1)))
+    chat = page.get_by_placeholder("Write a prompt")
+    chat.fill("top ports")
+    chat.press("Enter")
+    expect(page.locator(".reply", has_text="ok")).to_be_visible()
+    page.get_by_role("button", name="Collapse turns").click()
+    expect(page.locator(".reply", has_text="ok")).to_be_hidden()
+    page.get_by_role("button", name="Expand turns").click()
+    expect(page.locator(".reply", has_text="ok")).to_be_visible()

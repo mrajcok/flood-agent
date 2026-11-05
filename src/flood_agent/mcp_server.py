@@ -160,6 +160,82 @@ def _find_violation(node, table: str) -> str | None:
     return None
 
 
+MARKS = (
+    "arc", "area", "bar", "boxplot", "circle", "errorband", "errorbar", "geoshape", "image", "line",
+    "point", "rect", "rule", "square", "text", "tick", "trail",
+)
+FIELD_TYPES = ("quantitative", "temporal", "nominal", "ordinal")
+_COMPOSITE = ("layer", "concat", "hconcat", "vconcat", "facet", "repeat", "spec")
+
+
+def _transform_outputs(node) -> set[str]:
+    """Field names the spec's transforms create ("as": "x" or ["x", "y"]), anywhere in it."""
+    if isinstance(node, list):
+        return set().union(*(_transform_outputs(item) for item in node))
+    if not isinstance(node, dict):
+        return set()
+    out: set[str] = set()
+    for key, value in node.items():
+        if key == "as":
+            out |= {value} if isinstance(value, str) else {v for v in value if isinstance(v, str)} if isinstance(value, list) else set()
+        else:
+            out |= _transform_outputs(value)
+    return out
+
+
+def _unknown_field(field: str) -> str:
+    return f'Unknown field "{field}". Field names are case-sensitive.'
+
+
+def _encoding_problem(node, fields: set[str]) -> str | None:
+    """The first field definition under an encoding that names an unknown field or lacks a valid type."""
+    if isinstance(node, list):
+        return next((p for item in node if (p := _encoding_problem(item, fields))), None)
+    if not isinstance(node, dict):
+        return None
+    field = node.get("field")
+    if isinstance(field, str):  # a {"repeat": ...} field is not a string
+        if field not in fields:
+            return _unknown_field(field)
+        if node.get("type") not in FIELD_TYPES:
+            got = f'has type {json.dumps(node["type"])}; use' if "type" in node else 'needs a "type":'
+            return f'Field "{field}" {got} one of {", ".join(FIELD_TYPES)}.'
+    for key, value in node.items():
+        if key == "sort" and isinstance(value, dict):  # a sort definition: a field, never a type
+            sort_field = value.get("field")
+            if isinstance(sort_field, str) and sort_field not in fields:
+                return _unknown_field(sort_field)
+        elif found := _encoding_problem(value, fields):
+            return found
+    return None
+
+
+def _spec_problem(node, fields: set[str], top: bool = True) -> str | None:
+    """What would make the spec draw nothing, found without rendering it: an unknown or missing
+    mark, or an encoding field that is not a column (or a transform's output) or has no valid type."""
+    if isinstance(node, list):
+        return next((p for item in node if (p := _spec_problem(item, fields, top=False))), None)
+    if not isinstance(node, dict):
+        return None
+    if "mark" in node:
+        mark = node["mark"]
+        name = mark.get("type") if isinstance(mark, dict) else mark
+        if name not in MARKS:
+            return f"Unknown mark {json.dumps(name)}. Use one of: " + ", ".join(f'"{m}"' for m in MARKS) + "."
+    elif top and not any(k in node for k in _COMPOSITE):
+        return 'The spec needs a "mark", for example "bar", "line" or "rect".'
+    for key, value in node.items():
+        if key == "encoding":
+            found = _encoding_problem(value, fields)
+        elif key in _COMPOSITE:
+            found = _spec_problem(value, fields, top=False)
+        else:
+            continue
+        if found:
+            return found
+    return None
+
+
 def create_server(settings: ServerSettings) -> FastMCP:
     """The MCP server with its tools bound to these static settings."""
     mcp = FastMCP("flood-agent")
@@ -222,7 +298,9 @@ def create_server(settings: ServerSettings) -> FastMCP:
     def show_chart(vega_lite_spec: dict) -> str:
         """Show a Vega-Lite Chart Spec to the user as a chart Display. Its data must be
         {"name": "<result table>"}; never include data values. Aggregate first if the Result
-        Table is large: a chart shows at most its first CHART_ROW_CAP rows. Use temporal x scales of type "utc" for epoch-ms time columns."""
+        Table is large: a chart shows at most its first CHART_ROW_CAP rows. Every encoded "field" must be a
+        column name, exactly as in Query Metadata, with a "type" (quantitative, temporal, nominal, ordinal).
+        Use temporal x scales of type "utc" for epoch-ms time columns. Don't set "width"."""
         data = vega_lite_spec.get("data")
         table = data.get("name") if isinstance(data, dict) else None
         if not isinstance(table, str):
@@ -234,6 +312,10 @@ def create_server(settings: ServerSettings) -> FastMCP:
         violation = _find_violation(vega_lite_spec, table)
         if violation:
             return json.dumps({"success": False, "error": violation})
+        columns = queries.result_table_columns(settings.results_db, table) or []
+        problem = _spec_problem(vega_lite_spec, set(columns) | _transform_outputs(vega_lite_spec))
+        if problem:
+            return json.dumps({"success": False, "error": f"{problem} The columns of {table} are: {', '.join(columns)}."})
         result: dict = {"success": True, "display": {"kind": "chart", "result_table": table, "spec": vega_lite_spec}}
         if count > settings.chart_row_cap:
             result["note"] = (

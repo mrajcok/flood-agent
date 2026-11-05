@@ -320,7 +320,7 @@ async def first_conversation_table(agent, llm):
 def show_args(tool, name):
     if tool == "show_table":
         return {"result_table": name}
-    return {"vega_lite_spec": {"mark": "bar", "data": {"name": name}, "encoding": {"x": {"field": "dport"}}}}
+    return {"vega_lite_spec": {"mark": "bar", "data": {"name": name}, "encoding": {"x": {"field": "dport", "type": "nominal"}}}}
 
 
 @pytest.mark.parametrize("tool", ["show_table", "show_chart"])

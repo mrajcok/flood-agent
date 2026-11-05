@@ -1,5 +1,6 @@
 """Query safety and limits (ticket #5), tested through the Agent turn seam."""
 
+import json
 import sqlite3
 
 import pytest
@@ -7,7 +8,7 @@ from conftest import ScriptedLLM, all_telemetry_values, collect, last_tool_resul
 
 from flood_agent import queries
 from flood_agent.agent import Conversation, TextDelta, TraceEntry, TurnEnd
-from flood_agent.llm import TextChunk
+from flood_agent.llm import TextChunk, ToolCallChunk
 
 
 async def run_one(make_agent, sql, max_result_rows=1000, **limits):
@@ -211,3 +212,23 @@ async def test_each_turn_uses_its_own_row_cap(make_agent):
     assert small["row_count"] == 2 and small["truncated_to"] == 2
     large = await _run_with_turn_cap(make_agent, SERIES_OF_5, 6)
     assert large["row_count"] == 5 and "truncated_to" not in large
+
+
+TYPED_SQL = ("SELECT dport, SUM(bytes) AS total_bytes, AVG(bytes) AS avg_bytes, NULL AS no_value, "
+             "CAST(dport AS TEXT) AS port_text FROM flows GROUP BY dport")
+EXPECTED_TYPES = {"dport": "INT",  # declared types are kept (CREATE TABLE AS declares INT)
+                  "total_bytes": "INTEGER", "avg_bytes": "REAL", "no_value": "ANY", "port_text": "TEXT"}
+
+
+async def test_computed_columns_report_the_type_of_their_values_not_any(make_agent):
+    """SQLite gives computed columns no declared type; the metadata names the stored values' type
+    instead, so the LLM can pick quantitative or nominal (ANY only when every value is NULL)."""
+    llm = ScriptedLLM(
+        [tool_call("run_query", sql=TYPED_SQL, title="t")],
+        lambda msgs: [ToolCallChunk("c2", "describe_table", json.dumps({"name": last_tool_result(msgs)["result_table"]}))],
+        [TextChunk("ok")],
+    )
+    await collect(await make_agent(llm), "q")
+    ran, described = last_tool_result(llm.calls[1]), last_tool_result(llm.calls[2])
+    assert {c["name"]: c["type"] for c in ran["columns"]} == EXPECTED_TYPES
+    assert {c["name"]: c["type"] for c in described["columns"]} == EXPECTED_TYPES

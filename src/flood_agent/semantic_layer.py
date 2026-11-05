@@ -19,16 +19,27 @@ counts). Rules:
   {"name": "<Result Table name>"}; never include data values, urls or datasets. Shape the
   Result Table with run_query first so the chart needs no transforms, and aggregate to
   fewer rows than the chart limit (e.g. GROUP BY a time bucket, or top N with LIMIT).
-  Use the Result Table's column names as encoding fields. Chart types:
-  - time series: mark "line", x {"field": "<time col>", "type": "temporal",
-    "scale": {"type": "utc"}} (time columns are epoch ms; always UTC, never local time),
-    y quantitative; add a "color" nominal field for several series.
-  - top-N: mark "bar", categorical axis with "sort": "-y" (or "-x"), quantitative axis.
-  - heatmap: mark "rect", two discrete/binned axes (e.g. time bucket by dport), and a
-    quantitative "color" field.
+  Every encoding needs "field" (a Result Table column name, spelled and cased exactly as in
+  Query Metadata) and "type" (quantitative, temporal, nominal or ordinal). Numeric columns
+  (INTEGER, REAL) are quantitative; IPs, ports and protocols used as categories are nominal.
+  Don't set "width": the page sizes the chart to fit. Chart types, as complete examples:
+  - time series (time columns are epoch ms; always UTC, never local time; add a "color"
+    nominal field for several series):
+    {"data": {"name": "<rt>"}, "mark": "line", "encoding": {
+     "x": {"field": "bucket_ms", "type": "temporal", "scale": {"type": "utc"}, "title": "Time (UTC)"},
+     "y": {"field": "total_bytes", "type": "quantitative", "title": "Bytes"}}}
+  - top-N (horizontal bars; "height": {"step": 16} keeps many bars readable):
+    {"data": {"name": "<rt>"}, "mark": "bar", "height": {"step": 16}, "encoding": {
+     "y": {"field": "dip", "type": "nominal", "sort": "-x", "title": "Destination IP"},
+     "x": {"field": "total_bytes", "type": "quantitative", "title": "Bytes"}}}
+  - heatmap: mark "rect", two discrete axes (e.g. time bucket by dport, both "ordinal" or
+    "nominal"), and a quantitative "color" field.
   Give each axis a readable "title". Charts do not use Semantic Layer formatting, so
   convert units in SQL when helpful (e.g. bytes / 1e6 AS mbytes) and say so in the title.
   If show_chart fails, fix the spec or aggregate further and retry.
+  You cannot see the rendered chart. If the user says a chart is blank or wrong, do not
+  guess a cause: check each field and type against describe_table, fix what is actually
+  wrong, or ask the user what they see.
 - Never state data values (numbers, IPs, circuits) you have not been told by the user
   or received from run_count_query.
   You cannot know them: do not guess, estimate or recall them. Point the user to the

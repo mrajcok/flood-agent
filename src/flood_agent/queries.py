@@ -275,10 +275,8 @@ def run_query(
             con.set_authorizer(None)
             con.commit()
             count = con.execute(f"SELECT COUNT(*) FROM results.{name}").fetchone()[0]
-            cols = [
-                {"name": r[1], "type": r[2] or "ANY"}
-                for r in con.execute(f"PRAGMA results.table_info({name})")
-            ]
+            info = [(r[1], r[2]) for r in con.execute(f"PRAGMA results.table_info({name})")]
+            cols = _column_types(con, f"results.{name}", info)
         except sqlite3.Error as e:
             return _failure(e, False, timeout_s, executed_sql=executed)
     finally:
@@ -343,6 +341,20 @@ def result_table_columns(results_db: Path, name: str) -> list[str] | None:
     return cols or None
 
 
+def _column_types(con: sqlite3.Connection, table: str, info: list[tuple[str, str]]) -> list[dict]:
+    """Each column's declared type, or for a computed column (SUM, AVG, ...: SQLite declares
+    none) the type of its first non-NULL value, e.g. INTEGER or REAL. ANY if every value is NULL.
+    `table` is already quoted or qualified for SQL."""
+    cols = []
+    for col, declared in info:
+        if not declared:
+            q = table_names.quote(col)
+            first = con.execute(f"SELECT upper(typeof({q})) FROM {table} WHERE {q} IS NOT NULL LIMIT 1").fetchone()
+            declared = first[0] if first else "ANY"
+        cols.append({"name": col, "type": declared})
+    return cols
+
+
 def describe_results_table(results_db: Path, name: str) -> dict | None:
     """Column names and types plus row count of a table in the results database, never rows.
     The caller has already checked that `name` is a registered, live table."""
@@ -354,9 +366,10 @@ def describe_results_table(results_db: Path, name: str) -> dict | None:
         if not info:
             return None
         count = con.execute(f"SELECT COUNT(*) FROM {table_names.quote(name)}").fetchone()[0]
+        columns = _column_types(con, table_names.quote(name), info)
     finally:
         con.close()
-    return {"columns": [{"name": n, "type": t or "ANY"} for n, t in info], "row_count": count}
+    return {"columns": columns, "row_count": count}
 
 
 class InvalidSort(ValueError):

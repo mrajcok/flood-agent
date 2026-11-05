@@ -9,7 +9,7 @@ from flood_agent.agent import Conversation, TraceReady
 from flood_agent.llm import TextChunk
 
 SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
-SPEC = {"mark": "bar", "encoding": {"x": {"field": "dport"}}}
+SPEC = {"mark": "bar", "encoding": {"x": {"field": "dport", "type": "nominal"}}}
 
 
 def chart_script():

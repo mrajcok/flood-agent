@@ -143,15 +143,14 @@ def test_retention_survives_a_rename(build_agent, web_client):
     assert client.get("/api/results/kept/rows").json()["retention_days"] == 7
 
 
-def test_deleting_the_conversation_drops_the_renamed_table(build_agent, web_client):
+def test_deleting_the_conversation_with_its_result_tables_keeps_the_saved_table(build_agent, web_client):
     client, cid, old = make(build_agent, web_client)
     rename(client, old, "kept")
-    client.post(f"/c/{cid}/delete", data={"tables": "delete_all"})
-    gone = client.get("/api/results/kept/rows")
-    assert gone.status_code == 410 and "expired" in gone.json()["detail"].lower()
+    client.post(f"/c/{cid}/delete", data={"tables": "delete_rt"})
+    assert client.get("/api/results/kept/rows").status_code == 200
 
 
-def test_display_shows_the_sql_name_with_a_copy_button():
+def test_display_shows_the_sql_name_with_a_copy_icon_that_inserts_it_into_the_chat():
     html = TEMPLATES.get_template("display_table.html").render(
         rows_url="/r", psv_url="/p", result_table="t", columns=[], settings_url="/s")
-    assert "clipboard" in html and "Copy" in html
+    assert 'class="copy"' in html and "insertIntoChat(name)" in html

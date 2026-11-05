@@ -2,21 +2,11 @@
 
 import re
 
-from conftest import ScriptedLLM, last_tool_result, tool_call
+from conftest import DAY, Clock, ScriptedLLM, last_tool_result, tool_call
 from test_conversations import ask, main_pane, table_script, turn_ids
 
 from flood_agent.llm import TextChunk
 from flood_agent.web import TEMPLATES
-
-DAY = 24 * 3_600_000
-
-
-class Clock:
-    def __init__(self, ms=1_000_000):
-        self.ms = ms
-
-    def __call__(self):
-        return self.ms
 
 
 def tables_in(client, cid):
@@ -41,12 +31,12 @@ def readable(client, name):
     return client.get(f"/api/results/{name}/rows").status_code == 200
 
 
-def test_preview_counts_live_tables_and_those_still_named_rt(build_agent, web_client):
+def test_preview_counts_live_result_tables_and_saved_tables_separately(build_agent, web_client):
     client, _, cid, _, _ = two_tables(build_agent, web_client)
-    assert client.get(f"/c/{cid}/delete-preview").json() == {"total": 2, "rt": 1}
+    assert client.get(f"/c/{cid}/delete-preview").json() == {"result": 1, "saved": 1}
     first_turn, second_turn = turn_ids(main_pane(client.get(f"/c/{cid}").text))
-    assert client.get(f"/c/{cid}/delete-preview?turn_id={first_turn}").json() == {"total": 1, "rt": 1}
-    assert client.get(f"/c/{cid}/delete-preview?turn_id={second_turn}").json() == {"total": 1, "rt": 0}
+    assert client.get(f"/c/{cid}/delete-preview?turn_id={first_turn}").json() == {"result": 1, "saved": 0}
+    assert client.get(f"/c/{cid}/delete-preview?turn_id={second_turn}").json() == {"result": 0, "saved": 1}
     assert client.get("/c/nope/delete-preview").status_code == 404
     assert client.get(f"/c/{cid}/delete-preview?turn_id=9999").status_code == 404
 
@@ -73,16 +63,18 @@ def test_a_kept_table_is_queryable_from_another_conversation(build_agent, web_cl
     assert "ok" in stream and "failed" not in stream
 
 
-def test_delete_rt_drops_only_tables_still_named_rt(build_agent, web_client):
+def test_deleting_result_tables_drops_only_rt_tables_and_keeps_saved_tables(build_agent, web_client):
     client, _, cid, first, second = two_tables(build_agent, web_client)
     client.post(f"/c/{cid}/delete", data={"tables": "delete_rt"})
     assert not readable(client, first) and readable(client, second)
 
 
-def test_delete_all_drops_every_table(build_agent, web_client):
+def test_delete_all_is_no_longer_a_choice(build_agent, web_client):
     client, _, cid, first, second = two_tables(build_agent, web_client)
-    client.post(f"/c/{cid}/delete", data={"tables": "delete_all"})
-    assert not readable(client, first) and not readable(client, second)
+    assert client.post(f"/c/{cid}/delete", data={"tables": "delete_all"}).status_code == 422
+    first_turn, _ = turn_ids(main_pane(client.get(f"/c/{cid}").text))
+    assert client.post(f"/c/{cid}/turns/{first_turn}/delete", data={"tables": "delete_all"}).status_code == 422
+    assert readable(client, first) and readable(client, second)
 
 
 def test_unknown_choice_is_rejected_and_deletes_nothing(build_agent, web_client):
@@ -100,10 +92,10 @@ def test_turn_deletion_keeps_by_default_and_honours_the_choices(build_agent, web
     assert readable(client, second)  # renamed, so delete_rt keeps it
 
 
-def test_turn_delete_all_drops_that_turns_tables_only(build_agent, web_client):
+def test_turn_delete_rt_drops_that_turns_result_tables_only(build_agent, web_client):
     client, _, cid, first, second = two_tables(build_agent, web_client)
     first_turn, _ = turn_ids(main_pane(client.get(f"/c/{cid}").text))
-    client.post(f"/c/{cid}/turns/{first_turn}/delete", data={"tables": "delete_all"})
+    client.post(f"/c/{cid}/turns/{first_turn}/delete", data={"tables": "delete_rt"})
     assert not readable(client, first) and readable(client, second)
 
 
@@ -119,15 +111,16 @@ def test_turn_ownership_matches_whole_table_names(build_agent, web_client):
     agent.store.add_result_table(cid, suffixed)
     agent.store.add_message(cid, int(one), {"role": "assistant", "content": f"made {suffixed}"})
     agent.store.add_message(cid, int(two), {"role": "assistant", "content": f"made {base}"})
-    assert client.get(f"/c/{cid}/delete-preview?turn_id={one}").json()["total"] == 1
-    assert client.get(f"/c/{cid}/delete-preview?turn_id={two}").json()["total"] == 1
+    assert client.get(f"/c/{cid}/delete-preview?turn_id={one}").json()["result"] == 1
+    assert client.get(f"/c/{cid}/delete-preview?turn_id={two}").json()["result"] == 1
 
 
-def test_dialog_markup_offers_the_three_choices(build_agent, web_client):
+def test_dialog_markup_offers_keep_or_delete_result_tables(build_agent, web_client):
     client, _, cid, _, _ = two_tables(build_agent, web_client)
     page = client.get(f"/c/{cid}").text
     assert 'id="delete-dialog"' in page
-    for value in ("keep", "delete_rt", "delete_all"):
+    for value in ("keep", "delete_rt"):
         assert f'value="{value}"' in page
+    assert 'value="delete_all"' not in page
     assert f'data-preview-url="/c/{cid}/delete-preview"' in page
     assert "delete-preview?turn_id=" in TEMPLATES.get_template("turn_delete.html").render(conversation_id=cid, turn_id=3)

@@ -2,22 +2,12 @@
 
 import re
 
-from conftest import ScriptedLLM, last_tool_result, tool_call
+from conftest import DAY, Clock, ScriptedLLM, last_tool_result, tool_call
 
 from flood_agent.llm import TextChunk
 from flood_agent.web import TEMPLATES
 
 BY_PORT = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport"
-DAY = 24 * 3_600_000
-
-
-class Clock:
-    def __init__(self, ms=1_000_000):
-        self.ms = ms
-
-    def __call__(self):
-        return self.ms
-
 
 def shown_table(build_agent, web_client):
     clock = Clock()

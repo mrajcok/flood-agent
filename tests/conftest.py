@@ -137,6 +137,19 @@ class ScriptedLLM:
         return json.dumps(self.calls)
 
 
+DAY = 24 * 3_600_000  # ms
+
+
+class Clock:
+    """An injectable store clock (epoch ms) that tests move forward by setting `ms`."""
+
+    def __init__(self, ms=1_000_000):
+        self.ms = ms
+
+    def __call__(self):
+        return self.ms
+
+
 def tool_call(name: str, call_id: str = "c1", **args) -> ToolCallChunk:
     return ToolCallChunk(id=call_id, name=name, arguments=json.dumps(args))
 

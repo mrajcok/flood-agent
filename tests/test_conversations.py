@@ -104,7 +104,7 @@ def test_deleting_a_conversation_removes_it_and_its_result_tables(build_agent, w
     table = re.search(r"/api/results/([a-z0-9_]+)/rows", client.get(f"/c/{cid}").text).group(1)
     assert client.get(f"/api/results/{table}/rows").status_code == 200
 
-    deleted = client.post(f"/c/{cid}/delete", data={"tables": "delete_all"}, follow_redirects=False)
+    deleted = client.post(f"/c/{cid}/delete", data={"tables": "delete_rt"}, follow_redirects=False)
     assert deleted.status_code == 303 and deleted.headers["location"] == "/"
 
     assert client.get(f"/c/{cid}").status_code == 404
@@ -235,7 +235,7 @@ def test_deleting_a_turn_removes_its_prompt_answer_and_result_tables_only(build_
     table = re.search(r"/api/results/([a-z0-9_]+)/rows", client.get(f"/c/{cid}").text).group(1)
     first, second = turn_ids(main_pane(client.get(f"/c/{cid}").text))
 
-    deleted = client.post(f"/c/{cid}/turns/{first}/delete", data={"tables": "delete_all"}, follow_redirects=False)
+    deleted = client.post(f"/c/{cid}/turns/{first}/delete", data={"tables": "delete_rt"}, follow_redirects=False)
 
     assert deleted.status_code == 303 and deleted.headers["location"] == f"/c/{cid}"
     page = main_pane(client.get(f"/c/{cid}").text)
@@ -280,7 +280,7 @@ def test_each_prompt_has_an_x_with_a_confirmation_both_live_and_on_reopen(build_
     page = main_pane(client.get(f"/c/{cid}").text)
     summary = page.split("<summary")[1].split("</summary>")[0]
     assert "hello" in summary and 'action="/c/' in summary and "&times;" in summary
-    assert "data-preview-url" in summary and "data-confirm" in summary
+    assert "data-preview-url" in summary and "data-title" in summary
 
 
 def test_sidebar_button_reads_new_chat_and_no_text_says_session(build_agent, web_client):

@@ -170,6 +170,21 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
         except InvalidLookupTable as e:
             raise HTTPException(422, str(e))
 
+    @app.delete("/api/tables/{name}", status_code=204)
+    def delete_table(name: str):
+        """Delete a Lookup, Saved or Result Table from the Tables dialog. Plain HTTP, never an MCP tool."""
+        try:
+            agent.delete_table(name)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except KeyError:
+            raise HTTPException(404, "unknown table")
+
+    @app.get("/api/tables")
+    def list_tables():
+        """Names of the tables the user can query, for the Tables dialog. Plain HTTP, never an MCP tool."""
+        return agent.list_tables()
+
     @app.post("/chat", response_class=HTMLResponse)
     def chat(request: Request, message: str = Form(...), conversation_id: str = Form(""), max_rows: str = Form(...)):
         max_result_rows = _parse_max_rows(max_rows)

@@ -52,6 +52,10 @@ class SemanticLayer:
     def window_end(self):
         return self.data.get("window_end")
 
+    def table_names(self) -> list[str]:
+        """Names of the Telemetry Database tables described in the Semantic Layer's `tables:` map."""
+        return list(self.data.get("tables") or {})
+
     def column_formats(self, columns: list[str], table: str = "flows") -> dict:
         """Display format per Result Table column, from Semantic Layer column metadata.
 

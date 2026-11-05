@@ -5,20 +5,11 @@ import re
 import sqlite3
 
 import pytest
-from conftest import ScriptedLLM, all_telemetry_values, last_tool_result, tool_call
+from conftest import DAY, Clock, ScriptedLLM, all_telemetry_values, last_tool_result, tool_call
 
 from flood_agent.llm import TextChunk, ToolCallChunk
 
-DAY = 24 * 3_600_000
 SECRET = "ZQ-LOOKUP-SECRET-4471"
-
-
-class Clock:
-    def __init__(self, ms=1_000_000):
-        self.ms = ms
-
-    def __call__(self):
-        return self.ms
 
 
 def add(client, name, rows, overwrite=False):
@@ -168,7 +159,7 @@ def test_sidebar_has_the_add_lookup_table_dialog(build_agent, web_client):
     html = web_client(build_agent(ScriptedLLM())).get("/").text
     assert "Add lookup table" in html
     assert "First row must be the column names. Separate columns with tab, comma or <code>|</code>." in html
-    assert "Overwrite existing table" in html
+    assert "overwrite existing table" in html
     assert "/api/lookup-tables" in html
 
 

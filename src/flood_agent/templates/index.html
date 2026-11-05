@@ -21,9 +21,11 @@
     .max-rows { display: flex; align-items: center; gap: .5rem; margin: 0; font-size: .9rem; color: #2a4ba0; }
     .max-rows label { font-weight: 600; }
     .max-rows select, .max-rows input[type=text], .toggle-all { font: inherit; color: #2a4ba0; background: #eef3fd; border: 1px solid #b9c7e6; border-radius: 999px; padding: .25rem .8rem; }
+    .max-rows select, .max-rows input[type=text] { color: #333; background-color: #f6f7f9; border-color: #c4c9d4; }  /* gray, like the Keep for select */
     .max-rows select { appearance: none; -webkit-appearance: none; cursor: pointer; padding-right: 1.9rem;
-      background: #eef3fd url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%232a4ba0' stroke-width='1.6'/%3E%3C/svg%3E") no-repeat right .75rem center; }
-    .max-rows select:hover, .toggle-all:hover { background-color: #dce7fb; }
+      background: #f6f7f9 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23333' stroke-width='1.6'/%3E%3C/svg%3E") no-repeat right .75rem center; }
+    .max-rows select:hover { background-color: #eceef2; }
+    .toggle-all:hover { background-color: #dce7fb; }
     .max-rows select:focus-visible, .max-rows input[type=text]:focus-visible, .toggle-all:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
     .max-rows input[type=text] { box-sizing: content-box; width: 9ch; min-width: 0; padding: .25rem .5rem; text-align: right; }
     .toggle-all { cursor: pointer; font-size: .9rem; }
@@ -41,8 +43,10 @@
     #prompt-area { flex: 1; padding-right: .5rem; }
     aside a.new { display: block; padding: .5rem .75rem; border-radius: .6rem; background: #4a6fd3; color: #fff; text-align: center; text-decoration: none; }
     aside a.new:hover { background: #3b5cb8; }
-    aside .lookup { margin: 0 0 .5rem; }
-    aside .add-lookup { width: 100%; padding: .4rem .75rem; border-radius: .6rem; border: 1px solid #4a6fd3; background: transparent; color: inherit; cursor: pointer; }
+    aside .lookup, aside .show-tables { margin: 0 0 .5rem; }
+    aside .sidebar-action { font: inherit; width: 100%; padding: .4rem .75rem; border-radius: .6rem; border: 1px solid #b9c7e6; background: #eef3fd; color: #2a4ba0; cursor: pointer; }  /* secondary, like Collapse turns */
+    aside .sidebar-action:hover { background: #dce7fb; }
+    aside .sidebar-action:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
     dialog { border: 1px solid #ccc; border-radius: .75rem; box-shadow: 0 8px 24px rgba(0,0,0,.2); padding: 1.25rem 1.5rem; }
     dialog::backdrop { background: rgba(0,0,0,.35); }
     dialog form { flex-direction: column; align-items: stretch; gap: .75rem; margin: 0; }
@@ -61,17 +65,42 @@
     dialog .actions button.danger:hover { background: #a31f1f; border-color: #a31f1f; }
     dialog .actions button.danger:focus-visible { outline-color: #c62828; }
     #delete-dialog { width: min(30rem, 90vw); }
+    #delete-result-choice { display: flex; flex-direction: column; gap: .75rem; }
     .lookup dialog { width: min(36rem, 90vw); }
     .lookup dialog textarea { width: 100%; box-sizing: border-box; font-family: monospace; }
     .lookup dialog .prefix { font-family: monospace; }
     .lookup dialog .hint { font-size: .85rem; }
-    .lookup dialog .error { color: #b3261e; }
+    .lookup dialog .error, .show-tables dialog .error { color: #b3261e; }
+    .show-tables dialog[open] { width: min(30rem, 90vw); margin: 4rem auto auto; max-height: calc(100vh - 6rem); box-sizing: border-box; display: flex; flex-direction: column; gap: .75rem; }
+    .show-tables dialog .filters { display: flex; flex-wrap: wrap; gap: .25rem 1.25rem; font-size: .9rem; }
+    .show-tables dialog .table-list { flex: 1 1 auto; min-height: 4rem; overflow-y: auto; border-top: 1px solid #e3e6ec; border-bottom: 1px solid #e3e6ec; padding: .25rem 0; }
+    .show-tables dialog h4 { margin: .6rem 0 .25rem; font-size: .9rem; color: #2a4ba0; }
+    .show-tables dialog ul { list-style: none; padding: 0; margin: 0; }
+    .show-tables dialog li { display: block; padding: .1rem .25rem; border-radius: .35rem; }  /* not the sidebar's flex li */
+    .show-tables dialog li .row { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+    .show-tables dialog li .row-actions { flex: none; display: flex; gap: .25rem; }
+    .show-tables dialog li .confirm button { font: inherit; font-size: .8rem; padding: .1rem .6rem; border-radius: .4rem; border: 1px solid #b9c3d6; background: #fff; cursor: pointer; }
+    .show-tables dialog li .confirm button.danger { border-color: #c62828; background: #c62828; color: #fff; }
+    .show-tables dialog li:hover { background: #f2f4f8; }
+    .show-tables dialog li code { overflow-wrap: anywhere; }
+    .show-tables dialog li .row code { flex: 1 1 auto; }
+    .show-tables dialog li .expires { flex: none; font-size: .8rem; color: #6b7280; white-space: nowrap; }
+    .show-tables dialog .copy, .show-tables dialog .delete { flex: none; background: none; border: 0; color: #4a6fd3; cursor: pointer; font-size: 1rem; line-height: 1; padding: .15rem .3rem; border-radius: .3rem; }
+    .show-tables dialog .copy:hover, .show-tables dialog .delete:hover { background: #dce7fb; }
+    .show-tables dialog .delete { color: #c62828; }
+    .show-tables dialog .delete:hover { background: #fbe3e3; }
+    .show-tables dialog .copy:focus-visible, .show-tables dialog .delete:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
     .toast { position: fixed; left: 50%; top: 1rem; transform: translateX(-50%); z-index: 20; max-width: min(36rem, 90vw);
              padding: .6rem 1rem; border-radius: .6rem; background: #1f3a2b; color: #fff; box-shadow: 0 4px 16px rgba(0,0,0,.25); }
     aside ul { list-style: none; padding: 0; margin: .5rem 0; }
     aside li { display: flex; align-items: center; gap: .25rem; padding: 0 .4rem 0 .6rem; }
     aside li a { display: block; flex: 1; min-width: 0; padding: .25rem 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    aside li.current { background: #e8f0fe; border-radius: .5rem; }
+    /* Conversations read as a list, not links or buttons: plain text, gray on hover, darker gray for the open one. */
+    aside > ul > li { border-radius: .4rem; }
+    aside > ul > li a { color: #1f2937; text-decoration: none; }
+    aside > ul > li:hover { background: #f4f5f7; }
+    aside > ul > li.current { background: #eceef2; }
+    aside > ul > li.current a { font-weight: 600; }
     [x-cloak] { display: none !important; }
     aside .menu { position: relative; }
     aside .dots { background: none; border: 0; color: #666; cursor: pointer; padding: 0 .4rem; font-size: 1.1rem; line-height: 1; }
@@ -87,13 +116,21 @@
     th, td { border: 0; border-bottom: 1px solid #ddd; padding: .25rem .6rem; text-align: left; }
     th { border-bottom-color: #999; }
     .table-name { margin: .5rem 0 .25rem; font-size: .95rem; }
-    .table-name .name { font: inherit; font-weight: 600; color: #2a4ba0; background: none; border: 0; border-bottom: 1px dashed #4a6fd3; padding: 0 .1rem; cursor: text; }
+    .table-name .name { font: inherit; font-weight: 600; color: #2a4ba0; background: none; border: 0; border-bottom: 1px dashed #4a6fd3; padding: 0 .1rem; cursor: pointer; }
     .table-name .name::after { content: " \270E"; font-weight: 400; opacity: .7; }
     .table-name .name:hover { background: #eef3fd; }
+    .table-name .copy { background: none; border: 0; color: #4a6fd3; cursor: pointer; font-size: 1rem; line-height: 1; padding: .15rem .3rem; border-radius: .3rem; }
+    .table-name .copy:hover { background: #dce7fb; }
+    .table-name .copy:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
     .table-name .editor { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
-    .table-name input[type=text] { font: inherit; min-width: 16rem; padding: .2rem .5rem; border: 1px solid #b9c7e6; border-radius: .4rem; }
+    .table-name input[type=text] { font: inherit; min-width: 14rem; padding: .2rem .5rem; border: 1px solid #b9c7e6; border-radius: .4rem; }
     .table-name input[type=number] { font: inherit; width: 6rem; padding: .2rem .4rem; border: 1px solid #b9c7e6; border-radius: .4rem; }
-    .table-name select { font: inherit; padding: .2rem .4rem; border: 1px solid #b9c7e6; border-radius: .4rem; color: #2a4ba0; background: #eef3fd; }
+    .table-name select { font: inherit; padding: .2rem .4rem; border: 1px solid #c4c9d4; border-radius: .4rem; color: #333; background: #f6f7f9; cursor: pointer; }
+    .table-name .editor button { font: inherit; font-size: .9rem; padding: .25rem .9rem; border-radius: .5rem; cursor: pointer; border: 1px solid #c4c9d4; background: #fff; color: #333; }
+    .table-name .editor button:hover { background: #f2f4f8; }
+    .table-name .editor button:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 2px; }
+    .table-name .editor button.primary { border-color: #4a6fd3; background: #4a6fd3; color: #fff; }
+    .table-name .editor button.primary:hover { background: #3b5cb8; border-color: #3b5cb8; }
     .table-name .err { color: #a00; font-size: .85rem; }
     .pager { display: flex; gap: .75rem; align-items: center; font-size: .9rem; }
     .badge-truncated { padding: .1rem .6rem; border: 1px solid #e0c36a; border-radius: 999px; background: #fdf3d0; color: #7a5b00; font-size: .8rem; }
@@ -116,7 +153,13 @@
     .canned ul { list-style: none; padding: 0; margin: .25rem 0; }
     .canned .follow-up { margin-left: 1.5rem; }
     .canned button { background: none; border: 0; padding: .15rem 0; color: #06c; cursor: pointer; text-align: left; }
-    input[name=message] { flex: 1; padding: .5rem; }
+    .chat-box { flex: 1; position: relative; display: flex; }
+    textarea[name=message] { flex: 1; box-sizing: border-box; padding: .5rem 2.4rem .5rem .5rem; font: inherit; line-height: 1.4;
+                             resize: none; overflow-y: auto; max-height: 40vh; border: 1px solid #999; border-radius: .5rem; }
+    .chat-box .send { position: absolute; right: .3rem; bottom: .3rem; width: 1.9rem; height: 1.9rem; padding: 0; border: 0; border-radius: .4rem;
+                      background: #4a6fd3; color: #fff; font-size: 1.1rem; line-height: 1; cursor: pointer; }
+    .chat-box .send:hover { background: #2a4ba0; }
+    .chat-box .send:focus-visible { outline: 2px solid #2a4ba0; outline-offset: 2px; }
   </style>
 </head>
 <body>
@@ -132,7 +175,7 @@
                     new MutationObserver(refresh).observe(document.getElementById('chat'), { childList: true, subtree: true, attributes: true, attributeFilter: ['open'] });
                     refresh()"
             @click="const open = !anyOpen; document.querySelectorAll('details.turn').forEach(d => d.open = open)"
-            x-text="anyOpen ? 'Collapse prompts' : 'Expand prompts'">Collapse prompts</button>
+            x-text="anyOpen ? 'Collapse turns' : 'Expand turns'">Collapse turns</button>
     <div class="max-rows" x-data="{ choice: '10000', custom: '' }">
       <label for="max-rows-choice">Max result rows</label>
       <select id="max-rows-choice" x-model="choice">
@@ -181,10 +224,27 @@
   </div>
   {% endif %}
   </div>
-  <form hx-post="/chat" hx-include="#max_rows" hx-target="#chat" hx-swap="beforeend" hx-on::after-request="this.reset()">
+  <form hx-post="/chat" hx-include="#max_rows" hx-target="#chat" hx-swap="beforeend" hx-on::after-request="this.reset()"
+        hx-on::before-request="if (!this.elements.message.value.trim()) event.preventDefault()"
+        x-data="{ lastEscape: 0,
+          escape() {
+            /* Two presses within 600 ms clear the box. */
+            const now = Date.now();
+            if (now - this.lastEscape < 600) { $refs.message.value = ''; this.grow(); this.lastEscape = 0; }
+            else this.lastEscape = now;
+          },
+          grow() {
+          /* One row to start, taller as the prompt grows (up to max-height, then it scrolls). */
+          const box = $refs.message;
+          box.style.height = 'auto';
+          box.style.height = box.scrollHeight + box.offsetHeight - box.clientHeight + 'px';
+        } }" @reset="$nextTick(() => { grow(); $refs.message.focus(); })">
     <input type="hidden" id="conversation_id" name="conversation_id" value="{{ current_id or '' }}">
-    <input name="message" placeholder="Write a prompt to analyze flow traffic..." autocomplete="off" required>
-    <button type="submit">Ask</button>
+    <div class="chat-box">
+      <textarea name="message" x-ref="message" rows="1" placeholder="Write a prompt to analyze flow traffic..." autocomplete="off" required
+                @input="grow()" @keydown.escape="escape()" @keydown.enter="if (!$event.shiftKey && !$event.isComposing && $event.keyCode !== 229) { $event.preventDefault(); $el.form.requestSubmit(); }"></textarea>
+      <button type="submit" class="send" title="Send message (Enter)" aria-label="Send message (Enter)">&#x23CE;</button>
+    </div>
   </form>
   </main>
   </div>
@@ -195,22 +255,25 @@
   </div>
   <dialog id="delete-dialog" aria-labelledby="delete-title">
     <form method="dialog">
-      <h3 id="delete-title">What should happen to its Result Tables?</h3>
-      <label><input type="radio" name="choice" value="keep" checked> <span>Keep all tables; they age off per their retention</span></label>
-      <label id="delete-rt-option"><input type="radio" name="choice" value="delete_rt"> <span>Delete only tables still named <code>rt_*</code> (<span id="delete-rt-count"></span>)</span></label>
-      <label><input type="radio" name="choice" value="delete_all"> <span>Delete all its Result Tables (<span id="delete-all-count"></span>)</span></label>
+      <h3 id="delete-title"></h3>
+      <div id="delete-result-choice">
+        <label><input type="radio" name="choice" value="keep" checked> <span>Keep its <span class="delete-result-count"></span> (named <code>rt_&hellip;</code>); they expire per their Retention</span></label>
+        <label><input type="radio" name="choice" value="delete_rt"> <span>Delete its <span class="delete-result-count"></span> now</span></label>
+      </div>
+      <p id="delete-saved-note"></p>
       <div class="actions"><button value="ok" class="danger">Delete</button> <button value="cancel" formnovalidate>Cancel</button></div>
     </form>
   </dialog>
   <script>
-    // Deleting a Conversation or exchange: ask what to do with its live Result Tables, or fall back
-    // to the usual confirmation when it has none.
+    // Deleting a Conversation or exchange always asks in this dialog: whether to keep or delete its
+    // live Result Tables (rt_*) if it has any, and that its Saved Tables are kept (ADR 0004).
     document.addEventListener("submit", async (event) => {
       const form = event.target;
       if (!form.classList || !form.classList.contains("delete-form") || form.dataset.confirmed) return;
       event.preventDefault();
-      let counts = { total: 0, rt: 0 };
-      try { counts = await (await fetch(form.dataset.previewUrl)).json(); } catch (e) { /* fall back to the usual confirmation */ }
+      let counts = { result: 0, saved: 0 };
+      try { counts = await (await fetch(form.dataset.previewUrl)).json(); } catch (e) { /* ask without the counts */ }
+      const tables = (n, kind) => n + " " + kind + (n === 1 ? "" : "s");
       const finish = (choice) => {
         let field = form.querySelector('input[name="tables"]');
         if (!field) { field = document.createElement("input"); field.type = "hidden"; field.name = "tables"; form.appendChild(field); }
@@ -218,11 +281,14 @@
         form.dataset.confirmed = "1";
         form.submit();
       };
-      if (!counts.total) { if (confirm(form.dataset.confirm)) finish("keep"); return; }
       const dialog = document.getElementById("delete-dialog");
-      document.getElementById("delete-rt-count").textContent = counts.rt;
-      document.getElementById("delete-all-count").textContent = counts.total;
-      document.getElementById("delete-rt-option").hidden = counts.rt === counts.total;
+      document.getElementById("delete-title").textContent = form.dataset.title;
+      document.getElementById("delete-result-choice").hidden = !counts.result;
+      dialog.querySelectorAll(".delete-result-count").forEach(el => el.textContent = tables(counts.result, "Result Table"));
+      const note = document.getElementById("delete-saved-note");
+      note.hidden = !counts.saved;
+      note.textContent = "Its " + tables(counts.saved, "Saved Table") + (counts.saved === 1
+        ? " will be kept. Delete it from Tables." : " will be kept. Delete them from Tables.");
       dialog.querySelector('input[value="keep"]').checked = true;
       dialog.returnValue = "";
       dialog.onclose = () => {
@@ -230,6 +296,21 @@
       };
       dialog.showModal();
     }, true);
+  </script>
+  <script>
+    // Copy a table name to the clipboard and insert it into the chat box at the cursor, spaced from
+    // the words around it; used by the Tables dialog and each table Display.
+    function insertIntoChat(name) {
+      try { navigator.clipboard.writeText(name).catch(() => {}); } catch (e) { /* no clipboard: still insert */ }
+      const input = document.querySelector("textarea[name=message]");
+      const value = input.value;
+      const before = value.slice(0, input.selectionStart), after = value.slice(input.selectionEnd);
+      const head = before + (before && !/\s$/.test(before) ? " " : "") + name;
+      input.value = head + (after && !/^\s/.test(after) ? " " : "") + after;
+      input.focus();
+      input.setSelectionRange(head.length, head.length);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
   </script>
   <script>
     // Keep the newest streamed content in view, unless the user has scrolled up to read.

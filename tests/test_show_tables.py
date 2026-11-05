@@ -26,7 +26,7 @@ def test_telemetry_tables_are_those_described_in_the_semantic_layer(build_agent,
     client = web_client(build_agent(ScriptedLLM()))
     r = client.get("/api/tables")
     assert r.status_code == 200
-    assert r.json() == {"telemetry": ["dns", "flows"], "lookup": [], "saved": [], "result": [], "retention_days": {}}
+    assert r.json() == {"telemetry": ["dns", "flows"], "lookup": [], "saved": [], "result": [], "retention_days": {}, "expires_in_ms": {}}
 
 
 def test_lookup_tables_are_listed_sorted(build_agent, web_client):
@@ -54,6 +54,19 @@ def test_saved_and_result_tables_come_with_their_retention_in_days(build_agent, 
     assert client.get("/api/tables").json()["retention_days"] == {"ddos_victims": 30, a_table: 1}
     client.post(f"/api/results/{a_table}/settings", data={"retention_days": "0.5"})
     assert client.get("/api/tables").json()["retention_days"][a_table] == 0.5
+
+
+def test_saved_and_result_tables_come_with_the_time_left_before_they_expire(build_agent, web_client):
+    clock = Clock()
+    client = web_client(build_agent(ScriptedLLM(*table_script(), *table_script()), clock=clock, result_ttl_ms=DAY))
+    a, _ = ask(client, "top ports")
+    clock.ms += 3_600_000
+    b, _ = ask(client, "top talkers")
+    a_table, b_table = table_of(client, a), table_of(client, b)
+    client.post(f"/api/results/{b_table}/settings", data={"name": "ddos_victims", "retention_days": "30"})
+    clock.ms += 1000
+    assert client.get("/api/tables").json()["expires_in_ms"] == {
+        a_table: DAY - 3_600_000 - 1000, "ddos_victims": 30 * DAY - 1000}
 
 
 def test_result_tables_past_their_retention_are_left_out(build_agent, web_client):

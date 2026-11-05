@@ -33,6 +33,16 @@
            : days * 24 >= 1 ? [Math.round(days * 240) / 10, 'hour'] : [Math.max(1, Math.round(days * 1440)), 'minute'];
          return n + ' ' + unit + (n === 1 ? '' : 's');
        },
+       expiresIn(name) {
+         /* Time left, to the nearest hour, or the nearest day from a week on; '' without a Retention. */
+         const ms = this.tables.expires_in_ms[name];
+         if (ms === undefined) return '';
+         const hours = Math.round(ms / 3600000);
+         if (hours < 1) return 'expires in under 1h';
+         if (hours >= 7 * 24) return 'expires in ' + Math.round(ms / 86400000) + 'd';  /* from ms: rounding twice drifts */
+         const d = Math.floor(hours / 24), h = hours % 24;
+         return 'expires in ' + [d && d + 'd', h && h + 'h'].filter(Boolean).join(' ');
+       },
        async remove(name) {
          /* Telemetry tables are never offered; the server refuses them anyway. */
          this.error = '';
@@ -51,7 +61,7 @@
        },
        insertIntoChat(name) {
          try { navigator.clipboard.writeText(name).catch(() => {}); } catch (e) {}
-         const input = document.querySelector('input[name=message]');
+         const input = document.querySelector('textarea[name=message]');
          const value = input.value;
          const before = value.slice(0, input.selectionStart), after = value.slice(input.selectionEnd);
          const head = before + (before && !/\s$/.test(before) ? ' ' : '') + name;
@@ -79,7 +89,7 @@
                 <li>
                   <template x-if="confirming !== name">
                     <div class="row"><code x-text="name"></code>
-                      <template x-if="retention(name)"><span class="retention" :title="'Retention: expires ' + retention(name) + ' after it was created'" x-text="retention(name)"></span></template>
+                      <template x-if="expiresIn(name)"><span class="expires" :title="'Retention: ' + retention(name)" x-text="expiresIn(name)"></span></template>
                       <span class="row-actions">
                       <button type="button" class="copy" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into the chat'" @click="insertIntoChat(name)">&#x29C9;</button>
                       <!-- Hidden, not removed, for Telemetry so the copy icons line up across sections. -->

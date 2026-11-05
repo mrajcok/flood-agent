@@ -80,7 +80,7 @@
     .show-tables dialog li:hover { background: #f2f4f8; }
     .show-tables dialog li code { overflow-wrap: anywhere; }
     .show-tables dialog li .row code { flex: 1 1 auto; }
-    .show-tables dialog li .retention { flex: none; font-size: .8rem; color: #6b7280; white-space: nowrap; }
+    .show-tables dialog li .expires { flex: none; font-size: .8rem; color: #6b7280; white-space: nowrap; }
     .show-tables dialog .copy, .show-tables dialog .delete { flex: none; background: none; border: 0; color: #4a6fd3; cursor: pointer; font-size: 1rem; line-height: 1; padding: .15rem .3rem; border-radius: .3rem; }
     .show-tables dialog .copy:hover, .show-tables dialog .delete:hover { background: #dce7fb; }
     .show-tables dialog .delete { color: #c62828; }
@@ -136,7 +136,13 @@
     .canned ul { list-style: none; padding: 0; margin: .25rem 0; }
     .canned .follow-up { margin-left: 1.5rem; }
     .canned button { background: none; border: 0; padding: .15rem 0; color: #06c; cursor: pointer; text-align: left; }
-    input[name=message] { flex: 1; padding: .5rem; }
+    .chat-box { flex: 1; position: relative; display: flex; }
+    textarea[name=message] { flex: 1; box-sizing: border-box; padding: .5rem 2.4rem .5rem .5rem; font: inherit; line-height: 1.4;
+                             resize: none; overflow-y: auto; max-height: 40vh; border: 1px solid #999; border-radius: .5rem; }
+    .chat-box .send { position: absolute; right: .3rem; bottom: .3rem; width: 1.9rem; height: 1.9rem; padding: 0; border: 0; border-radius: .4rem;
+                      background: #4a6fd3; color: #fff; font-size: 1.1rem; line-height: 1; cursor: pointer; }
+    .chat-box .send:hover { background: #2a4ba0; }
+    .chat-box .send:focus-visible { outline: 2px solid #2a4ba0; outline-offset: 2px; }
   </style>
 </head>
 <body>
@@ -201,10 +207,20 @@
   </div>
   {% endif %}
   </div>
-  <form hx-post="/chat" hx-include="#max_rows" hx-target="#chat" hx-swap="beforeend" hx-on::after-request="this.reset()">
+  <form hx-post="/chat" hx-include="#max_rows" hx-target="#chat" hx-swap="beforeend" hx-on::after-request="this.reset()"
+        hx-on::before-request="if (!this.elements.message.value.trim()) event.preventDefault()"
+        x-data="{ grow() {
+          /* One row to start, taller as the prompt grows (up to max-height, then it scrolls). */
+          const box = $refs.message;
+          box.style.height = 'auto';
+          box.style.height = box.scrollHeight + box.offsetHeight - box.clientHeight + 'px';
+        } }" @reset="$nextTick(() => { grow(); $refs.message.focus(); })">
     <input type="hidden" id="conversation_id" name="conversation_id" value="{{ current_id or '' }}">
-    <input name="message" placeholder="Write a prompt to analyze flow traffic..." autocomplete="off" required>
-    <button type="submit">Ask</button>
+    <div class="chat-box">
+      <textarea name="message" x-ref="message" rows="1" placeholder="Write a prompt to analyze flow traffic..." autocomplete="off" required
+                @input="grow()" @keydown.enter="if (!$event.shiftKey && !$event.isComposing && $event.keyCode !== 229) { $event.preventDefault(); $el.form.requestSubmit(); }"></textarea>
+      <button type="submit" class="send" title="Send message (Enter)" aria-label="Send message (Enter)">&#x23CE;</button>
+    </div>
   </form>
   </main>
   </div>

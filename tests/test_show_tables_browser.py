@@ -50,26 +50,38 @@ def test_tables_sits_above_add_lookup_and_lists_the_four_sections(live_page, tab
     expect(dialog).not_to_have_attribute("open", "")
 
 
-def test_saved_and_result_tables_show_their_retention_and_the_others_none(live_page, tables):
+def row_in(dialog, name):
+    return dialog.locator("li", has=dialog.page.locator("code", has_text=name))
+
+
+def test_saved_and_result_tables_show_when_they_expire_and_the_others_nothing(live_page, tables):
     agent, rt_name = tables
     dialog = open_tables(live_page(agent=agent))
-
-    def row(name):
-        return dialog.locator("li", has=dialog.page.locator("code", has_text=name))
-
-    expect(row("ddos_victims").locator(".retention")).to_have_text("30 days")
-    expect(row(rt_name).locator(".retention")).to_have_text("1 day")
-    expect(row(rt_name).locator(".retention")).to_have_attribute("title", "Retention: expires 1 day after it was created")
-    expect(row("flows").locator(".retention")).to_have_count(0)
-    expect(row("lookup_watch").locator(".retention")).to_have_count(0)
+    expect(row_in(dialog, "ddos_victims").locator(".expires")).to_have_text("expires in 30d")
+    expect(row_in(dialog, rt_name).locator(".expires")).to_have_text("expires in 1d")
+    expect(row_in(dialog, rt_name).locator(".expires")).to_have_attribute("title", "Retention: 1 day")
+    expect(row_in(dialog, "flows").locator(".expires")).to_have_count(0)
+    expect(row_in(dialog, "lookup_watch").locator(".expires")).to_have_count(0)
 
 
-@pytest.mark.parametrize("days, shown", [("0.5", "12 hours"), ("1.5", "1.5 days"), ("0.01", "14 minutes")])
-def test_retention_under_a_day_is_shown_in_hours_or_minutes(live_page, tables, days, shown):
+# A table made seconds ago with Retention `days` expires in about that long; rounded to the nearest hour,
+# and to the nearest day from 7 days on.
+@pytest.mark.parametrize("days, shown", [
+    (2 + 3 / 24, "expires in 2d 3h"), (0.5, "expires in 12h"), (2 + 10.6 / 24, "expires in 2d 11h"),
+    (6 + 23.6 / 24, "expires in 7d"), (7 + 11.6 / 24, "expires in 7d"), (10.6, "expires in 11d"), (0.01, "expires in under 1h")])
+def test_time_left_is_rounded_to_hours_and_whole_days_from_a_week(live_page, tables, days, shown):
     agent, rt_name = tables
-    agent.update_result_table(rt_name, retention_days=float(days))
+    agent.update_result_table(rt_name, retention_days=days)
     dialog = open_tables(live_page(agent=agent))
-    expect(dialog.locator("li", has=dialog.page.locator("code", has_text=rt_name)).locator(".retention")).to_have_text(shown)
+    expect(row_in(dialog, rt_name).locator(".expires")).to_have_text(shown)
+
+
+@pytest.mark.parametrize("days, shown", [(0.5, "12 hours"), (1.5, "1.5 days"), (0.01, "14 minutes")])
+def test_the_tooltip_gives_the_retention_in_hours_or_minutes_under_a_day(live_page, tables, days, shown):
+    agent, rt_name = tables
+    agent.update_result_table(rt_name, retention_days=days)
+    dialog = open_tables(live_page(agent=agent))
+    expect(row_in(dialog, rt_name).locator(".expires")).to_have_attribute("title", "Retention: " + shown)
 
 
 def test_checkboxes_hide_result_and_lookup_tables_and_are_remembered_after_reload(live_page, tables):

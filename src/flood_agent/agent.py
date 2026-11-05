@@ -336,19 +336,20 @@ class Agent:
     def list_tables(self) -> dict:
         """Names of every table the user can query, by kind, each sorted: Telemetry Database tables
         described in the Semantic Layer, Lookup Tables, and the live Saved Tables and Result Tables
-        from every Conversation, plus `retention_days` for each of the last two (the only kinds with
-        a Retention). For the web page only; touches no Conversation, message or Trace."""
+        from every Conversation, plus `retention_days` and `expires_in_ms` for each of the last two
+        (the only kinds with a Retention). For the web page only; touches no Conversation, message or Trace."""
         self.sweep_expired()
-        retentions = self.store.live_result_table_retentions(self.config.result_ttl_ms)
+        lifetimes = self.store.live_result_table_lifetimes(self.config.result_ttl_ms)
         saved, result = [], []
-        for name in retentions:  # every live query-made table
+        for name in lifetimes:  # every live query-made table
             (result if table_names.is_result_table_name(name) else saved).append(name)
         return {
             "telemetry": sorted(self.semantic_layer.table_names()),
             "lookup": self.store.lookup_table_names(),
             "saved": saved,
             "result": result,
-            "retention_days": {name: ms / DAY_MS for name, ms in retentions.items()},
+            "retention_days": {name: life.retention_ms / DAY_MS for name, life in lifetimes.items()},
+            "expires_in_ms": {name: life.expires_in_ms for name, life in lifetimes.items()},
         }
 
     def delete_table(self, name: str) -> None:

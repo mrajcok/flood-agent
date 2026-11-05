@@ -9,7 +9,7 @@ def ask_for_a_table(build_agent, live_page, days=None):
     agent = build_agent(ScriptedLLM(*table_script()))
     page = live_page(agent=agent)
     page.get_by_placeholder("Write a prompt").fill("show me flows")
-    page.get_by_role("button", name="Ask").click()
+    page.get_by_role("button", name="Send message (Enter)").click()
     expect(page.locator(".reply", has_text="Here you go.")).to_be_visible()
     (table,) = agent.store.all_live_result_table_names()
     if days is not None:

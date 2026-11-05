@@ -36,7 +36,7 @@ def test_a_rejected_lookup_table_keeps_the_dialog_open_with_the_error(live_page)
 
 def ask_for_a_table(page):
     page.get_by_placeholder("Write a prompt").fill("show me flows")
-    page.get_by_role("button", name="Ask").click()
+    page.get_by_role("button", name="Send message (Enter)").click()
     expect(page.locator(".reply", has_text="Here you go.")).to_be_visible()
 
 
@@ -81,7 +81,7 @@ def test_deleting_a_conversation_without_tables_still_uses_the_custom_dialog(bui
     page = live_page(agent=build_agent(ScriptedLLM([TextChunk("hello there")])))
     native = no_native_dialogs(page)
     page.get_by_placeholder("Write a prompt").fill("hi")
-    page.get_by_role("button", name="Ask").click()
+    page.get_by_role("button", name="Send message (Enter)").click()
     expect(page.locator(".reply", has_text="hello there")).to_be_visible()
 
     dialog = open_conversation_delete(page)

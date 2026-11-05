@@ -132,7 +132,7 @@
   <ul>
     {% for c in conversations %}
     <li x-data="{ open: false, editing: false }"{% if c.id == current_id %} class="current"{% endif %}>
-      <a href="/c/{{ c.id }}" x-show="!editing" @mouseenter="$el.title = $el.scrollWidth > $el.clientWidth ? $el.textContent : ''">{{ c.title }}</a>
+      <a href="/c/{{ c.id }}" x-show="!editing" @mouseenter="$el.title = $el.scrollWidth <= $el.clientWidth ? '' : $el.textContent">{{ c.title }}</a>
       <form class="rename" method="post" action="/c/{{ c.id }}/rename" x-show="editing" x-cloak>
         <input type="text" name="title" value="{{ c.title }}" maxlength="60" required x-ref="title" aria-label="Conversation name"
                @keydown.escape="editing = false" @blur="editing = false">

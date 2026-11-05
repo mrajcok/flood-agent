@@ -212,7 +212,14 @@
   </div>
   <form hx-post="/chat" hx-include="#max_rows" hx-target="#chat" hx-swap="beforeend" hx-on::after-request="this.reset()"
         hx-on::before-request="if (!this.elements.message.value.trim()) event.preventDefault()"
-        x-data="{ grow() {
+        x-data="{ lastEscape: 0,
+          escape() {
+            /* Two presses within 600 ms clear the box. */
+            const now = Date.now();
+            if (now - this.lastEscape < 600) { $refs.message.value = ''; this.grow(); this.lastEscape = 0; }
+            else this.lastEscape = now;
+          },
+          grow() {
           /* One row to start, taller as the prompt grows (up to max-height, then it scrolls). */
           const box = $refs.message;
           box.style.height = 'auto';
@@ -221,7 +228,7 @@
     <input type="hidden" id="conversation_id" name="conversation_id" value="{{ current_id or '' }}">
     <div class="chat-box">
       <textarea name="message" x-ref="message" rows="1" placeholder="Write a prompt to analyze flow traffic..." autocomplete="off" required
-                @input="grow()" @keydown.enter="if (!$event.shiftKey && !$event.isComposing && $event.keyCode !== 229) { $event.preventDefault(); $el.form.requestSubmit(); }"></textarea>
+                @input="grow()" @keydown.escape="escape()" @keydown.enter="if (!$event.shiftKey && !$event.isComposing && $event.keyCode !== 229) { $event.preventDefault(); $el.form.requestSubmit(); }"></textarea>
       <button type="submit" class="send" title="Send message (Enter)" aria-label="Send message (Enter)">&#x23CE;</button>
     </div>
   </form>

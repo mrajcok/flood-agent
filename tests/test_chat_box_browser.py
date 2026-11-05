@@ -73,3 +73,20 @@ def test_a_prompt_of_only_blank_lines_is_not_sent_and_the_icon_returns_focus_to_
     page.get_by_role("button", name="Send message (Enter)").click()
     expect(page.locator(".user").first).to_have_text("top ports")
     expect(chat).to_be_focused()
+
+
+def test_pressing_escape_twice_clears_the_box_but_once_or_slowly_does_not(live_page, build_agent):
+    page = live_page(agent=build_agent(replies(0)))
+    chat = page.get_by_placeholder("Write a prompt")
+    one_row = chat.bounding_box()["height"]  # type: ignore[index]
+    chat.fill("top ports\nlast hour\nby circuit")
+    chat.dispatch_event("input")
+    chat.press("Escape")
+    expect(chat).to_have_value("top ports\nlast hour\nby circuit")
+    page.wait_for_timeout(1000)  # too slow for a double press
+    chat.press("Escape")
+    expect(chat).to_have_value("top ports\nlast hour\nby circuit")
+    chat.press("Escape")
+    expect(chat).to_have_value("")
+    expect(chat).to_be_focused()
+    expect(chat).to_have_js_property("offsetHeight", round(one_row))  # back to one row

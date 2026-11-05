@@ -76,7 +76,7 @@
           </select>
         </label>
         <span x-show="choice === 'custom'" x-cloak><input type="number" x-model="custom" min="0.01" max="3650" step="any" aria-label="Retention in days"> days</span>
-        <button type="submit">Save</button>
+        <button type="submit" class="primary">Save</button>
         <button type="button" @click="editing = false">Cancel</button>
         <span class="err" x-show="saveError" x-text="saveError"></span>
       </form>

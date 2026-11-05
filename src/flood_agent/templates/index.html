@@ -114,9 +114,14 @@
     .table-name .copy:hover { background: #dce7fb; }
     .table-name .copy:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
     .table-name .editor { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
-    .table-name input[type=text] { font: inherit; min-width: 16rem; padding: .2rem .5rem; border: 1px solid #b9c7e6; border-radius: .4rem; }
+    .table-name input[type=text] { font: inherit; min-width: 14rem; padding: .2rem .5rem; border: 1px solid #b9c7e6; border-radius: .4rem; }
     .table-name input[type=number] { font: inherit; width: 6rem; padding: .2rem .4rem; border: 1px solid #b9c7e6; border-radius: .4rem; }
-    .table-name select { font: inherit; padding: .2rem .4rem; border: 1px solid #b9c7e6; border-radius: .4rem; color: #2a4ba0; background: #eef3fd; }
+    .table-name select { font: inherit; padding: .2rem .4rem; border: 1px solid #c4c9d4; border-radius: .4rem; color: #333; background: #f6f7f9; cursor: pointer; }
+    .table-name .editor button { font: inherit; font-size: .9rem; padding: .25rem .9rem; border-radius: .5rem; cursor: pointer; border: 1px solid #c4c9d4; background: #fff; color: #333; }
+    .table-name .editor button:hover { background: #f2f4f8; }
+    .table-name .editor button:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 2px; }
+    .table-name .editor button.primary { border-color: #4a6fd3; background: #4a6fd3; color: #fff; }
+    .table-name .editor button.primary:hover { background: #3b5cb8; border-color: #3b5cb8; }
     .table-name .err { color: #a00; font-size: .85rem; }
     .pager { display: flex; gap: .75rem; align-items: center; font-size: .9rem; }
     .badge-truncated { padding: .1rem .6rem; border: 1px solid #e0c36a; border-radius: 999px; background: #fdf3d0; color: #7a5b00; font-size: .8rem; }

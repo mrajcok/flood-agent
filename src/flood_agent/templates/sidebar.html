@@ -80,13 +80,13 @@
               <template x-for="name in section.names" :key="name">
                 <li>
                   <template x-if="confirming !== name">
-                    <div class="row"><code x-text="name"></code>
-                      <template x-if="expiresIn(name)"><span class="expires" :title="'Retention: ' + retention(name)" x-text="expiresIn(name)"></span></template>
-                      <span class="row-actions">
+                    <div class="row"><span class="row-actions">
                       <button type="button" class="copy" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into the chat'" @click="copy(name)">&#x29C9;</button>
-                      <!-- Hidden, not removed, for Telemetry so the copy icons line up across sections. -->
+                      <!-- Hidden, not removed, for Telemetry so the names line up across sections. -->
                       <button type="button" class="delete" :style="section.deletable ? '' : 'visibility: hidden'" :disabled="!section.deletable" :aria-label="'Delete ' + name" :title="'Delete ' + name" @click="confirming = name">&#x1F5D1;&#xFE0E;</button>
-                    </span></div>
+                      </span><code x-text="name"></code>
+                      <template x-if="expiresIn(name)"><span class="expires" :title="'Retention: ' + retention(name)" x-text="expiresIn(name)"></span></template>
+                    </div>
                   </template>
                   <template x-if="confirming === name">
                     <div class="row confirm"><span>Delete <code x-text="name"></code>?</span><span class="row-actions">

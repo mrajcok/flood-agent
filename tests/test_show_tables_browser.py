@@ -191,3 +191,19 @@ def test_deleting_from_the_dialog_asks_inline_then_removes_the_row_and_stays_ope
     page.keyboard.press("Escape")
     dialog = open_tables(page)
     expect(dialog.locator("li code")).to_have_text(["flows", "lookup_bad_ips", rt_name])
+
+
+def test_the_icons_come_just_before_each_name_and_the_expiry_is_right_aligned(live_page, tables):
+    agent, rt_name = tables
+    dialog = open_tables(live_page(agent=agent))
+    names = dialog.locator("li code")
+    expect(names).to_have_count(5)
+    lefts = {round(b["x"]) for b in (names.nth(i).bounding_box() for i in range(5)) if b}
+    assert len(lefts) == 1  # every name starts at the same x, Telemetry included
+    row = row_in(dialog, rt_name)
+    copy, name, expires = (row.locator(s).bounding_box() for s in (".copy", "code", ".expires"))
+    delete = row.locator(".delete").bounding_box()
+    assert copy and delete and name and expires
+    assert copy["x"] < delete["x"] < name["x"] and name["x"] - (delete["x"] + delete["width"]) < 12
+    list_right = dialog.locator(".table-list").bounding_box()
+    assert list_right and list_right["x"] + list_right["width"] - (expires["x"] + expires["width"]) < 12

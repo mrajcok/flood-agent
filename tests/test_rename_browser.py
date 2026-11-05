@@ -89,3 +89,9 @@ def test_the_copy_icon_next_to_the_table_name_inserts_it_into_the_chat_like_the_
     chat.fill("")
     page.locator(".table-name").get_by_role("button", name="Copy victims").click()
     expect(chat).to_have_value("victims")
+
+
+def test_the_table_name_has_the_same_pointer_cursor_as_the_copy_icon(build_agent, live_page):
+    _, page, _ = ask_for_a_table(build_agent, live_page)
+    cursor = "e => getComputedStyle(e).cursor"
+    assert page.locator(".table-name .name").evaluate(cursor) == page.locator(".table-name .copy").evaluate(cursor) == "pointer"

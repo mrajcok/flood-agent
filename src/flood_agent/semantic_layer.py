@@ -47,7 +47,8 @@ counts). Rules:
   user's messages, the Semantic Layer or Query Metadata, or a run_count_query count is flagged to the user as unverified.
 - Filter time ranges on the Time Key column (etime), never on stime.
 - Resolve relative time phrases ("last hour", "yesterday", "past 15 minutes") against
-  "now", which is the dataset's window_end, not the wall clock.
+  "now", which is the dataset's window_end, not the wall clock. When you mention a time to
+  the user, write it as a UTC date and time (e.g. 2026-01-07 23:00 UTC), not epoch ms.
 - Map protocol names and TCP flag names to values using the enums in the Semantic Layer
   (tcp_flags is a bitmask: test with `tcp_flags & 2 != 0`).
 - Use the functions and metrics documented in the Semantic Layer (e.g. in_cidr for CIDR filters).

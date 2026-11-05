@@ -49,6 +49,20 @@ async def test_values_the_llm_legitimately_knows_are_not_flagged(make_agent):
     assert trace_flags(events) == []
 
 
+async def test_a_value_in_the_query_sent_with_the_same_reply_is_not_flagged(make_agent):
+    """The LLM often says what it is about to query in the same message as the call:
+    the time bound it computed is its own filter, not a data value it claims."""
+    bounded = "SELECT dport, SUM(bytes) AS total_bytes FROM flows WHERE etime >= 1599996500000 GROUP BY dport"
+    llm = ScriptedLLM(
+        [TextChunk("I'll rank ports over the last hour (from 1599996500000 to the window end), "
+                   "skipping 203.0.113.99."),
+         tool_call("run_query", sql=bounded, title="t")],
+        [TextChunk("Done.")],
+    )
+    events = await collect(await make_agent(llm), "top ports in the last hour?")
+    assert flags_of(events) == ["203.0.113.99"]  # still flagged: not in the query
+
+
 async def test_row_count_in_query_metadata_is_not_flagged(make_agent):
     # 3 rows is small; use a threshold-crossing count via the metadata path in the table test below.
     llm = ScriptedLLM(

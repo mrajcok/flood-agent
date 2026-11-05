@@ -573,7 +573,7 @@ class Agent:
                 elif isinstance(chunk, UsageChunk):
                     usage = chunk
             trace.llm_step(system_prompt, text, calls, usage, step_started)
-            await self._flag_unseen_values(text, system_prompt, messages, trace, queue)
+            await self._flag_unseen_values(text, system_prompt, messages, calls, trace, queue)
             assistant: dict = {"role": "assistant", "content": text}
             if calls:
                 assistant["tool_calls"] = [
@@ -655,12 +655,15 @@ class Agent:
         return content, args, None, 0
 
     @staticmethod
-    async def _flag_unseen_values(text: str, system_prompt: str, messages: list[dict], trace, queue) -> None:
+    async def _flag_unseen_values(
+        text: str, system_prompt: str, messages: list[dict], calls: list[ToolCallChunk], trace, queue
+    ) -> None:
         """Flag IP-like / large-number tokens in a completed reply that the LLM was never sent.
 
         Allowed context = what this step's LLM call received, except the LLM's own earlier prose
         (so repeating an invented value is flagged again): system prompt (Semantic Layer, Result
-        Tables), user messages, tool results (Query Metadata), and tool-call SQL arguments."""
+        Tables), user messages, tool results (Query Metadata), and tool-call SQL arguments, including
+        those of this same step (a time bound it states and queries with is its own filter)."""
         if not text:
             return
         allowed = [system_prompt]
@@ -669,6 +672,7 @@ class Agent:
                 allowed.append(m["content"] or "")
             elif m["role"] == "assistant":
                 allowed += [c["function"]["arguments"] for c in m.get("tool_calls") or []]
+        allowed += [c.arguments for c in calls]
         found = flagging.find_unseen(text, allowed)
         if not found:
             return

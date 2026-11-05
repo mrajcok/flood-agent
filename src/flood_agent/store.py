@@ -307,6 +307,14 @@ class ConversationStore:
         with closing(self._connect()) as con:
             return [r[0] for r in con.execute("SELECT name FROM result_tables WHERE expired=0 ORDER BY name")]
 
+    def live_result_table_retentions(self, default_retention_ms: int) -> dict[str, int]:
+        """Live Result Tables (and Saved Tables) across all Conversations, sorted by name, each with
+        its retention in ms (`default_retention_ms` unless the user chose one)."""
+        with closing(self._connect()) as con:
+            return {r[0]: r[1] for r in con.execute(
+                "SELECT name, COALESCE(retention_ms, ?) FROM result_tables WHERE expired=0 ORDER BY name",
+                (default_retention_ms,))}
+
     def due_for_expiry(self, ttl_ms: int) -> list[str]:
         """Live Result Tables created longer ago than the table's
         retention (`ttl_ms` unless the user chose one)."""

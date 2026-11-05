@@ -11,7 +11,7 @@ def tables(build_agent, web_client):
     """Set up through HTTP: two Lookup Tables, a Result Table still named rt_* and one renamed ddos_victims.
     Returns (agent for the live app on the same files, the rt_* name)."""
     client, _, _, rt_name, b_table = two_conversations_with_tables(build_agent, web_client)
-    client.post(f"/api/results/{b_table}/settings", data={"name": "ddos_victims"})
+    client.post(f"/api/results/{b_table}/settings", data={"name": "ddos_victims", "retention_days": "30"})
     for name in ("watch", "bad_ips"):
         client.post("/api/lookup-tables", data={"name": name, "rows": "ip\n10.0.0.1"})
     return build_agent(ScriptedLLM()), rt_name
@@ -48,6 +48,28 @@ def test_tables_sits_above_add_lookup_and_lists_the_four_sections(live_page, tab
     expect(dialog).not_to_have_attribute("open", "")
     open_tables(page).get_by_role("button", name="Close").click()
     expect(dialog).not_to_have_attribute("open", "")
+
+
+def test_saved_and_result_tables_show_their_retention_and_the_others_none(live_page, tables):
+    agent, rt_name = tables
+    dialog = open_tables(live_page(agent=agent))
+
+    def row(name):
+        return dialog.locator("li", has=dialog.page.locator("code", has_text=name))
+
+    expect(row("ddos_victims").locator(".retention")).to_have_text("30 days")
+    expect(row(rt_name).locator(".retention")).to_have_text("1 day")
+    expect(row(rt_name).locator(".retention")).to_have_attribute("title", "Retention: expires 1 day after it was created")
+    expect(row("flows").locator(".retention")).to_have_count(0)
+    expect(row("lookup_watch").locator(".retention")).to_have_count(0)
+
+
+@pytest.mark.parametrize("days, shown", [("0.5", "12 hours"), ("1.5", "1.5 days"), ("0.01", "14 minutes")])
+def test_retention_under_a_day_is_shown_in_hours_or_minutes(live_page, tables, days, shown):
+    agent, rt_name = tables
+    agent.update_result_table(rt_name, retention_days=float(days))
+    dialog = open_tables(live_page(agent=agent))
+    expect(dialog.locator("li", has=dialog.page.locator("code", has_text=rt_name)).locator(".retention")).to_have_text(shown)
 
 
 def test_checkboxes_hide_result_and_lookup_tables_and_are_remembered_after_reload(live_page, tables):

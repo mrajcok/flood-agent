@@ -24,6 +24,15 @@
                  ['Saved Tables', this.tables.saved, true], ['Result Tables', this.hideRt ? [] : this.tables.result, true]]
            .filter(([, names]) => names.length).map(([title, names, deletable]) => ({ title, names, deletable }));
        },
+       retention(name) {
+         /* Only Saved and Result Tables have a Retention; '' for the rest. */
+         const days = this.tables.retention_days[name];
+         if (days === undefined) return '';
+         /* Under a day reads better in hours, under an hour in minutes. */
+         const [n, unit] = days >= 1 ? [Math.round(days * 100) / 100, 'day']
+           : days * 24 >= 1 ? [Math.round(days * 240) / 10, 'hour'] : [Math.max(1, Math.round(days * 1440)), 'minute'];
+         return n + ' ' + unit + (n === 1 ? '' : 's');
+       },
        async remove(name) {
          /* Telemetry tables are never offered; the server refuses them anyway. */
          this.error = '';
@@ -69,9 +78,12 @@
               <template x-for="name in section.names" :key="name">
                 <li>
                   <template x-if="confirming !== name">
-                    <div class="row"><code x-text="name"></code><span class="row-actions">
+                    <div class="row"><code x-text="name"></code>
+                      <template x-if="retention(name)"><span class="retention" :title="'Retention: expires ' + retention(name) + ' after it was created'" x-text="retention(name)"></span></template>
+                      <span class="row-actions">
                       <button type="button" class="copy" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into the chat'" @click="insertIntoChat(name)">&#x29C9;</button>
-                      <button type="button" class="delete" x-show="section.deletable" :aria-label="'Delete ' + name" :title="'Delete ' + name" @click="confirming = name">&#x1F5D1;&#xFE0E;</button>
+                      <!-- Hidden, not removed, for Telemetry so the copy icons line up across sections. -->
+                      <button type="button" class="delete" :style="section.deletable ? '' : 'visibility: hidden'" :disabled="!section.deletable" :aria-label="'Delete ' + name" :title="'Delete ' + name" @click="confirming = name">&#x1F5D1;&#xFE0E;</button>
                     </span></div>
                   </template>
                   <template x-if="confirming === name">

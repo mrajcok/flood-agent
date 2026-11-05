@@ -26,7 +26,7 @@ def test_telemetry_tables_are_those_described_in_the_semantic_layer(build_agent,
     client = web_client(build_agent(ScriptedLLM()))
     r = client.get("/api/tables")
     assert r.status_code == 200
-    assert r.json() == {"telemetry": ["dns", "flows"], "lookup": [], "saved": [], "result": []}
+    assert r.json() == {"telemetry": ["dns", "flows"], "lookup": [], "saved": [], "result": [], "retention_days": {}}
 
 
 def test_lookup_tables_are_listed_sorted(build_agent, web_client):
@@ -44,6 +44,16 @@ def test_renamed_tables_are_listed_as_saved_tables_and_rt_ones_as_result_tables(
     listed = client.get("/api/tables").json()
     assert listed["saved"] == ["ddos_victims"]
     assert listed["result"] == [a_table]
+
+
+def test_saved_and_result_tables_come_with_their_retention_in_days(build_agent, web_client):
+    client, _, _, a_table, b_table = two_conversations_with_tables(build_agent, web_client, result_ttl_ms=DAY)
+    client.post("/api/lookup-tables", data={"name": "watch", "rows": "ip\n10.0.0.1"})
+    client.post(f"/api/results/{b_table}/settings", data={"name": "ddos_victims", "retention_days": "30"})
+    # Telemetry and Lookup Tables have no Retention; a Result Table not changed by the user has the default.
+    assert client.get("/api/tables").json()["retention_days"] == {"ddos_victims": 30, a_table: 1}
+    client.post(f"/api/results/{a_table}/settings", data={"retention_days": "0.5"})
+    assert client.get("/api/tables").json()["retention_days"][a_table] == 0.5
 
 
 def test_result_tables_past_their_retention_are_left_out(build_agent, web_client):

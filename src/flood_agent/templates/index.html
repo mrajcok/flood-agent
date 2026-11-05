@@ -291,8 +291,7 @@
       dialog.querySelectorAll(".delete-result-count").forEach(el => el.textContent = tables(counts.result, "Result Table"));
       const note = document.getElementById("delete-saved-note");
       note.hidden = !counts.saved;
-      note.textContent = "Its " + tables(counts.saved, "Saved Table") + (counts.saved === 1
-        ? " will be kept. Delete it from Tables." : " will be kept. Delete them from Tables.");
+      note.textContent = "Its " + tables(counts.saved, "Saved Table") + " will be kept. Use the Tables button to delete Saved (renamed) Tables.";
       dialog.querySelector('input[value="keep"]').checked = true;
       dialog.returnValue = "";
       dialog.onclose = () => {

@@ -107,7 +107,7 @@ def test_deleting_a_prompt_with_a_saved_table_says_the_saved_table_is_kept(build
     expect(dialog).to_have_attribute("open", "")
     expect(dialog.locator("h3")).to_have_text("Delete this prompt and its answer?")
     expect(dialog.get_by_role("radio")).to_have_count(0)
-    expect(dialog).to_contain_text("Its 1 Saved Table will be kept. Delete it from Tables.")
+    expect(dialog).to_contain_text("Its 1 Saved Table will be kept. Use the Tables button to delete Saved (renamed) Tables.")
     dialog.get_by_role("button", name="Cancel").click()
     expect(dialog).not_to_have_attribute("open", "")
     assert native == []

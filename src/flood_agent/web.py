@@ -248,7 +248,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
                     elif isinstance(ev, DisplayEvent) and ev.kind == "chart":
                         html = TEMPLATES.get_template("display_chart.html").render(
                             spec_json=json.dumps(ev.spec)
-                        )
+                        ).strip()  # no stray newlines: the reply box keeps whitespace
                         yield _sse("display", html)
                     elif isinstance(ev, DisplayEvent):
                         html = TEMPLATES.get_template("display_table.html").render(
@@ -257,7 +257,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
                             settings_url=f"/api/results/{ev.result_table}/settings",
                             result_table=ev.result_table,
                             columns=ev.columns,
-                        )
+                        ).strip()
                         yield _sse("display", html)
                     elif isinstance(ev, FlagEvent):
                         yield _sse("flag", TEMPLATES.get_template("flag_note.html").render(flags=ev.items))

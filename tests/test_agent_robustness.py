@@ -447,3 +447,20 @@ async def test_agent_aclose_cancels_and_awaits_in_flight_turns(build_agent):
     assert all(t.done() for t in producers)
     first.cancel()
     await asyncio.gather(first, return_exceptions=True)
+
+
+# --- reply text across LLM steps ------------------------------------------------------------------
+
+
+async def test_each_steps_text_starts_a_new_paragraph_unless_a_display_came_between(make_agent):
+    llm = ScriptedLLM(
+        [TextChunk("Counting:"), tool_call("run_count_query", "c1", sql="SELECT COUNT(*) FROM flows")],
+        lambda msgs: [TextChunk("Here they are:"), tool_call("run_query", "c2", sql=SQL, title="t")],
+        lambda msgs: [tool_call("show_table", "c3", result_table=last_tool_result(msgs)["result_table"])],
+        [TextChunk("That is the table.")],
+    )
+    events = await collect(await make_agent(llm), "q")
+    assert [e.text for e in events if isinstance(e, TextDelta)] == [
+        "Counting:", "\n\nHere they are:", "That is the table."]
+    assert [type(e).__name__ for e in events if isinstance(e, (TextDelta, DisplayEvent))] == [
+        "TextDelta", "TextDelta", "DisplayEvent", "TextDelta"]

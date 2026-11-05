@@ -3,9 +3,9 @@
 <details class="turn" open hx-ext="sse" sse-connect="/chat/stream/{{ turn_id }}" sse-close="end"><summary class="user"><span>{{ message }}</span><span class="turn-actions" sse-swap="turn"></span></summary>
 <div>
   <div sse-swap="text,flag,display,trace,end" hx-swap="delete"><span class="thinking" role="status" aria-label="Thinking"></span></div>
-  <div class="reply" sse-swap="text" hx-swap="beforeend"></div>
+  {# Text and Displays share one box so they show in the order the LLM produced them. #}
+  <div class="reply" sse-swap="text,display" hx-swap="beforeend"></div>
   <div sse-swap="flag" hx-swap="beforeend"></div>
-  <div sse-swap="display" hx-swap="beforeend"></div>
   <div sse-swap="trace" hx-swap="beforeend"></div>
 </div>
 </details>

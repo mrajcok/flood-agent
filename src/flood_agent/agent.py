@@ -63,18 +63,25 @@ class TextDelta:
 
 
 class _TurnQueue(asyncio.Queue):
-    """A turn's event queue that remembers whether the reply so far ends mid-paragraph."""
+    """A turn's event queue that remembers whether the reply so far ends mid-paragraph: in
+    text, not after a newline or a Display (which the page shows as its own block)."""
 
     mid_paragraph = False
 
     def put_nowait(self, item) -> None:  # `put` goes through here too
         if isinstance(item, TextDelta) and item.text:
             self.mid_paragraph = not item.text.endswith("\n")
+        elif isinstance(item, DisplayEvent):
+            self.mid_paragraph = False
         super().put_nowait(item)
+
+    def paragraph_break(self) -> str:
+        """What to put before text that starts a new paragraph: a blank line, if needed."""
+        return "\n\n" if self.mid_paragraph else ""
 
     async def put_notice(self, message: str) -> None:
         """Stream a notice from the app (not the LLM) as its own paragraph."""
-        await self.put(TextDelta(("\n\n" if self.mid_paragraph else "") + message))
+        await self.put(TextDelta(self.paragraph_break() + message))
 
 
 @dataclass
@@ -544,7 +551,7 @@ class Agent:
         await queue.put(TurnError(message, detail))
 
     async def _converse(
-        self, conversation, turn_id, user_message, trace: TraceBuilder, queue, max_result_rows: int
+        self, conversation, turn_id, user_message, trace: TraceBuilder, queue: _TurnQueue, max_result_rows: int
     ):
         connection = await self._ensure_connection()
         tools = connection.tools
@@ -557,8 +564,10 @@ class Agent:
             step_started = time.monotonic()
             async for chunk in self.llm.stream_chat(messages, tools):
                 if isinstance(chunk, TextChunk):
+                    # Each step's text is a new paragraph on the page, as it is when the turn is reloaded.
+                    shown = chunk.text if text or not chunk.text else queue.paragraph_break() + chunk.text
                     text += chunk.text
-                    await queue.put(TextDelta(chunk.text))
+                    await queue.put(TextDelta(shown))
                 elif isinstance(chunk, ToolCallChunk):
                     calls.append(chunk)
                 elif isinstance(chunk, UsageChunk):

@@ -333,6 +333,27 @@ class Agent:
         self.store.register_lookup_table(name, parsed.columns, len(parsed.rows))
         return {"name": name, "row_count": len(parsed.rows), "columns": parsed.columns}
 
+    def update_lookup_table(self, name: str, text: str) -> dict:
+        """Replace an existing Lookup Table's rows (and columns) with edited text; its name stays.
+        KeyError if `name` is not a Lookup Table; `InvalidLookupTable`, changing nothing, for a bad paste."""
+        if not self.store.is_lookup_table(name):
+            raise KeyError(name)
+        name = name.lower()
+        parsed = lookup_tables.parse_rows(text)
+        lookup_tables.write_table(self.config.results_db, name, parsed, replace=True)
+        self.store.register_lookup_table(name, parsed.columns, len(parsed.rows))  # same crash window as add
+        return {"name": name, "row_count": len(parsed.rows), "columns": parsed.columns}
+
+    def lookup_table_text(self, name: str, sep: str) -> dict:
+        """A Lookup Table's rows as text for the edit dialog, header line first, separated by `sep`
+        (a key of `lookup_tables.SEPARATORS`). KeyError if `name` is not a Lookup Table;
+        `InvalidLookupTable` for an unknown separator."""
+        if not self.store.is_lookup_table(name):
+            raise KeyError(name)
+        name = name.lower()  # registered names are lower-cased by `table_name`
+        parsed = lookup_tables.read_table(self.config.results_db, name)
+        return {"name": name, "text": lookup_tables.format_rows(parsed, sep)}
+
     def list_tables(self) -> dict:
         """Names of every table the user can query, by kind, each sorted: Telemetry Database tables
         described in the Semantic Layer, Lookup Tables, and the live Saved Tables and Result Tables

@@ -15,6 +15,7 @@ from flood_agent import table_names
 PREFIX = "lookup_"
 MAX_ROWS = 100_000
 FEW = 3  # how many offenders a message lists
+SEPARATORS = {"tab": "\t", "comma": ",", "pipe": "|"}  # how the edit dialog shows the rows
 
 
 class InvalidLookupTable(ValueError):
@@ -115,5 +116,28 @@ def write_table(results_db: Path, name: str, parsed: ParsedRows, replace: bool) 
         except BaseException:
             con.execute("ROLLBACK")
             raise
+    finally:
+        con.close()
+
+
+def format_rows(parsed: ParsedRows, sep: str) -> str:
+    """The header line then one line per row, separated by `SEPARATORS[sep]`, quoted CSV-style only
+    where a cell needs it; NULL as an empty cell. `parse_rows` reads it back to the same rows."""
+    if sep not in SEPARATORS:
+        raise InvalidLookupTable(f"The separator must be one of {', '.join(SEPARATORS)}.")
+    out = io.StringIO()
+    writer = csv.writer(out, delimiter=SEPARATORS[sep], lineterminator="\n")
+    writer.writerow(parsed.columns)
+    writer.writerows([["" if c is None else c for c in row] for row in parsed.rows])
+    return out.getvalue()
+
+
+def read_table(results_db: Path, name: str) -> ParsedRows:
+    """Columns and rows of `name` (a registered Lookup Table), in insertion order."""
+    con = sqlite3.connect(results_db)
+    try:
+        cur = con.execute(f"SELECT * FROM {table_names.quote(name)} ORDER BY rowid")
+        rows = [list(r) for r in cur]
+        return ParsedRows([d[0] for d in cur.description], rows)
     finally:
         con.close()

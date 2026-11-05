@@ -20,9 +20,9 @@
        },
        get sections() {
          if (!this.tables) return [];
-         return [['Telemetry', this.tables.telemetry, false], ['Lookup Tables', this.hideLookup ? [] : this.tables.lookup, true],
-                 ['Saved Tables', this.tables.saved, true], ['Result Tables', this.hideRt ? [] : this.tables.result, true]]
-           .filter(([, names]) => names.length).map(([title, names, deletable]) => ({ title, names, deletable }));
+         return [['Telemetry', this.tables.telemetry, false, false], ['Lookup Tables', this.hideLookup ? [] : this.tables.lookup, true, true],
+                 ['Saved Tables', this.tables.saved, true, false], ['Result Tables', this.hideRt ? [] : this.tables.result, true, false]]
+           .filter(([, names]) => names.length).map(([title, names, deletable, editable]) => ({ title, names, deletable, editable }));
        },
        retention(name) {
          /* Only Saved and Result Tables have a Retention; '' for the rest. */
@@ -82,7 +82,8 @@
                   <template x-if="confirming !== name">
                     <div class="row"><span class="row-actions">
                       <button type="button" class="copy" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into the chat'" @click="copy(name)">&#x29C9;</button>
-                      <!-- Hidden, not removed, for Telemetry so the names line up across sections. -->
+                      <!-- Hidden, not removed, where not offered so the names line up across sections. -->
+                      <button type="button" class="edit" :style="section.editable ? '' : 'visibility: hidden'" :disabled="!section.editable" :aria-label="'Edit ' + name" :title="'Edit ' + name" @click="$dispatch('edit-lookup', name)">&#x270E;&#xFE0E;</button>
                       <button type="button" class="delete" :style="section.deletable ? '' : 'visibility: hidden'" :disabled="!section.deletable" :aria-label="'Delete ' + name" :title="'Delete ' + name" @click="confirming = name">&#x1F5D1;&#xFE0E;</button>
                       </span><code x-text="name"></code>
                       <template x-if="expiresIn(name)"><span class="expires" :title="'Retention: ' + retention(name)" x-text="expiresIn(name)"></span></template>
@@ -104,27 +105,69 @@
       <div class="actions"><button type="button" @click="open = false">Close</button></div>
     </dialog>
   </div>
-  <div class="lookup" x-data="{ open: false, name: '', rows: '', overwrite: false, busy: false, error: '',
+  <div class="lookup" x-data="{ open: false, editing: null, name: '', rows: '', sep: 'tab', overwrite: false, busy: false, error: '',
+       /* editing: the Lookup Table being edited, or null when adding one. */
+       startAdd() { this.editing = null; this.name = ''; this.rows = ''; this.overwrite = false; this.error = ''; this.open = true; },
+       async startEdit(name) {
+         this.editing = name; this.rows = ''; this.sep = 'tab'; this.error = ''; this.busy = true; this.open = true;
+         try {
+           const r = await fetch('/api/lookup-tables/' + encodeURIComponent(name) + '?sep=tab');
+           const data = await r.json();
+           if (r.ok) this.rows = data.text; else this.error = data.detail || 'Could not load the table.';
+         } catch (e) { this.error = 'Could not load the table.'; }
+         this.busy = false;
+       },
+       async reshow(sep, previous) {
+         /* Re-show the current text, edits included, in the chosen separator; keep the old one if it does not parse. */
+         this.busy = true; this.error = '';
+         try {
+           const r = await fetch('/api/lookup-tables/reformat', { method: 'POST', body: new URLSearchParams({ rows: this.rows, sep }) });
+           const data = await r.json();
+           if (r.ok) this.rows = data.text; else { this.error = data.detail || 'Could not change the separator.'; this.sep = previous; }
+         } catch (e) { this.error = 'Could not change the separator.'; this.sep = previous; }
+         this.busy = false;
+       },
        async submit() {
          this.busy = true; this.error = '';
-         const body = new URLSearchParams({ name: this.name, rows: this.rows });
-         if (this.overwrite) body.set('overwrite', 'on');
+         const verb = this.editing ? 'Updated' : 'Added';
          try {
-           const r = await fetch('/api/lookup-tables', { method: 'POST', body });
+           let r;
+           if (this.editing) {
+             r = await fetch('/api/lookup-tables/' + encodeURIComponent(this.editing), { method: 'PUT', body: new URLSearchParams({ rows: this.rows }) });
+           } else {
+             const body = new URLSearchParams({ name: this.name, rows: this.rows });
+             if (this.overwrite) body.set('overwrite', 'on');
+             r = await fetch('/api/lookup-tables', { method: 'POST', body });
+           }
            const data = await r.json();
-           if (r.ok) { this.$dispatch('lookup-added', data); this.open = false; this.name = ''; this.rows = ''; this.overwrite = false; } else this.error = data.detail || 'Could not add the table.';
-         } catch (e) { this.error = 'Could not add the table.'; }
+           if (r.ok) { this.$dispatch('lookup-added', { ...data, verb }); this.open = false; this.name = ''; this.rows = ''; this.overwrite = false; this.editing = null; }
+           else this.error = data.detail || 'Could not save the table.';
+         } catch (e) { this.error = 'Could not save the table.'; }
          this.busy = false;
-       } }">
-    <button type="button" class="sidebar-action" @click="open = true; error = ''">Add lookup table</button>
+       } }" @edit-lookup.window="startEdit($event.detail)">
+    <button type="button" class="sidebar-action" @click="startAdd()">Add lookup table</button>
     <dialog x-effect="open ? $el.showModal() : $el.open && $el.close()" @close="open = false">
       <form @submit.prevent="submit()">
+        <template x-if="editing"><h3>Edit <code x-text="editing"></code></h3></template>
         <p class="error" x-show="error" x-text="error" x-cloak></p>
-        <label>Name: <span class="prefix">lookup_</span><input type="text" x-model="name" maxlength="60" required pattern="[A-Za-z0-9_]+" aria-label="Lookup table name"></label>
-        <label><input type="checkbox" x-model="overwrite"> overwrite existing table</label>
+        <template x-if="!editing">
+          <div class="add-fields">
+            <label>Name: <span class="prefix">lookup_</span><input type="text" x-model="name" maxlength="60" required pattern="[A-Za-z0-9_]+" aria-label="Lookup table name"></label>
+            <label><input type="checkbox" x-model="overwrite"> overwrite existing table</label>
+          </div>
+        </template>
+        <template x-if="editing">
+          <fieldset class="separator" :disabled="busy">
+            <legend>Show columns separated by</legend>
+            <template x-for="[value, label] in [['tab', 'Tab'], ['comma', 'Comma'], ['pipe', 'Pipe']]" :key="value">
+              <label><input type="radio" name="lookup-sep" :value="value" :checked="sep === value"
+                            @change="const previous = sep; sep = value; reshow(value, previous)"> <span x-text="label"></span></label>
+            </template>
+          </fieldset>
+        </template>
         <p class="hint">First row must be the column names. Separate columns with tab, comma or <code>|</code>.</p>
-        <textarea x-model="rows" rows="10" required aria-label="Rows"></textarea>
-        <div class="actions"><button type="submit" class="primary" :disabled="busy">Submit</button> <button type="button" @click="open = false">Cancel</button></div>
+        <textarea x-model="rows" rows="10" required aria-label="Rows" :readonly="busy"></textarea>
+        <div class="actions"><button type="submit" class="primary" :disabled="busy" x-text="editing ? 'Save' : 'Submit'">Submit</button> <button type="button" @click="open = false">Cancel</button></div>
       </form>
     </dialog>
   </div>

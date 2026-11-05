@@ -70,6 +70,9 @@
     .lookup dialog textarea { width: 100%; box-sizing: border-box; font-family: monospace; }
     .lookup dialog .prefix { font-family: monospace; }
     .lookup dialog .hint { font-size: .85rem; }
+    .lookup dialog .add-fields { display: flex; flex-direction: column; gap: .75rem; }
+    .lookup dialog .separator { display: flex; flex-wrap: wrap; gap: .25rem 1.25rem; border: 0; padding: 0; margin: 0; font-size: .9rem; }
+    .lookup dialog .separator legend { padding: 0; margin-bottom: .25rem; }
     .lookup dialog .error, .show-tables dialog .error { color: #b3261e; }
     .show-tables dialog[open] { width: min(30rem, 90vw); margin: 4rem auto auto; max-height: calc(100vh - 6rem); box-sizing: border-box; display: flex; flex-direction: column; gap: .75rem; }
     .show-tables dialog .filters { display: flex; flex-wrap: wrap; gap: .25rem 1.25rem; font-size: .9rem; }
@@ -85,11 +88,11 @@
     .show-tables dialog li code { overflow-wrap: anywhere; }
     .show-tables dialog li .row code { flex: 1 1 auto; }
     .show-tables dialog li .expires { flex: none; font-size: .8rem; color: #6b7280; white-space: nowrap; }
-    .show-tables dialog .copy, .show-tables dialog .delete { flex: none; background: none; border: 0; color: #4a6fd3; cursor: pointer; font-size: 1rem; line-height: 1; padding: .15rem .3rem; border-radius: .3rem; }
-    .show-tables dialog .copy:hover, .show-tables dialog .delete:hover { background: #dce7fb; }
+    .show-tables dialog .copy, .show-tables dialog .edit, .show-tables dialog .delete { flex: none; background: none; border: 0; color: #4a6fd3; cursor: pointer; font-size: 1rem; line-height: 1; padding: .15rem .3rem; border-radius: .3rem; }
+    .show-tables dialog .copy:hover, .show-tables dialog .edit:hover, .show-tables dialog .delete:hover { background: #dce7fb; }
     .show-tables dialog .delete { color: #c62828; }
     .show-tables dialog .delete:hover { background: #fbe3e3; }
-    .show-tables dialog .copy:focus-visible, .show-tables dialog .delete:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
+    .show-tables dialog .copy:focus-visible, .show-tables dialog .edit:focus-visible, .show-tables dialog .delete:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
     .toast { position: fixed; left: 50%; top: 1rem; transform: translateX(-50%); z-index: 20; max-width: min(36rem, 90vw);
              padding: .6rem 1rem; border-radius: .6rem; background: #1f3a2b; color: #fff; box-shadow: 0 4px 16px rgba(0,0,0,.25); }
     aside ul { list-style: none; padding: 0; margin: .5rem 0; }
@@ -250,7 +253,7 @@
   </div>
   <div class="toast" role="status" x-data="{ added: null, timer: null }" x-show="added" x-transition.opacity x-cloak
        @lookup-added.window="added = $event.detail; clearTimeout(timer); timer = setTimeout(() => added = null, 6000)">
-    Added <b x-text="added && added.name"></b>: <span x-text="added && (added.row_count + (added.row_count === 1 ? ' row' : ' rows'))"></span>,
+    <span x-text="added && (added.verb || 'Added')">Added</span> <b x-text="added && added.name"></b>: <span x-text="added && (added.row_count + (added.row_count === 1 ? ' row' : ' rows'))"></span>,
     columns <span x-text="added && added.columns.join(', ')"></span>.
   </div>
   <dialog id="delete-dialog" aria-labelledby="delete-title">

@@ -19,6 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from flood_agent import lookup_tables
 from flood_agent.agent import (
     Agent,
     Conversation,
@@ -169,6 +170,34 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
             return agent.add_lookup_table(name, rows, overwrite=bool(overwrite))
         except InvalidLookupTable as e:
             raise HTTPException(422, str(e))
+
+    @app.post("/api/lookup-tables/reformat")
+    def reformat_lookup_rows(rows: str = Form(""), sep: str = Form("tab")):
+        """Edited rows re-shown in another separator, for the edit dialog. 422 if they do not parse."""
+        try:
+            return {"text": lookup_tables.format_rows(lookup_tables.parse_rows(rows), sep)}
+        except InvalidLookupTable as e:
+            raise HTTPException(422, str(e))
+
+    @app.get("/api/lookup-tables/{name}")
+    def lookup_table_text(name: str, sep: str = "tab"):
+        """A Lookup Table's rows as text, for the edit dialog. Plain HTTP, never an MCP tool."""
+        try:
+            return agent.lookup_table_text(name, sep)
+        except InvalidLookupTable as e:
+            raise HTTPException(422, str(e))
+        except KeyError:
+            raise HTTPException(404, "unknown lookup table")
+
+    @app.put("/api/lookup-tables/{name}")
+    def update_lookup_table(name: str, rows: str = Form("")):
+        """Save edited rows over a Lookup Table. Plain HTTP, never an MCP tool."""
+        try:
+            return agent.update_lookup_table(name, rows)
+        except InvalidLookupTable as e:
+            raise HTTPException(422, str(e))
+        except KeyError:
+            raise HTTPException(404, "unknown lookup table")
 
     @app.delete("/api/tables/{name}", status_code=204)
     def delete_table(name: str):

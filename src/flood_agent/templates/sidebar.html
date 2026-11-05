@@ -105,13 +105,13 @@
       <div class="actions"><button type="button" @click="open = false">Close</button></div>
     </dialog>
   </div>
-  <div class="lookup" x-data="{ open: false, editing: null, name: '', rows: '', sep: 'tab', overwrite: false, busy: false, error: '',
+  <div class="lookup" x-data="{ open: false, editing: null, name: '', rows: '', sep: 'comma', overwrite: false, busy: false, error: '',
        /* editing: the Lookup Table being edited, or null when adding one. */
        startAdd() { this.editing = null; this.name = ''; this.rows = ''; this.overwrite = false; this.error = ''; this.open = true; },
        async startEdit(name) {
-         this.editing = name; this.rows = ''; this.sep = 'tab'; this.error = ''; this.busy = true; this.open = true;
+         this.editing = name; this.rows = ''; this.sep = 'comma'; this.error = ''; this.busy = true; this.open = true;
          try {
-           const r = await fetch('/api/lookup-tables/' + encodeURIComponent(name) + '?sep=tab');
+           const r = await fetch('/api/lookup-tables/' + encodeURIComponent(name) + '?sep=comma');
            const data = await r.json();
            if (r.ok) this.rows = data.text; else this.error = data.detail || 'Could not load the table.';
          } catch (e) { this.error = 'Could not load the table.'; }
@@ -159,13 +159,13 @@
         <template x-if="editing">
           <fieldset class="separator" :disabled="busy">
             <legend>Show columns separated by</legend>
-            <template x-for="[value, label] in [['tab', 'Tab'], ['comma', 'Comma'], ['pipe', 'Pipe']]" :key="value">
+            <template x-for="[value, label] in [['comma', 'Comma'], ['pipe', 'Pipe']]" :key="value">
               <label><input type="radio" name="lookup-sep" :value="value" :checked="sep === value"
                             @change="const previous = sep; sep = value; reshow(value, previous)"> <span x-text="label"></span></label>
             </template>
           </fieldset>
         </template>
-        <p class="hint">First row must be the column names. Separate columns with tab, comma or <code>|</code>.</p>
+        <p class="hint">First row must be the column names. Separate columns with a comma or <code>|</code>; rows pasted from a spreadsheet (tab-separated) work too.</p>
         <textarea x-model="rows" rows="10" required aria-label="Rows" :readonly="busy"></textarea>
         <div class="actions"><button type="submit" class="primary" :disabled="busy" x-text="editing ? 'Save' : 'Submit'">Submit</button> <button type="button" @click="open = false">Cancel</button></div>
       </form>

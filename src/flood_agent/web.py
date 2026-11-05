@@ -172,7 +172,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
             raise HTTPException(422, str(e))
 
     @app.post("/api/lookup-tables/reformat")
-    def reformat_lookup_rows(rows: str = Form(""), sep: str = Form("tab")):
+    def reformat_lookup_rows(rows: str = Form(""), sep: str = Form("comma")):
         """Edited rows re-shown in another separator, for the edit dialog. 422 if they do not parse."""
         try:
             return {"text": lookup_tables.format_rows(lookup_tables.parse_rows(rows), sep)}
@@ -180,7 +180,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
             raise HTTPException(422, str(e))
 
     @app.get("/api/lookup-tables/{name}")
-    def lookup_table_text(name: str, sep: str = "tab"):
+    def lookup_table_text(name: str, sep: str = "comma"):
         """A Lookup Table's rows as text, for the edit dialog. Plain HTTP, never an MCP tool."""
         try:
             return agent.lookup_table_text(name, sep)

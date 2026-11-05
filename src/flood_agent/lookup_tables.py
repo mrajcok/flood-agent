@@ -15,7 +15,7 @@ from flood_agent import table_names
 PREFIX = "lookup_"
 MAX_ROWS = 100_000
 FEW = 3  # how many offenders a message lists
-SEPARATORS = {"tab": "\t", "comma": ",", "pipe": "|"}  # how the edit dialog shows the rows
+SEPARATORS = {"comma": ",", "pipe": "|"}  # how the edit dialog shows the rows: no tab, which a textarea cannot type
 
 
 class InvalidLookupTable(ValueError):

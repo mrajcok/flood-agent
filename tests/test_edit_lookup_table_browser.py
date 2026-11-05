@@ -25,14 +25,15 @@ def test_pencil_shows_only_for_lookup_tables_and_opens_the_rows_to_edit(live_pag
     expect(dialog.get_by_role("heading")).to_have_text("Edit lookup_hosts")
     expect(dialog.get_by_label("Lookup table name")).to_have_count(0)  # the name is fixed
     rows = dialog.get_by_label("Rows")
-    expect(rows).to_have_value("ip\tdesc\n10.0.0.1\tedge, east\n")
-    expect(dialog.get_by_role("radio", name="Tab")).to_be_checked()
+    expect(rows).to_have_value('ip,desc\n10.0.0.1,"edge, east"\n')
+    expect(dialog.get_by_role("radio")).to_have_count(2)  # no Tab: a textarea cannot type one
+    expect(dialog.get_by_role("radio", name="Comma")).to_be_checked()
 
-    rows.fill("ip\tdesc\n10.0.0.1\tedge, east\n10.0.0.2\tdns\n")
-    dialog.get_by_role("radio", name="Comma").check()
-    expect(rows).to_have_value('ip,desc\n10.0.0.1,"edge, east"\n10.0.0.2,dns\n')  # the edit is kept
+    rows.fill('ip,desc\n10.0.0.1,"edge, east"\n10.0.0.2,dns\n')
     dialog.get_by_role("radio", name="Pipe").check()
-    expect(rows).to_have_value("ip|desc\n10.0.0.1|edge, east\n10.0.0.2|dns\n")
+    expect(rows).to_have_value("ip|desc\n10.0.0.1|edge, east\n10.0.0.2|dns\n")  # the edit is kept
+    dialog.get_by_role("radio", name="Comma").check()
+    expect(rows).to_have_value('ip,desc\n10.0.0.1,"edge, east"\n10.0.0.2,dns\n')
 
     dialog.get_by_role("button", name="Save").click()
     expect(dialog).not_to_have_attribute("open", "")
@@ -49,11 +50,11 @@ def test_bad_edits_show_the_error_keep_the_separator_and_cancel_saves_nothing(li
     dialog = edit_dialog(page)
     rows = dialog.get_by_label("Rows")
     expect(rows).to_have_value("ip\n10.0.0.1\n")
-    rows.fill("ip\tip\n1\t2")
-    dialog.get_by_role("radio", name="Comma").click()
+    rows.fill("ip,ip\n1,2")
+    dialog.get_by_role("radio", name="Pipe").click()
     expect(dialog.locator(".error")).to_contain_text("different")
-    expect(dialog.get_by_role("radio", name="Tab")).to_be_checked()
-    expect(rows).to_have_value("ip\tip\n1\t2")
+    expect(dialog.get_by_role("radio", name="Comma")).to_be_checked()
+    expect(rows).to_have_value("ip,ip\n1,2")
     dialog.get_by_role("button", name="Save").click()
     expect(dialog.locator(".error")).to_contain_text("different")
     dialog.get_by_role("button", name="Cancel").click()

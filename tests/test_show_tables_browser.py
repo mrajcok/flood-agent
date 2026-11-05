@@ -207,3 +207,12 @@ def test_the_icons_come_just_before_each_name_and_the_expiry_is_right_aligned(li
     assert copy["x"] < delete["x"] < name["x"] and name["x"] - (delete["x"] + delete["width"]) < 12
     list_right = dialog.locator(".table-list").bounding_box()
     assert list_right and list_right["x"] + list_right["width"] - (expires["x"] + expires["width"]) < 12
+
+
+def test_the_table_buttons_use_the_same_font_as_new_chat(live_page, tables):
+    agent, _ = tables
+    page = live_page(agent=agent)
+    font = "e => { const s = getComputedStyle(e); return [s.fontFamily, s.fontSize, s.fontWeight]; }"
+    new_chat = page.get_by_role("link", name="New chat").evaluate(font)
+    for name in ("Tables", "Add lookup table"):
+        assert page.get_by_role("button", name=name, exact=True).evaluate(font) == new_chat

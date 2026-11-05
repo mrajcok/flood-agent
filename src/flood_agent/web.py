@@ -244,7 +244,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
             try:
                 async for ev in agent.run_turn(conversation, message, max_result_rows):
                     if isinstance(ev, TextDelta):
-                        yield _sse("text", escape(ev.text))
+                        yield _sse("text", f'<span class="md-delta">{escape(ev.text)}</span>')  # markdown.js renders it
                     elif isinstance(ev, DisplayEvent) and ev.kind == "chart":
                         html = TEMPLATES.get_template("display_chart.html").render(
                             spec_json=json.dumps(ev.spec)
@@ -269,7 +269,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
                     elif isinstance(ev, TurnEnd):
                         break
             except Exception as e:  # keep the stream well-formed for the browser
-                yield _sse("text", escape(f" [error: {type(e).__name__}]"))
+                yield _sse("text", f'<span class="md-delta">{escape(f" [error: {type(e).__name__}]")}</span>')
             yield _sse("end", "done")
 
         return StreamingResponse(events(), media_type="text/event-stream")

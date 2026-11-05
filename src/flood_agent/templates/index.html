@@ -7,6 +7,9 @@
   <script src="https://unpkg.com/htmx.org@2.0.4"></script>
   <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
   <script src="/static/format.js?v={{ static_version('format.js') }}"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
+  <script src="/static/markdown.js?v={{ static_version('markdown.js') }}"></script>
   <script defer src="https://unpkg.com/alpinejs@3.14.8/dist/cdn.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/vega@5.30.0"></script>
   <script src="https://cdn.jsdelivr.net/npm/vega-lite@5.21.0"></script>
@@ -36,8 +39,21 @@
     .turn-actions form { margin: 0; display: block; }
     .turn-delete button { background: none; border: 0; color: #667; cursor: pointer; font-size: 1.1rem; line-height: 1; padding: 0 .2rem; }
     .turn-delete button:hover { color: #a00; }
-    .reply { white-space: pre-wrap; }
-    .reply > .display { white-space: normal; }  /* a live turn streams its Displays into the reply box */
+    /* Reply text is Markdown rendered by markdown.js into .md segments. */
+    .reply .md-plain, .reply .md-delta { white-space: pre-wrap; }
+    .reply .md { line-height: 1.5; }
+    .reply .md > :first-child { margin-top: 0; }
+    .reply .md > :last-child { margin-bottom: 0; }
+    .reply .md p, .reply .md ul, .reply .md ol, .reply .md pre, .reply .md table, .reply .md blockquote { margin: .5rem 0; }
+    .reply .md ul, .reply .md ol { padding-left: 1.5rem; }
+    .reply .md h1, .reply .md h2, .reply .md h3, .reply .md h4 { font-size: 1rem; margin: .75rem 0 .25rem; }
+    .reply .md code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: .85em;
+                      background: #f2f4f8; border-radius: .25rem; padding: .05rem .3rem; }
+    .reply .md pre { background: #f2f4f8; border-radius: .4rem; padding: .5rem .75rem; overflow-x: auto; }
+    .reply .md pre code { background: none; padding: 0; }
+    .reply .md table { border-collapse: collapse; font-size: .9rem; }
+    .reply .md th, .reply .md td { border: 1px solid #d6dae3; padding: .2rem .5rem; text-align: left; }
+    .reply .md blockquote { border-left: 3px solid #d6dae3; padding-left: .75rem; color: #4b5563; }
     .layout { display: flex; gap: 1.5rem; align-items: stretch; flex: 1; min-height: 0; padding-bottom: 1rem; }
     aside { width: 14rem; flex: none; }
     main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -206,7 +222,7 @@
     {% set turn = namespace(open=false) %}
     {% for item in items %}
       {% if item.type == "user" %}{% if turn.open %}</details>{% endif %}<details class="turn" open><summary class="user"><span>{{ item.text }}</span><span class="turn-actions">{% if item.turn_id %}{% with conversation_id=current_id, turn_id=item.turn_id %}{% include "turn_delete.html" %}{% endwith %}{% endif %}</span></summary>{% set turn.open = true %}
-      {% elif item.type == "assistant" %}<div class="reply">{{ item.text }}</div>
+      {% elif item.type == "assistant" %}<div class="reply"><span class="md-delta">{{ item.text }}</span></div>
       {% elif item.type == "trace" %}{% if item.flags %}{% with flags=item.flags %}{% include "flag_note.html" %}{% endwith %}{% endif %}{% with trace=item.trace %}{% include "trace.html" %}{% endwith %}
       {% elif item.type == "display" and item.expired %}<p class="expired"><em>expired</em> (this result has been deleted)</p>
       {% elif item.type == "display" and item.kind == "table" %}

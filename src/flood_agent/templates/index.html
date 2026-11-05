@@ -61,6 +61,7 @@
     dialog .actions button.danger:hover { background: #a31f1f; border-color: #a31f1f; }
     dialog .actions button.danger:focus-visible { outline-color: #c62828; }
     #delete-dialog { width: min(30rem, 90vw); }
+    #delete-result-choice { display: flex; flex-direction: column; gap: .75rem; }
     .lookup dialog { width: min(36rem, 90vw); }
     .lookup dialog textarea { width: 100%; box-sizing: border-box; font-family: monospace; }
     .lookup dialog .prefix { font-family: monospace; }
@@ -71,12 +72,18 @@
     .show-tables dialog .table-list { flex: 1 1 auto; min-height: 4rem; overflow-y: auto; border-top: 1px solid #e3e6ec; border-bottom: 1px solid #e3e6ec; padding: .25rem 0; }
     .show-tables dialog h4 { margin: .6rem 0 .25rem; font-size: .9rem; color: #2a4ba0; }
     .show-tables dialog ul { list-style: none; padding: 0; margin: 0; }
-    .show-tables dialog li { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .1rem .25rem; border-radius: .35rem; }
+    .show-tables dialog li { padding: .1rem .25rem; border-radius: .35rem; }
+    .show-tables dialog li .row { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+    .show-tables dialog li .row-actions { flex: none; display: flex; gap: .25rem; }
+    .show-tables dialog li .confirm button { font: inherit; font-size: .8rem; padding: .1rem .6rem; border-radius: .4rem; border: 1px solid #b9c3d6; background: #fff; cursor: pointer; }
+    .show-tables dialog li .confirm button.danger { border-color: #c62828; background: #c62828; color: #fff; }
     .show-tables dialog li:hover { background: #f2f4f8; }
     .show-tables dialog li code { overflow-wrap: anywhere; }
-    .show-tables dialog .copy { flex: none; background: none; border: 0; color: #4a6fd3; cursor: pointer; font-size: 1rem; line-height: 1; padding: .15rem .3rem; border-radius: .3rem; }
-    .show-tables dialog .copy:hover { background: #dce7fb; }
-    .show-tables dialog .copy:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
+    .show-tables dialog .copy, .show-tables dialog .delete { flex: none; background: none; border: 0; color: #4a6fd3; cursor: pointer; font-size: 1rem; line-height: 1; padding: .15rem .3rem; border-radius: .3rem; }
+    .show-tables dialog .copy:hover, .show-tables dialog .delete:hover { background: #dce7fb; }
+    .show-tables dialog .delete { color: #c62828; }
+    .show-tables dialog .delete:hover { background: #fbe3e3; }
+    .show-tables dialog .copy:focus-visible, .show-tables dialog .delete:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
     .toast { position: fixed; left: 50%; top: 1rem; transform: translateX(-50%); z-index: 20; max-width: min(36rem, 90vw);
              padding: .6rem 1rem; border-radius: .6rem; background: #1f3a2b; color: #fff; box-shadow: 0 4px 16px rgba(0,0,0,.25); }
     aside ul { list-style: none; padding: 0; margin: .5rem 0; }
@@ -206,22 +213,25 @@
   </div>
   <dialog id="delete-dialog" aria-labelledby="delete-title">
     <form method="dialog">
-      <h3 id="delete-title">What should happen to its Result Tables?</h3>
-      <label><input type="radio" name="choice" value="keep" checked> <span>Keep all tables; they age off per their retention</span></label>
-      <label id="delete-rt-option"><input type="radio" name="choice" value="delete_rt"> <span>Delete only tables still named <code>rt_*</code> (<span id="delete-rt-count"></span>)</span></label>
-      <label><input type="radio" name="choice" value="delete_all"> <span>Delete all its Result Tables (<span id="delete-all-count"></span>)</span></label>
+      <h3 id="delete-title"></h3>
+      <div id="delete-result-choice">
+        <label><input type="radio" name="choice" value="keep" checked> <span>Keep its <span class="delete-result-count"></span> (named <code>rt_&hellip;</code>); they expire per their Retention</span></label>
+        <label><input type="radio" name="choice" value="delete_rt"> <span>Delete its <span class="delete-result-count"></span> now</span></label>
+      </div>
+      <p id="delete-saved-note"></p>
       <div class="actions"><button value="ok" class="danger">Delete</button> <button value="cancel" formnovalidate>Cancel</button></div>
     </form>
   </dialog>
   <script>
-    // Deleting a Conversation or exchange: ask what to do with its live Result Tables, or fall back
-    // to the usual confirmation when it has none.
+    // Deleting a Conversation or exchange always asks in this dialog: whether to keep or delete its
+    // live Result Tables (rt_*) if it has any, and that its Saved Tables are kept (ADR 0004).
     document.addEventListener("submit", async (event) => {
       const form = event.target;
       if (!form.classList || !form.classList.contains("delete-form") || form.dataset.confirmed) return;
       event.preventDefault();
-      let counts = { total: 0, rt: 0 };
-      try { counts = await (await fetch(form.dataset.previewUrl)).json(); } catch (e) { /* fall back to the usual confirmation */ }
+      let counts = { result: 0, saved: 0 };
+      try { counts = await (await fetch(form.dataset.previewUrl)).json(); } catch (e) { /* ask without the counts */ }
+      const tables = (n, kind) => n + " " + kind + (n === 1 ? "" : "s");
       const finish = (choice) => {
         let field = form.querySelector('input[name="tables"]');
         if (!field) { field = document.createElement("input"); field.type = "hidden"; field.name = "tables"; form.appendChild(field); }
@@ -229,11 +239,14 @@
         form.dataset.confirmed = "1";
         form.submit();
       };
-      if (!counts.total) { if (confirm(form.dataset.confirm)) finish("keep"); return; }
       const dialog = document.getElementById("delete-dialog");
-      document.getElementById("delete-rt-count").textContent = counts.rt;
-      document.getElementById("delete-all-count").textContent = counts.total;
-      document.getElementById("delete-rt-option").hidden = counts.rt === counts.total;
+      document.getElementById("delete-title").textContent = form.dataset.title;
+      document.getElementById("delete-result-choice").hidden = !counts.result;
+      dialog.querySelectorAll(".delete-result-count").forEach(el => el.textContent = tables(counts.result, "Result Table"));
+      const note = document.getElementById("delete-saved-note");
+      note.hidden = !counts.saved;
+      note.textContent = "Its " + tables(counts.saved, "Saved Table") + (counts.saved === 1
+        ? " will be kept. Delete it from Tables." : " will be kept. Delete them from Tables.");
       dialog.querySelector('input[value="keep"]').checked = true;
       dialog.returnValue = "";
       dialog.onclose = () => {

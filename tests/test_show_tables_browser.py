@@ -1,4 +1,4 @@
-"""The Show tables dialog, driven in headless system Chrome."""
+"""The Tables dialog, driven in headless system Chrome."""
 
 import pytest
 from conftest import ScriptedLLM
@@ -18,7 +18,7 @@ def tables(build_agent, web_client):
 
 
 def open_tables(page):
-    page.get_by_role("button", name="Show tables").click()
+    page.get_by_role("button", name="Tables", exact=True).click()
     dialog = page.locator(".show-tables dialog")
     expect(dialog).to_have_attribute("open", "")
     return dialog
@@ -28,20 +28,21 @@ def names_in(dialog, heading):
     return dialog.locator("section", has=dialog.page.get_by_role("heading", name=heading, exact=True)).locator("li code")
 
 
-def test_show_tables_sits_above_add_lookup_and_lists_the_three_sections(live_page, tables):
+def test_tables_sits_above_add_lookup_and_lists_the_four_sections(live_page, tables):
     agent, rt_name = tables
     page = live_page(agent=agent)
-    show = page.get_by_role("button", name="Show tables")
+    show = page.get_by_role("button", name="Tables", exact=True)
     add = page.get_by_role("button", name="Add lookup table")
     assert show.bounding_box()["y"] < add.bounding_box()["y"]  # type: ignore[index]
     assert show.evaluate("b => getComputedStyle(b).borderColor") == add.evaluate("b => getComputedStyle(b).borderColor")
 
     dialog = open_tables(page)
     headings = dialog.get_by_role("heading", level=4)
-    expect(headings).to_have_text(["Telemetry", "Lookup Tables", "Result Tables"])
+    expect(headings).to_have_text(["Telemetry", "Lookup Tables", "Saved Tables", "Result Tables"])
     expect(names_in(dialog, "Telemetry")).to_have_text(["flows"])
     expect(names_in(dialog, "Lookup Tables")).to_have_text(["lookup_bad_ips", "lookup_watch"])
-    expect(names_in(dialog, "Result Tables")).to_have_text(["ddos_victims", rt_name])
+    expect(names_in(dialog, "Saved Tables")).to_have_text(["ddos_victims"])
+    expect(names_in(dialog, "Result Tables")).to_have_text([rt_name])
 
     page.keyboard.press("Escape")
     expect(dialog).not_to_have_attribute("open", "")
@@ -49,25 +50,25 @@ def test_show_tables_sits_above_add_lookup_and_lists_the_three_sections(live_pag
     expect(dialog).not_to_have_attribute("open", "")
 
 
-def test_checkboxes_hide_by_prefix_and_are_remembered_after_reload(live_page, tables):
+def test_checkboxes_hide_result_and_lookup_tables_and_are_remembered_after_reload(live_page, tables):
     agent, rt_name = tables
     page = live_page(agent=agent)
     dialog = open_tables(page)
-    hide_rt, hide_lookup = dialog.get_by_label("Hide rt_ tables"), dialog.get_by_label("Hide lookup_ tables")
+    hide_rt, hide_lookup = dialog.get_by_label("Hide Result Tables"), dialog.get_by_label("Hide Lookup Tables")
     expect(hide_rt).not_to_be_checked()
     expect(hide_lookup).not_to_be_checked()
 
     hide_rt.check()
-    expect(names_in(dialog, "Result Tables")).to_have_text(["ddos_victims"])
+    expect(dialog.get_by_role("heading", name="Result Tables")).to_have_count(0)
     hide_lookup.check()
     expect(dialog.get_by_role("heading", name="Lookup Tables")).to_have_count(0)
     expect(names_in(dialog, "Telemetry")).to_have_text(["flows"])
-    expect(names_in(dialog, "Result Tables")).to_have_text(["ddos_victims"])
+    expect(names_in(dialog, "Saved Tables")).to_have_text(["ddos_victims"])
 
     page.reload()
     dialog = open_tables(page)
-    expect(dialog.get_by_label("Hide rt_ tables")).to_be_checked()
-    expect(dialog.get_by_label("Hide lookup_ tables")).to_be_checked()
+    expect(dialog.get_by_label("Hide Result Tables")).to_be_checked()
+    expect(dialog.get_by_label("Hide Lookup Tables")).to_be_checked()
     expect(dialog.locator("li code")).to_have_text(["flows", "ddos_victims"])
     assert rt_name not in dialog.inner_text()
 
@@ -106,14 +107,14 @@ def test_dialog_top_stays_put_when_a_checkbox_changes_the_list(live_page, tables
     agent, _ = tables
     page = live_page(agent=agent)
     dialog = open_tables(page)
-    expect(names_in(dialog, "Result Tables")).to_have_count(2)
+    expect(names_in(dialog, "Result Tables")).to_have_count(1)
     top = dialog.bounding_box()["y"]
 
-    dialog.get_by_label("Hide lookup_ tables").check()
+    dialog.get_by_label("Hide Lookup Tables").check()
     expect(dialog.get_by_role("heading", name="Lookup Tables")).to_have_count(0)
     assert dialog.bounding_box()["y"] == top
-    dialog.get_by_label("Hide rt_ tables").check()
-    expect(names_in(dialog, "Result Tables")).to_have_text(["ddos_victims"])
+    dialog.get_by_label("Hide Result Tables").check()
+    expect(dialog.get_by_role("heading", name="Result Tables")).to_have_count(0)
     assert dialog.bounding_box()["y"] == top
 
 
@@ -130,3 +131,29 @@ def test_clicking_outside_the_dialog_closes_it_but_clicking_inside_does_not(live
 
     page.mouse.click(box["x"] + box["width"] + 20, box["y"] + box["height"] / 2)
     expect(dialog).not_to_have_attribute("open", "")
+
+
+def test_deleting_from_the_dialog_asks_inline_then_removes_the_row_and_stays_open(live_page, tables):
+    agent, rt_name = tables
+    page = live_page(agent=agent)
+    dialog = open_tables(page)
+    expect(dialog.get_by_role("button", name="Delete flows")).to_have_count(0)  # telemetry can't be deleted
+
+    dialog.get_by_role("button", name="Delete ddos_victims").click()
+    expect(dialog.get_by_text("Delete ddos_victims?")).to_be_visible()
+    dialog.get_by_role("button", name="Cancel").click()
+    expect(dialog.get_by_text("Delete ddos_victims?")).to_have_count(0)
+    expect(names_in(dialog, "Saved Tables")).to_have_text(["ddos_victims"])
+
+    dialog.get_by_role("button", name="Delete ddos_victims").click()
+    dialog.get_by_role("button", name="Delete", exact=True).click()
+    expect(dialog.get_by_role("heading", name="Saved Tables")).to_have_count(0)
+    expect(dialog).to_have_attribute("open", "")
+
+    dialog.get_by_role("button", name="Delete lookup_watch").click()
+    dialog.get_by_role("button", name="Delete", exact=True).click()
+    expect(names_in(dialog, "Lookup Tables")).to_have_text(["lookup_bad_ips"])
+
+    page.keyboard.press("Escape")
+    dialog = open_tables(page)
+    expect(dialog.locator("li code")).to_have_text(["flows", "lookup_bad_ips", rt_name])

@@ -1,11 +1,19 @@
 <div class="display" data-rows-url="{{ rows_url }}" data-psv-url="{{ psv_url }}" data-settings-url="{{ settings_url }}"
      x-data="{ name: '', urls: {}, copied: false, retentionDays: 1, editing: false, draft: '', choice: '1', custom: 1, saveError: '',
+               originalChoice: '1', retentionTouched: false,
                presets: ['1', '7', '30', '365'],
                edit() {
                  this.draft = this.name; this.saveError = '';
                  this.choice = this.presets.includes(String(this.retentionDays)) ? String(this.retentionDays) : 'custom';
                  this.custom = this.retentionDays; this.editing = true;
+                 this.originalChoice = this.choice; this.retentionTouched = false;
                  this.$nextTick(() => { this.$refs.nameInput.focus(); this.$refs.nameInput.select(); });
+               },
+               renamed() {
+                 // Renaming a Result Table (rt_*) makes it a Saved Table, kept 30 days unless the user picks
+                 // a Retention in this edit or it is already kept at least that long (ADR 0004).
+                 if (this.retentionTouched || !this.name.toLowerCase().startsWith('rt_') || this.retentionDays >= 30) return;
+                 this.choice = this.draft.trim() === this.name ? this.originalChoice : '30';
                },
                async save() {
                  const days = this.choice === 'custom' ? this.custom : this.choice;
@@ -60,10 +68,10 @@
       <button type="button" class="name" x-show="!editing" @click="edit()" title="Click to rename this table (its SQL name) or change how long it is kept" x-text="name"></button>
       <button type="button" class="copy" x-show="!editing" @click="copyName()" title="Copy the SQL table name to the clipboard" x-text="copied ? 'Copied' : 'Copy'"></button>
       <form class="editor" x-show="editing" @submit.prevent="save()" @keydown.escape="editing = false">
-        <input type="text" x-ref="nameInput" x-model="draft" maxlength="60" required aria-label="Table name (SQL)">
+        <input type="text" x-ref="nameInput" x-model="draft" @input="renamed()" maxlength="60" required aria-label="Table name (SQL)">
         <label>Keep for
-          <select x-model="choice" aria-label="Retention">
-            <option value="1">1 day (default)</option>
+          <select x-model="choice" @change="retentionTouched = true" aria-label="Retention">
+            <option value="1">1 day (rt_ default)</option>
             <option value="7">7 days</option>
             <option value="30">30 days</option>
             <option value="365">365 days</option>

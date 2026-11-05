@@ -19,6 +19,8 @@ from contextlib import closing
 from pathlib import Path
 from typing import Literal
 
+from flood_agent import table_names
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY,
@@ -80,8 +82,9 @@ _RESULT_TABLE_MIGRATIONS = {
 }
 _LOOKUP_TABLE_MIGRATIONS = {"row_count": "INTEGER NOT NULL DEFAULT 0"}
 
-# Which of a Conversation's live Result Tables a delete also drops: none, those still named rt_*, or all.
-TablesChoice = Literal["keep", "delete_rt", "delete_all"]
+# Whether deleting a Conversation or exchange also drops its live Result Tables (those still named
+# rt_*). Its Saved Tables are always kept (ADR 0004).
+TablesChoice = Literal["keep", "delete_rt"]
 
 
 def _follow_rename(node, old: str, new: str):
@@ -184,16 +187,15 @@ class ConversationStore:
 
     @staticmethod
     def _choose(tables: list[sqlite3.Row], choice: TablesChoice) -> list[str]:
-        """The names to delete under `choice`: keep, delete_rt (still named rt_*) or delete_all."""
-        if choice == "delete_all":
-            return [t["name"] for t in tables]
+        """The names to delete under `choice`: none for keep, the Result Tables for delete_rt."""
         if choice == "delete_rt":
-            return [t["name"] for t in tables if t["name"].startswith("rt_")]
+            return [t["name"] for t in tables if table_names.is_result_table_name(t["name"])]
         return []
 
     def delete_preview(self, conversation_id: str, turn_id: int | None = None) -> dict:
-        """Counts for the delete dialog: live Result Tables that would go under delete_all (`total`)
-        and under delete_rt (`rt`). KeyError if the turn is not in the Conversation."""
+        """Counts for the delete dialog: the live Result Tables that delete_rt would drop (`result`)
+        and the live Saved Tables that are always kept (`saved`). KeyError if the turn is not in the
+        Conversation."""
         with closing(self._connect()) as con:
             if turn_id is None:
                 tables = self._live_tables(con, conversation_id)
@@ -202,7 +204,8 @@ class ConversationStore:
                                (turn_id, conversation_id)).fetchone() is None:
                     raise KeyError(turn_id)
                 tables = self._turn_owned(con, conversation_id, turn_id)
-        return {"total": len(tables), "rt": len(self._choose(tables, "delete_rt"))}
+        result = len(self._choose(tables, "delete_rt"))
+        return {"result": result, "saved": len(tables) - result}
 
     def delete_conversation(self, conversation_id: str, tables: TablesChoice = "keep") -> list[str]:
         """Remove a Conversation and everything it owns except the Result Tables the user keeps
@@ -354,6 +357,10 @@ class ConversationStore:
         """Names of the registered Lookup Tables, sorted."""
         with closing(self._connect()) as con:
             return [r[0] for r in con.execute("SELECT name FROM lookup_tables ORDER BY name")]
+
+    def unregister_lookup_table(self, name: str) -> None:
+        """Forget a Lookup Table (SQL names ignore case, so this does too)."""
+        self._write("DELETE FROM lookup_tables WHERE name=? COLLATE NOCASE", (name,))
 
     def is_lookup_table(self, name: str) -> bool:
         """SQL table names ignore case, so this does too."""

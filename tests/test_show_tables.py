@@ -1,4 +1,4 @@
-"""GET /api/tables: the names of every table the user can query, for the Show tables dialog (HTTP seam).
+"""GET and DELETE /api/tables: the tables the user can query, for the Tables dialog (HTTP seam).
 
 Plain HTTP for the web page, never an MCP tool, and names only (ADR 0001)."""
 
@@ -26,7 +26,7 @@ def test_telemetry_tables_are_those_described_in_the_semantic_layer(build_agent,
     client = web_client(build_agent(ScriptedLLM()))
     r = client.get("/api/tables")
     assert r.status_code == 200
-    assert r.json() == {"telemetry": ["dns", "flows"], "lookup": [], "result": []}
+    assert r.json() == {"telemetry": ["dns", "flows"], "lookup": [], "saved": [], "result": []}
 
 
 def test_lookup_tables_are_listed_sorted(build_agent, web_client):
@@ -36,12 +36,14 @@ def test_lookup_tables_are_listed_sorted(build_agent, web_client):
     assert client.get("/api/tables").json()["lookup"] == ["lookup_bad_ips", "lookup_watch"]
 
 
-def test_live_result_tables_from_every_conversation_are_listed_by_current_name(build_agent, web_client):
+def test_renamed_tables_are_listed_as_saved_tables_and_rt_ones_as_result_tables(build_agent, web_client):
     client, a, b, a_table, b_table = two_conversations_with_tables(build_agent, web_client)
     assert client.post(f"/api/results/{b_table}/settings", data={"name": "ddos_victims"}).status_code == 200
     assert client.post(f"/c/{a}/delete", data={"tables": "keep"}, follow_redirects=False).status_code == 303
     assert a_table.startswith("rt_")
-    assert client.get("/api/tables").json()["result"] == ["ddos_victims", a_table]
+    listed = client.get("/api/tables").json()
+    assert listed["saved"] == ["ddos_victims"]
+    assert listed["result"] == [a_table]
 
 
 def test_result_tables_past_their_retention_are_left_out(build_agent, web_client):
@@ -76,3 +78,34 @@ def test_listing_tables_creates_no_conversation_message_or_trace(build_agent, we
     assert app_db_counts(tmp_path / "app.db") == counts
     assert client.get("/").text == home
     assert client.get(f"/c/{a}").text == conversation
+
+
+def test_deleting_a_lookup_table_drops_and_unregisters_it(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM()))
+    client.post("/api/lookup-tables", data={"name": "watch", "rows": "ip\n10.0.0.1"})
+    assert client.delete("/api/tables/lookup_watch").status_code == 204
+    assert client.get("/api/tables").json()["lookup"] == []
+    # Gone from the results database too: the name can be used again without Overwrite.
+    assert client.post("/api/lookup-tables", data={"name": "watch", "rows": "ip\n10.0.0.2"}).status_code == 200
+
+
+def test_deleting_saved_and_result_tables_leaves_their_displays_showing_expired(build_agent, web_client):
+    client, a, b, a_table, b_table = two_conversations_with_tables(build_agent, web_client)
+    client.post(f"/api/results/{b_table}/settings", data={"name": "ddos_victims"})
+    assert client.delete(f"/api/tables/{a_table}").status_code == 204
+    assert client.delete("/api/tables/ddos_victims").status_code == 204
+    listed = client.get("/api/tables").json()
+    assert listed["saved"] == [] and listed["result"] == []
+    for name, cid in ((a_table, a), ("ddos_victims", b)):
+        gone = client.get(f"/api/results/{name}/rows")
+        assert gone.status_code == 410 and "expired" in gone.json()["detail"].lower()
+        assert "data-rows-url" not in client.get(f"/c/{cid}").text
+
+
+def test_telemetry_and_unknown_tables_cannot_be_deleted(build_agent, web_client):
+    client, _, _, a_table, _ = two_conversations_with_tables(build_agent, web_client)
+    assert client.delete("/api/tables/flows").status_code == 400
+    assert client.delete("/api/tables/nope").status_code == 404
+    assert client.delete(f"/api/tables/{a_table}").status_code == 204
+    assert client.delete(f"/api/tables/{a_table}").status_code == 404  # already gone
+    assert client.get("/api/tables").json()["telemetry"] == ["flows"]

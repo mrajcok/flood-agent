@@ -1,5 +1,6 @@
 <aside id="sidebar" {% if oob %}hx-swap-oob="true"{% endif %}>
-  <div class="show-tables" x-data="{ open: false, tables: null, error: '', hideRt: false, hideLookup: false, request: 0,
+  <div class="show-tables" x-data="{ open: false, tables: null, error: '', hideRt: false, hideLookup: false, request: 0, confirming: null,
+       /* hideRt hides the Result Tables; the name is kept so saved choices survive. */
        init() { this.remember('hideRt'); this.remember('hideLookup'); },
        remember(key) {
          /* Keep a checkbox in localStorage; without storage it just starts unchecked. */
@@ -9,7 +10,7 @@
        },
        async load() {
          const request = ++this.request;  /* only the latest open's response is shown */
-         this.tables = null; this.error = '';
+         this.tables = null; this.error = ''; this.confirming = null;
          try {
            const r = await fetch('/api/tables');
            if (!r.ok) throw new Error(r.status);
@@ -17,12 +18,21 @@
            if (request === this.request) this.tables = tables;
          } catch (e) { if (request === this.request) this.error = 'Could not load the tables. Try again.'; }
        },
-       shown(name) { return !(this.hideRt && name.startsWith('rt_')) && !(this.hideLookup && name.startsWith('lookup_')); },
        get sections() {
          if (!this.tables) return [];
-         return [['Telemetry', this.tables.telemetry], ['Lookup Tables', this.tables.lookup.filter(n => this.shown(n))],
-                 ['Result Tables', this.tables.result.filter(n => this.shown(n))]]
-           .filter(([, names]) => names.length).map(([title, names]) => ({ title, names }));
+         return [['Telemetry', this.tables.telemetry, false], ['Lookup Tables', this.hideLookup ? [] : this.tables.lookup, true],
+                 ['Saved Tables', this.tables.saved, true], ['Result Tables', this.hideRt ? [] : this.tables.result, true]]
+           .filter(([, names]) => names.length).map(([title, names, deletable]) => ({ title, names, deletable }));
+       },
+       async remove(name) {
+         /* Telemetry tables are never offered; the server refuses them anyway. */
+         this.error = '';
+         try {
+           const r = await fetch('/api/tables/' + encodeURIComponent(name), { method: 'DELETE' });
+           if (!r.ok && r.status !== 404) throw new Error(r.status);
+           for (const kind of ['lookup', 'saved', 'result']) this.tables[kind] = this.tables[kind].filter(n => n !== name);
+         } catch (e) { this.error = 'Could not delete ' + name + '. Try again.'; }
+         this.confirming = null;
        },
        closeIfOutside(e) {
          /* A click on the backdrop targets the <dialog> itself, but so does one on its padding: compare coordinates. */
@@ -42,12 +52,12 @@
          input.setSelectionRange(head.length, head.length);
          input.dispatchEvent(new Event('input', { bubbles: true }));
        } }">
-    <button type="button" class="sidebar-action" @click="open = true; load()">Show tables</button>
+    <button type="button" class="sidebar-action" @click="open = true; load()">Tables</button>
     <dialog x-ref="dialog" aria-labelledby="show-tables-title" x-effect="open ? $el.showModal() : $el.open && $el.close()" @close="open = false" @click="closeIfOutside($event)">
       <h3 id="show-tables-title">Tables you can query</h3>
       <div class="filters">
-        <label><input type="checkbox" x-model="hideRt"> Hide <code>rt_</code> tables</label>
-        <label><input type="checkbox" x-model="hideLookup"> Hide <code>lookup_</code> tables</label>
+        <label><input type="checkbox" x-model="hideRt"> Hide Result Tables (<code>rt_&hellip;</code>)</label>
+        <label><input type="checkbox" x-model="hideLookup"> Hide Lookup Tables</label>
       </div>
       <div class="table-list">
         <p x-show="!tables && !error">Loading&hellip;</p>
@@ -57,7 +67,20 @@
             <h4 x-text="section.title"></h4>
             <ul>
               <template x-for="name in section.names" :key="name">
-                <li><code x-text="name"></code><button type="button" class="copy" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into the chat'" @click="insertIntoChat(name)">&#x29C9;</button></li>
+                <li>
+                  <template x-if="confirming !== name">
+                    <div class="row"><code x-text="name"></code><span class="row-actions">
+                      <button type="button" class="copy" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into the chat'" @click="insertIntoChat(name)">&#x29C9;</button>
+                      <button type="button" class="delete" x-show="section.deletable" :aria-label="'Delete ' + name" :title="'Delete ' + name" @click="confirming = name">&#x1F5D1;&#xFE0E;</button>
+                    </span></div>
+                  </template>
+                  <template x-if="confirming === name">
+                    <div class="row confirm"><span>Delete <code x-text="name"></code>?</span><span class="row-actions">
+                      <button type="button" class="danger" @click="remove(name)">Delete</button>
+                      <button type="button" @click="confirming = null">Cancel</button>
+                    </span></div>
+                  </template>
+                </li>
               </template>
             </ul>
           </section>
@@ -104,7 +127,7 @@
         <button type="button" class="dots" aria-label="Conversation options" aria-haspopup="menu" :aria-expanded="open" @click="open = !open">&hellip;</button>
         <div class="popup" role="menu" x-show="open" x-cloak>
           <button type="button" role="menuitem" @click="open = false; editing = true; $nextTick(() => { $refs.title.focus(); $refs.title.select(); })">Rename</button>
-          <form method="post" action="/c/{{ c.id }}/delete" class="delete-form" data-preview-url="/c/{{ c.id }}/delete-preview" data-confirm="Delete this conversation and its results?">
+          <form method="post" action="/c/{{ c.id }}/delete" class="delete-form" data-preview-url="/c/{{ c.id }}/delete-preview" data-title="Delete this conversation?">
             <button type="submit" role="menuitem">Delete</button>
           </form>
         </div>

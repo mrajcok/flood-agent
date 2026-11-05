@@ -30,8 +30,8 @@ def test_b_saves_the_display_but_deleting_b_never_drops_as_table(build_agent, we
     client, a, b, table = two_conversations(build_agent, web_client)
     assert f"/api/results/{table}/rows" in client.get(f"/c/{b}").text
 
-    assert client.get(f"/c/{b}/delete-preview").json()["total"] == 0
-    client.post(f"/c/{b}/delete", data={"tables": "delete_all"})
+    assert client.get(f"/c/{b}/delete-preview").json() == {"result": 0, "saved": 0}
+    client.post(f"/c/{b}/delete", data={"tables": "delete_rt"})
     assert client.get(f"/api/results/{table}/rows").status_code == 200
     assert f"/api/results/{table}/rows" in client.get(f"/c/{a}").text
 
@@ -39,14 +39,14 @@ def test_b_saves_the_display_but_deleting_b_never_drops_as_table(build_agent, we
 def test_deleting_bs_turn_that_showed_as_table_leaves_the_table(build_agent, web_client):
     client, a, b, table = two_conversations(build_agent, web_client)
     (turn,) = turn_ids(client.get(f"/c/{b}").text)
-    assert client.get(f"/c/{b}/delete-preview?turn_id={turn}").json()["total"] == 0
-    client.post(f"/c/{b}/turns/{turn}/delete", data={"tables": "delete_all"})
+    assert client.get(f"/c/{b}/delete-preview?turn_id={turn}").json() == {"result": 0, "saved": 0}
+    client.post(f"/c/{b}/turns/{turn}/delete", data={"tables": "delete_rt"})
     assert client.get(f"/api/results/{table}/rows").status_code == 200
 
 
 def test_when_a_is_deleted_with_its_tables_bs_display_shows_expired(build_agent, web_client):
     client, a, b, table = two_conversations(build_agent, web_client)
-    client.post(f"/c/{a}/delete", data={"tables": "delete_all"})
+    client.post(f"/c/{a}/delete", data={"tables": "delete_rt"})
 
     gone = client.get(f"/api/results/{table}/rows")
     assert gone.status_code == 410 and "expired" in gone.json()["detail"].lower()

@@ -261,18 +261,18 @@ class Agent:
         return Conversation(conversation_id, repair_history(self.store.messages(conversation_id)))
 
     def delete_conversation(self, conversation_id: str, tables: TablesChoice = "keep") -> None:
-        """Delete a saved Conversation; `tables` (keep, delete_rt, delete_all) says which of its
-        live Result Tables to drop (KeyError if unknown)."""
+        """Delete a saved Conversation; `tables` (keep or delete_rt) says whether to drop its live
+        Result Tables. Its Saved Tables are always kept (KeyError if unknown)."""
         if not self.store.exists(conversation_id):
             raise KeyError(conversation_id)
-        self._drop_result_tables(self.store.delete_conversation(conversation_id, tables))
+        self._drop_tables(self.store.delete_conversation(conversation_id, tables))
 
     def delete_turn(self, conversation_id: str, turn_id: int, tables: TablesChoice = "keep") -> None:
-        """Delete one prompt/answer exchange; `tables` says which Result Tables it created to drop
-        (KeyError if unknown)."""
-        self._drop_result_tables(self.store.delete_turn(conversation_id, turn_id, tables))
+        """Delete one prompt/answer exchange; `tables` says whether to drop the Result Tables it
+        created. Saved Tables are always kept (KeyError if unknown)."""
+        self._drop_tables(self.store.delete_turn(conversation_id, turn_id, tables))
 
-    def _drop_result_tables(self, names: list[str]) -> None:
+    def _drop_tables(self, names: list[str]) -> None:
         if not names or not self.config.results_db.exists():
             return
         con = sqlite3.connect(self.config.results_db)
@@ -291,7 +291,7 @@ class Agent:
         names = self.store.due_for_expiry(self.config.result_ttl_ms)
         if not names:
             return
-        self._drop_result_tables(names)
+        self._drop_tables(names)
         self.store.mark_expired(names)
 
     def is_expired(self, result_table: str) -> bool:
@@ -335,14 +335,35 @@ class Agent:
 
     def list_tables(self) -> dict[str, list[str]]:
         """Names (only) of every table the user can query, by kind, each sorted: Telemetry Database
-        tables described in the Semantic Layer, Lookup Tables, and live Result Tables from every
-        Conversation. For the web page only; touches no Conversation, message or Trace."""
+        tables described in the Semantic Layer, Lookup Tables, and the live Saved Tables and Result
+        Tables from every Conversation. For the web page only; touches no Conversation, message or Trace."""
         self.sweep_expired()
+        saved, result = [], []
+        for name in self.store.all_live_result_table_names():  # every live query-made table
+            (result if table_names.is_result_table_name(name) else saved).append(name)
         return {
             "telemetry": sorted(self.semantic_layer.table_names()),
             "lookup": self.store.lookup_table_names(),
-            "result": self.store.all_live_result_table_names(),
+            "saved": saved,
+            "result": result,
         }
+
+    def delete_table(self, name: str) -> None:
+        """Delete a Lookup Table, Saved Table or Result Table the user picked in the Tables dialog.
+
+        A deleted Saved or Result Table stays registered as expired, so Displays of it in any
+        Conversation render as expired (ADR 0004). ValueError for a Telemetry Database table, which
+        cannot be deleted; KeyError for any other name that is not a live table of those kinds."""
+        if name.lower() in {t.lower() for t in self.semantic_layer.table_names()}:
+            raise ValueError(f"{name} is a Telemetry Database table and cannot be deleted.")
+        if self.store.is_lookup_table(name):
+            self._drop_tables([name])
+            self.store.unregister_lookup_table(name)
+        elif self._is_live_result_table(name):
+            self._drop_tables([name])
+            self.store.mark_expired([name])
+        else:
+            raise KeyError(name)
 
     def result_table_settings(self, result_table: str) -> dict:
         """The Result Table's name and retention in days (KeyError if unknown)."""
@@ -357,7 +378,8 @@ class Agent:
         """Rename (a real SQL rename) and/or change retention of a live Result Table.
 
         A `name` equal to the current one changes nothing. Returns the new settings. ValueError,
-        changing nothing, if the new name is not allowed. Retention is unchanged by a rename."""
+        changing nothing, if the new name is not allowed. Retention is unchanged by a rename: the
+        rename form, not the server, offers a Saved Table's 30-day default (ADR 0004)."""
         self._require_live_result_table(result_table)
         if name is not None and name != result_table:
             self._rename(result_table, name)

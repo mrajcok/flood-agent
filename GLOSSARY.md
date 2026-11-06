@@ -79,11 +79,11 @@ _Avoid_: Widget, view, output
 ## Fake Mode
 
 **Fake Mode**:
-Running Flood Agent with a scripted stand-in for the LLM, so no language model is called. Everything else — the Agent, queries, Result Tables, Displays, Traces — runs for real.
+The state of a prompt sent with the Model Choice "No model": a scripted stand-in answers instead of a language model, so no model is called and no API key is needed. Everything else — the Agent, queries, Result Tables, Displays, Traces — runs for real. A Conversation can mix Fake Mode and real prompts.
 _Avoid_: Demo mode, offline mode, mock mode
 
 **Canned Prompt**:
-A fixed user message offered in Fake Mode, paired with the scripted LLM replies it produces.
+A fixed user message offered while "No model" is selected, always sent as a Fake Mode prompt, paired with the scripted LLM replies it produces.
 _Avoid_: Sample query, test prompt, scenario
 
 ## Model choice

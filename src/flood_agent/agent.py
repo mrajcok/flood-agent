@@ -5,6 +5,7 @@ The HTTP/SSE layer is a thin adapter over `Agent.run_turn`. The LLM client is in
 
 import asyncio
 import json
+import os
 import sqlite3
 import sys
 import time
@@ -16,7 +17,7 @@ from mcp import StdioServerParameters
 from mcp.types import TextContent
 
 from flood_agent import flagging, lookup_tables, queries, table_names
-from flood_agent.llm import LLMClient, LLMError, TextChunk, ToolCallChunk, UsageChunk
+from flood_agent.llm import LLMClient, LLMError, ReasoningChunk, TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
 from flood_agent.mcp_protocol import QUERY_TOOLS
 from flood_agent.mcp_server import ServerSettings
@@ -561,7 +562,7 @@ class Agent:
             system_prompt = self.semantic_layer.system_prompt(self.store.live_result_tables(conversation.id))
             messages = [{"role": "system", "content": system_prompt}]
             messages += conversation.messages
-            text, calls, usage = "", [], None
+            text, calls, usage, reasoning = "", [], None, None
             step_started = time.monotonic()
             async for chunk in self.llm.stream_chat(messages, tools):
                 if isinstance(chunk, TextChunk):
@@ -573,10 +574,14 @@ class Agent:
                     calls.append(chunk)
                 elif isinstance(chunk, UsageChunk):
                     usage = chunk
+                elif isinstance(chunk, ReasoningChunk):
+                    reasoning = chunk.details
             sent_bytes = len(json.dumps({"messages": messages, "tools": tools}, default=str).encode())
             trace.llm_step(system_prompt, text, calls, usage, step_started, sent_bytes)
             await self._flag_unseen_values(text, system_prompt, messages, calls, trace, queue)
             assistant: dict = {"role": "assistant", "content": text}
+            if reasoning and os.environ.get("REASONING_PASSBACK") == "1":  # PROTOTYPE switch
+                assistant["reasoning_details"] = reasoning
             if calls:
                 assistant["tool_calls"] = [
                     {

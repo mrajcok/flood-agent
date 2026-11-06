@@ -35,7 +35,14 @@ class UsageChunk:
     cost: float | None = None
 
 
-Chunk = TextChunk | ToolCallChunk | UsageChunk
+@dataclass
+class ReasoningChunk:
+    """PROTOTYPE: the merged `reasoning_details` array of one step (sent back verbatim)."""
+
+    details: list
+
+
+Chunk = TextChunk | ToolCallChunk | UsageChunk | ReasoningChunk
 
 
 class LLMClient(Protocol):
@@ -60,6 +67,7 @@ class OpenRouterClient:
         headers = {"Authorization": f"Bearer {self.api_key}"}
         pending: dict[int, dict] = {}
         usage = None
+        reasoning: dict[tuple, dict] = {}  # PROTOTYPE: merge fragments by (type, index)
         complete = False  # saw [DONE] or a finish reason
         async with httpx.AsyncClient(timeout=120, transport=self.transport) as client:
             async with client.stream("POST", self.url, json=body, headers=headers) as resp:
@@ -88,6 +96,13 @@ class OpenRouterClient:
                     if choices[0].get("finish_reason"):
                         complete = True
                     delta = choices[0].get("delta", {})
+                    for frag in delta.get("reasoning_details") or []:
+                        slot = reasoning.setdefault((frag.get("type"), frag.get("index", 0)), {})
+                        for k, v in frag.items():
+                            if k in ("text", "summary", "data") and isinstance(v, str):
+                                slot[k] = slot.get(k, "") + v
+                            elif v is not None:
+                                slot[k] = v
                     if delta.get("content"):
                         yield TextChunk(delta["content"])
                     for tc in delta.get("tool_calls") or []:
@@ -102,6 +117,8 @@ class OpenRouterClient:
             if not slot["id"] or not slot["name"] or not _is_json(slot["args"] or "{}"):
                 raise LLMError("The model's response was cut off in the middle of a tool call. Please try again.")
             yield ToolCallChunk(slot["id"], slot["name"], slot["args"] or "{}")
+        if reasoning:
+            yield ReasoningChunk(list(reasoning.values()))
         if usage:
             yield usage
 

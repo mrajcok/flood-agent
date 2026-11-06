@@ -130,18 +130,26 @@ async def _run_question(model, q, ref, telemetry_db, semantic_layer, client_fact
     )
 
 
-async def run_eval(models, questions, telemetry_db, semantic_layer, client_factory, workdir) -> list[QuestionResult]:
+async def run_eval(models, questions, telemetry_db, semantic_layer, client_factory, workdir,
+                   checkpoint: Path | None = None) -> list[QuestionResult]:
     """client_factory(model, question_id) -> LLM client (optionally with a `usage` dict)."""
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
     refs = {q.id: run_reference(telemetry_db, workdir / "reference.db", q.sql) for q in questions}
     out = []
+    if checkpoint and checkpoint.exists():  # PROTOTYPE resume: skip (model, question) pairs already done
+        out = [QuestionResult(**json.loads(line)) for line in checkpoint.read_text().splitlines() if line.strip()]
+    done = {(r.model, r.question_id) for r in out}
     for model in models:
         for q in questions:
-            out.append(
-                await _run_question(model, q, refs[q.id], telemetry_db, semantic_layer, client_factory, workdir)
-            )
-    return out
+            if (model, q.id) in done:
+                continue
+            r = await _run_question(model, q, refs[q.id], telemetry_db, semantic_layer, client_factory, workdir)
+            out.append(r)
+            if checkpoint:
+                with checkpoint.open("a") as f:
+                    f.write(json.dumps(asdict(r)) + "\n")
+    return [r for r in out if r.model in models]
 
 
 def summarize(results: list[QuestionResult]) -> dict:
@@ -221,7 +229,8 @@ def main(argv=None) -> int:
             return 2
     results = asyncio.run(
         run_eval(a.models, questions, Path(a.db or settings.telemetry_db), Path(a.semantic_layer or settings.semantic_layer),
-                 lambda model, qid: OpenRouterClient(key.get_secret_value(), model), Path(a.workdir))
+                 lambda model, qid: OpenRouterClient(key.get_secret_value(), model), Path(a.workdir),
+                 Path(f"{a.out}.jsonl"))
     )
     summary = summarize(results)
     Path(f"{a.out}.md").write_text(render_markdown(summary, results))

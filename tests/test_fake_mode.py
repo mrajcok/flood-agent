@@ -11,7 +11,7 @@ from flood_agent.__main__ import build_app, picker_entries
 from flood_agent.agent import Conversation, DisplayEvent, TraceReady, TurnError
 from flood_agent.config import Settings
 from flood_agent.fake_llm import CannedPrompt, FakeClient, Step, load_canned_prompts, parent_of
-from flood_agent.llm import TextChunk
+from flood_agent.llm import TextChunk, ToolCallChunk
 
 CANNED = load_canned_prompts()
 PICKER = picker_entries(CANNED)
@@ -226,13 +226,26 @@ async def test_malformed_tool_result_json_is_not_reported_as_run_parent_first():
         [c async for c in fake_client().stream_chat(messages, [])]
 
 
-async def test_a_script_that_runs_out_of_steps_ends_the_turn_with_a_short_reply():
+async def test_a_script_that_runs_out_of_steps_ends_the_turn_with_no_more_text():
+    """A script may end on its show_* call, whose text introduced the Display, as a real model does."""
     ad_hoc = CannedPrompt(id="x", prompt="ad hoc", steps=(Step(text="only step"),))
     messages = [{"role": "user", "content": "ad hoc"}, {"role": "assistant", "content": "only step"}]
 
     chunks = [c async for c in fake_client([ad_hoc]).stream_chat(messages, [])]
 
-    assert "".join(c.text for c in chunks if isinstance(c, TextChunk)) == "Fake Mode: script ended."
+    assert not [c for c in chunks if isinstance(c, (TextChunk, ToolCallChunk))]
+
+
+@pytest.mark.parametrize("canned_id", ["bytes-over-time", "bytes-by-port", "top-destinations"])
+async def test_a_canned_display_is_introduced_before_it_appears(canned_id, make_agent, telemetry_db):
+    agent = await make_agent(fake_client(), model="fake")
+    canned = next(c for c in CANNED if c.id == canned_id)
+
+    events = await collect(agent, canned.prompt, max_result_rows=FAKE_CAP)
+
+    first_display = next(i for i, e in enumerate(events) if isinstance(e, DisplayEvent))
+    assert text_of(events[:first_display]).startswith("Here ")
+    assert not text_of(events[first_display:]).strip()
 
 
 def test_an_unknown_key_in_a_canned_prompt_is_a_load_error(tmp_path):

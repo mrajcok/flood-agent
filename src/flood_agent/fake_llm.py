@@ -20,7 +20,6 @@ from flood_agent.llm import Chunk, LLMError, TextChunk, ToolCallChunk, UsageChun
 CANNED_PROMPTS_FILE = Path(__file__).with_name("canned_prompts.yaml")
 CHUNK_SIZE = 8
 CHUNK_DELAY_S = 0.02
-SCRIPT_ENDED = "Fake Mode: script ended."
 _COUNT_PLACEHOLDER = "{count}"  # in step text: the latest run_count_query count of this turn
 _PLACEHOLDER = re.compile(r"\{result_table(?::(-\d+))?\}")
 
@@ -118,8 +117,8 @@ class FakeClient:
             step = Step(text=self._unmatched_reply())
         elif step_index < len(canned.steps):
             step = canned.steps[step_index]
-        else:
-            step = Step(text=SCRIPT_ENDED)
+        else:  # the script ended on tool calls (e.g. show_chart after its intro): nothing more to say
+            step = Step()
         if step.if_previous_failed and _latest_tool_call_failed(messages[last_user:]):
             step = Step(text=step.if_previous_failed)
         try:  # don't send a broken call: say why there is nothing to show

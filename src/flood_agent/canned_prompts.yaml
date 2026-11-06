@@ -3,7 +3,9 @@
 # Each entry is a fixed user message plus the scripted LLM replies that answer it.
 #   id      stable slug
 #   prompt  the user message: shown in the picker and matched by the fake exactly, bar surrounding spaces and a trailing period
-#   steps   one per simulated LLM call: `text` (streamed) and/or `tool_calls` (name + args)
+#   steps   one per simulated LLM call: `text` (streamed) and/or `tool_calls` (name + args). Text
+#           streams before the step's tool calls, so introduce a table or chart in the step that shows
+#           it, as a real model does. A turn whose last step has tool calls ends with no more text.
 #   after   optional id of a parent Canned Prompt: the follow-up is listed indented under it and needs its Result Table
 #   expect  the declared outcome the test suite checks (`displays`: Display kinds in order)
 #   Failure-path entries add to `expect`: `failed_tool_calls` (count), `notice` (text the reply must
@@ -42,11 +44,11 @@
           args:
             sql: SELECT dip, SUM(bytes) AS total_bytes FROM flows GROUP BY dip ORDER BY total_bytes DESC LIMIT 10
             title: Top destinations by bytes
-    - tool_calls:
+    - text: "Here are the top destinations by bytes."
+      tool_calls:
         - name: show_table
           args:
             result_table: "{result_table}"
-    - text: "Here are the top destinations by bytes."
   expect:
     displays: [table]
 
@@ -67,11 +69,11 @@
               SELECT f.sip, f.dip, f.dport, f.bytes FROM flows f
               JOIN lookup_watchlist w ON w.ip = f.sip OR w.ip = f.dip LIMIT 100
             title: Flows involving watchlist IPs
-    - tool_calls:
+    - text: "Here are the flows involving the IPs in lookup_watchlist."
+      tool_calls:
         - name: show_table
           args:
             result_table: "{result_table}"
-    - text: "Here are the flows involving the IPs in lookup_watchlist."
   expect:  # the declared outcome is for the table absent; with it present the turn shows a table
     displays: []
     failed_tool_calls: 1
@@ -85,11 +87,11 @@
           args:
             sql: SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC LIMIT 50
             title: Top 50 destination ports by bytes
-    - tool_calls:
+    - text: "Here are the top 50 destination ports. The table has more than one page of rows, so you can try paging and sorting."
+      tool_calls:
         - name: show_table
           args:
             result_table: "{result_table}"
-    - text: "Here are the top 50 destination ports. The table has more than one page of rows, so you can try paging and sorting."
   expect:
     displays: [table]
 
@@ -103,7 +105,8 @@
               SELECT (etime / 3600000) * 3600000 AS bucket_ms, SUM(bytes) AS total_bytes
               FROM flows GROUP BY bucket_ms ORDER BY bucket_ms
             title: Bytes per hour
-    - tool_calls:
+    - text: "Here is the hourly traffic."
+      tool_calls:
         - name: show_chart
           args:
             vega_lite_spec:
@@ -112,7 +115,6 @@
               encoding:
                 x: {field: bucket_ms, type: temporal, scale: {type: utc}, title: Time (UTC)}
                 y: {field: total_bytes, type: quantitative, title: Bytes}
-    - text: "Here is the hourly traffic."
   expect:
     displays: [chart]
 
@@ -124,7 +126,8 @@
           args:
             sql: SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC LIMIT 10
             title: Bytes by destination port
-    - tool_calls:
+    - text: "Here are the bytes by destination port."
+      tool_calls:
         - name: show_chart
           args:
             vega_lite_spec:
@@ -133,7 +136,6 @@
               encoding:
                 x: {field: dport, type: nominal, sort: null, title: Destination port}
                 y: {field: total_bytes, type: quantitative, title: Bytes}
-    - text: "Here are the bytes by destination port."
   expect:
     displays: [chart]
 
@@ -150,11 +152,11 @@
           args:
             sql: SELECT dport, total_bytes FROM {result_table} ORDER BY total_bytes DESC LIMIT 3
             title: Top 3 ports
-    - tool_calls:
+    - text: "Here are the top 3 ports, queried from the earlier result."
+      tool_calls:
         - name: show_table
           args:
             result_table: "{result_table}"
-    - text: "Here are the top 3 ports, queried from the earlier result."
   expect:
     displays: [table]
 
@@ -170,14 +172,14 @@
           args:
             sql: SELECT dip, SUM(bytes) AS total_bytes FROM flows GROUP BY dip ORDER BY total_bytes DESC LIMIT 20
             title: Bytes per destination IP
-    - tool_calls:
+    - text: "Here are both tables."
+      tool_calls:
         - name: show_table
           args:
             result_table: "{result_table:-2}"
         - name: show_table
           args:
             result_table: "{result_table}"
-    - text: "Here are both tables."
   expect:
     displays: [table, table]
 
@@ -185,7 +187,8 @@
   prompt: Now chart those bytes by destination IP
   after: top-destinations
   steps:
-    - tool_calls:
+    - text: "Here is the previous result as a chart."
+      tool_calls:
         - name: show_chart
           args:
             vega_lite_spec:
@@ -194,7 +197,6 @@
               encoding:
                 x: {field: dip, type: nominal, sort: null, title: Destination IP}
                 y: {field: total_bytes, type: quantitative, title: Bytes}
-    - text: "Here is the previous result as a chart."
   expect:
     displays: [chart]
 

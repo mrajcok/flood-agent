@@ -33,21 +33,12 @@
        retention(name) {
          /* Only Saved and Result Tables have a Retention; '' for the rest. */
          const days = this.tables.retention_days[name];
-         if (days === undefined) return '';
-         /* Under a day reads better in hours, under an hour in minutes. */
-         const [n, unit] = days >= 1 ? [Math.round(days * 100) / 100, 'day']
-           : days * 24 >= 1 ? [Math.round(days * 240) / 10, 'hour'] : [Math.max(1, Math.round(days * 1440)), 'minute'];
-         return n + ' ' + unit + (n === 1 ? '' : 's');
+         return days === undefined ? '' : FloodFormat.formatRetention(days);
        },
        expiresIn(name) {
-         /* Time left, to the nearest hour, or the nearest day from a week on; '' without a Retention. */
+         /* '' without a Retention. */
          const ms = this.tables.expires_in_ms[name];
-         if (ms === undefined) return '';
-         const hours = Math.round(ms / 3600000);
-         if (hours < 1) return 'expires in under 1h';
-         if (hours >= 7 * 24) return 'expires in ' + Math.round(ms / 86400000) + 'd';  /* from ms: rounding twice drifts */
-         const d = Math.floor(hours / 24), h = hours % 24;
-         return 'expires in ' + [d && d + 'd', h && h + 'h'].filter(Boolean).join(' ');
+         return ms === undefined ? '' : FloodFormat.formatExpiresIn(ms);
        },
        async remove(name) {
          /* Telemetry tables are never offered; the server refuses them anyway. */
@@ -122,10 +113,15 @@
                   <template x-if="confirming !== name">
                     <div class="row"><span class="row-actions">
                       <button type="button" class="copy" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into the chat'" @click="copy(name)">&#x29C9;</button>
-                      <button type="button" class="view" :style="section.viewable ? '' : 'visibility: hidden'" :disabled="!section.viewable" :aria-label="'View ' + name" :title="'View the rows of ' + name" @click="view(name)">&#x25A6;&#xFE0E;</button>
                       <!-- Hidden, not removed, where not offered so the names line up across sections. -->
                       <button type="button" class="delete" :style="section.deletable ? '' : 'visibility: hidden'" :disabled="!section.deletable" :aria-label="'Delete ' + name" :title="'Delete ' + name" @click="confirming = name">&#x1F5D1;&#xFE0E;</button>
-                      <button type="button" class="edit" :style="section.editable ? '' : 'visibility: hidden'" :disabled="!section.editable" :aria-label="'Edit ' + name" :title="'Edit ' + name" @click="$dispatch('edit-lookup', name)">&#x270E;&#xFE0E;</button>
+                      <!-- One column for view (Saved and Result Tables) and edit (Lookup Tables): no table has both. -->
+                      <template x-if="section.viewable">
+                        <button type="button" class="view" :aria-label="'View ' + name" :title="'View the rows of ' + name" @click="view(name)">&#x25A6;&#xFE0E;</button>
+                      </template>
+                      <template x-if="!section.viewable">
+                        <button type="button" class="edit" :style="section.editable ? '' : 'visibility: hidden'" :disabled="!section.editable" :aria-label="'Edit ' + name" :title="'Edit ' + name" @click="$dispatch('edit-lookup', name)">&#x270E;&#xFE0E;</button>
+                      </template>
                       </span><code x-text="name"></code>
                       <template x-if="expiresIn(name)"><span class="expires" :title="'Retention: ' + retention(name)" x-text="expiresIn(name)"></span></template>
                     </div>

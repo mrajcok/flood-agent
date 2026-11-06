@@ -1,36 +1,10 @@
-<div class="display" data-rows-url="{{ rows_url }}" data-psv-url="{{ psv_url }}" data-settings-url="{{ settings_url }}"
-     x-data="{ name: '', urls: {}, retentionDays: 1, editing: false, draft: '', choice: '1', custom: 1, saveError: '',
-               originalChoice: '1', retentionTouched: false,
-               presets: ['1', '7', '30', '365'],
-               edit() {
-                 this.draft = this.name; this.saveError = '';
-                 this.choice = this.presets.includes(String(this.retentionDays)) ? String(this.retentionDays) : 'custom';
-                 this.custom = this.retentionDays; this.editing = true;
-                 this.originalChoice = this.choice; this.retentionTouched = false;
-                 this.$nextTick(() => { this.$refs.nameInput.focus(); this.$refs.nameInput.select(); });
-               },
-               renamed() {
-                 // Renaming a Result Table (rt_*) makes it a Saved Table, kept 30 days unless the user picks
-                 // a Retention in this edit or it is already kept at least that long (ADR 0004).
-                 if (this.retentionTouched || !this.name.toLowerCase().startsWith('rt_') || this.retentionDays >= 30) return;
-                 this.choice = this.draft.trim() === this.name ? this.originalChoice : '30';
-               },
-               async save() {
-                 const days = this.choice === 'custom' ? this.custom : this.choice;
-                 const body = new URLSearchParams({ name: this.draft, retention_days: String(days) });
-                 try {
-                   const r = await fetch(this.urls.settings, { method: 'POST', body });
-                   if (r.status === 410) { this.expired = true; this.loaded = false; this.editing = false; return; }
-                   if (!r.ok) { this.saveError = r.status === 422 ? ((await r.json()).detail || 'Enter a valid name and a number of days between 0 and 3650.') : 'Could not save.'; return; }
-                   const d = await r.json();
-                   this.follow(d.name); this.retentionDays = d.retention_days; this.editing = false;
-                 } catch (e) { this.saveError = 'Could not save.'; }
-               },
-               follow(name) {
-                 // A rename changes the table's name in every URL; pages, sorting, PSV and later edits use the new one.
-                 const old = encodeURIComponent(this.name), now = encodeURIComponent(name);
-                 for (const k of Object.keys(this.urls)) this.urls[k] = this.urls[k].replace('/api/results/' + old + '/', '/api/results/' + now + '/');
-                 this.name = name;
+<div class="display" data-rows-url="{{ rows_url }}" data-psv-url="{{ psv_url }}"
+     @table-renamed="follow($event.detail.old, $event.detail.name)" @table-expired="expired = true; loaded = false"
+     x-data="{ urls: {},
+               follow(old, name) {
+                 // A rename (in the name header) changes the table's name in every URL; pages, sorting and PSV use the new one.
+                 const from = '/api/results/' + encodeURIComponent(old) + '/', to = '/api/results/' + encodeURIComponent(name) + '/';
+                 for (const k of Object.keys(this.urls)) this.urls[k] = this.urls[k].replace(from, to);
                },
                columns: [], rows: [], formats: {}, total: 0, truncatedTo: null, page: 1, pageSize: 20,
                sort: null, dir: 'asc', loads: 0, loaded: false, error: false, expired: false,
@@ -43,11 +17,10 @@
                    if (!r.ok) throw new Error(r.status);
                    const d = await r.json();
                    this.columns = d.columns; this.rows = d.rows; this.formats = d.formats;
-                   this.name = d.name; this.retentionDays = d.retention_days;
                    this.total = d.total; this.truncatedTo = d.truncated_to; this.loads++; this.loaded = true; this.error = false;
                  } catch (e) { this.error = true; }
                },
-               init() { this.urls = { rows: $el.dataset.rowsUrl, psv: $el.dataset.psvUrl, settings: $el.dataset.settingsUrl }; this.load(); },
+               init() { this.urls = { rows: $el.dataset.rowsUrl, psv: $el.dataset.psvUrl }; this.load(); },
                get pages() { return Math.max(1, Math.ceil(this.total / this.pageSize)); },
                go(p) { this.page = Math.min(Math.max(1, p), this.pages); this.load(); },
                sortBy(c) {
@@ -61,26 +34,7 @@
   <p x-show="expired" x-cloak><em>expired</em> (this result has been deleted)</p>
   <p x-show="error" x-cloak>Could not load table.</p>
   <div x-show="loaded" x-cloak>
-    <div class="table-name">
-      <button type="button" class="name" x-show="!editing" @click="edit()" title="Click to rename this table (its SQL name) or change how long it is kept" x-text="name"></button>
-      <button type="button" class="copy" x-show="!editing" @click="insertIntoChat(name)" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into the chat'">&#x29C9;</button>
-      <form class="editor" x-show="editing" @submit.prevent="save()" @keydown.escape="editing = false">
-        <input type="text" x-ref="nameInput" x-model="draft" @input="renamed()" maxlength="60" required aria-label="Table name (SQL)">
-        <label>Keep for
-          <select x-model="choice" @change="retentionTouched = true" aria-label="Retention">
-            <option value="1">1 day (rt_ default)</option>
-            <option value="7">7 days</option>
-            <option value="30">30 days</option>
-            <option value="365">365 days</option>
-            <option value="custom">Custom</option>
-          </select>
-        </label>
-        <span x-show="choice === 'custom'" x-cloak><input type="number" x-model="custom" min="0.01" max="3650" step="any" aria-label="Retention in days"> days</span>
-        <button type="submit" class="primary">Save</button>
-        <button type="button" @click="editing = false">Cancel</button>
-        <span class="err" x-show="saveError" x-text="saveError"></span>
-      </form>
-    </div>
+    {% include "table_name.html" %}
     <div class="pager">
       <button type="button" @click="go(page - 1)" :disabled="page <= 1">Prev</button>
       <span x-text="'Page ' + page + ' of ' + pages + ' (' + total + ' rows)'"></span>

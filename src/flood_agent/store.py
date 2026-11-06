@@ -331,12 +331,13 @@ class ConversationStore:
                 "WHERE expired=0 AND created_at <= ? - COALESCE(retention_ms, ?)", (now, ttl_ms))]
 
     def result_table_settings(self, name: str, default_retention_ms: int) -> dict | None:
-        """The name and retention in ms of a Result Table, or None if unknown."""
+        """The name, retention in ms and time left in ms of a Result Table, or None if unknown."""
         with closing(self._connect()) as con:
-            row = con.execute("SELECT retention_ms FROM result_tables WHERE name=?", (name,)).fetchone()
+            row = con.execute("SELECT retention_ms, created_at FROM result_tables WHERE name=?", (name,)).fetchone()
         if row is None:
             return None
-        return {"name": name, "retention_ms": row["retention_ms"] if row["retention_ms"] is not None else default_retention_ms}
+        retention_ms = row["retention_ms"] if row["retention_ms"] is not None else default_retention_ms
+        return {"name": name, "retention_ms": retention_ms, "expires_in_ms": row["created_at"] + retention_ms - self._now()}
 
     def has_result_table(self, name: str) -> bool:
         with closing(self._connect()) as con:

@@ -413,11 +413,11 @@ class Agent:
             raise KeyError(name)
 
     def result_table_settings(self, result_table: str) -> dict:
-        """The Result Table's name and retention in days (KeyError if unknown)."""
+        """The Result Table's name, retention in days and time left in ms (KeyError if unknown)."""
         found = self.store.result_table_settings(result_table, self.config.result_ttl_ms)
         if found is None:
             raise KeyError(result_table)
-        return {"name": found["name"], "retention_days": found["retention_ms"] / DAY_MS}
+        return {"name": found["name"], "retention_days": found["retention_ms"] / DAY_MS, "expires_in_ms": found["expires_in_ms"]}
 
     def update_result_table(
         self, result_table: str, name: str | None = None, retention_days: float | None = None

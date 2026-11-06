@@ -202,9 +202,9 @@ def test_the_icons_come_just_before_each_name_and_the_expiry_is_right_aligned(li
     assert len(lefts) == 1  # every name starts at the same x, Telemetry included
     row = row_in(dialog, rt_name)
     copy, name, expires = (row.locator(s).bounding_box() for s in (".copy", "code", ".expires"))
-    delete, edit = row.locator(".delete").bounding_box(), row.locator(".edit").bounding_box()
-    assert copy and delete and edit and name and expires
-    assert copy["x"] < delete["x"] < edit["x"] < name["x"] and name["x"] - (edit["x"] + edit["width"]) < 12
+    delete, view = row.locator(".delete").bounding_box(), row.locator(".view").bounding_box()
+    assert copy and delete and view and name and expires
+    assert copy["x"] < delete["x"] < view["x"] < name["x"] and name["x"] - (view["x"] + view["width"]) < 12
     list_right = dialog.locator(".table-list").bounding_box()
     assert list_right and list_right["x"] + list_right["width"] - (expires["x"] + expires["width"]) < 12
 

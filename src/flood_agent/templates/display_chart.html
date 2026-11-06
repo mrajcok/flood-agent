@@ -9,6 +9,7 @@
                  } catch (e) { this.error = true; }
                },
                destroy() { if (this.view) { this.view.finalize(); this.view = null; } } }">
+  {% if settings_url %}{% include "table_name.html" %}{% endif %}
   <p x-show="error" x-cloak>Could not render chart.</p>
   <div x-ref="target" style="width:100%"></div>
   <p class="chart-hint" x-show="zoomable && !error" x-cloak>Ctrl+scroll to zoom, drag to pan, double-click to reset</p>

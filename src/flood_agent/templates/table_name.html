@@ -1,0 +1,21 @@
+<div class="table-name" x-data="tableName()" data-settings-url="{{ settings_url }}" x-show="name && !gone" x-cloak>
+  <button type="button" class="name" x-show="!editing" @click="edit()" title="Click to rename this table (its SQL name) or change how long it is kept" x-text="name"></button>
+  <button type="button" class="copy" x-show="!editing" @click="insertIntoChat(name)" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into the chat'">&#x29C9;</button>
+  <span class="expires" x-show="!editing && expiresIn" :title="'Retention: ' + retention" x-text="expiresIn"></span>
+  <form class="editor" x-show="editing" @submit.prevent="save()" @keydown.escape="editing = false">
+    <input type="text" x-ref="nameInput" x-model="draft" @input="renamed()" maxlength="60" required aria-label="Table name (SQL)">
+    <label>Keep for
+      <select x-model="choice" @change="retentionTouched = true" aria-label="Retention">
+        <option value="1">1 day (rt_ default)</option>
+        <option value="7">7 days</option>
+        <option value="30">30 days</option>
+        <option value="365">365 days</option>
+        <option value="custom">Custom</option>
+      </select>
+    </label>
+    <span x-show="choice === 'custom'" x-cloak><input type="number" x-model="custom" min="0.01" max="3650" step="any" aria-label="Retention in days"> days</span>
+    <button type="submit" class="primary">Save</button>
+    <button type="button" @click="editing = false">Cancel</button>
+    <span class="err" x-show="saveError" x-text="saveError"></span>
+  </form>
+</div>

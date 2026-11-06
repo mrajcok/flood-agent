@@ -81,7 +81,7 @@ def test_sort_applies_across_pages(env):
     # Ties are broken deterministically, so repeated calls agree.
     a = client.get(base, params={"sort": "proto"}).json()
     b = client.get(base, params={"sort": "proto"}).json()
-    assert a == b
+    assert a["rows"] == b["rows"]
 
 
 @pytest.mark.parametrize(

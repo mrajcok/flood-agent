@@ -101,7 +101,8 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
             if item["type"] == "display" and item["kind"] == "chart":
                 spec = resolve_chart_data(item["spec"], item["result_table"])
                 items.append({
-                    **item, "spec_json": json.dumps(spec), "expired": item["result_table"] in expired,
+                    **item, **_table_display_urls(item["result_table"]), "spec_json": json.dumps(spec),
+                    "expired": item["result_table"] in expired,
                 })
             elif item["type"] == "display":
                 items.append(
@@ -261,7 +262,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
                         yield _sse("text", f'<span class="md-delta">{escape(ev.text)}</span>')  # markdown.js renders it
                     elif isinstance(ev, DisplayEvent) and ev.kind == "chart":
                         html = TEMPLATES.get_template("display_chart.html").render(
-                            spec_json=json.dumps(ev.spec)
+                            spec_json=json.dumps(ev.spec), **_table_display_urls(ev.result_table)
                         ).strip()  # no stray newlines: the reply box keeps whitespace
                         yield _sse("display", html)
                     elif isinstance(ev, DisplayEvent):
@@ -302,6 +303,15 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
             raise HTTPException(404, "unknown result table")
         except InvalidSort:
             raise HTTPException(400, "unknown sort column")
+
+    @app.get("/api/results/{result_table}/settings")
+    def get_result_table_settings(result_table: str):
+        """A live Result Table's name, Retention in days and time left in ms (for a Display's name header)."""
+        try:
+            agent.require_live_result_table(result_table)
+        except KeyError:
+            raise HTTPException(404, "unknown result table")
+        return agent.result_table_settings(result_table)
 
     @app.post("/api/results/{result_table}/settings")
     def result_table_settings(

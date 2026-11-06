@@ -15,6 +15,7 @@
   <script src="https://cdn.jsdelivr.net/npm/vega-lite@5.21.0"></script>
   <script src="https://cdn.jsdelivr.net/npm/vega-embed@6.26.0"></script>
   <script src="/static/chart.js?v={{ static_version('chart.js') }}"></script>
+  <script src="/static/table_name.js?v={{ static_version('table_name.js') }}"></script>
   <style>
     html, body { height: 100%; }
     body { font-family: system-ui, sans-serif; max-width: 60rem; margin: 0 auto; padding: 0 1rem; box-sizing: border-box;
@@ -108,7 +109,7 @@
     .show-tables dialog li code { overflow-wrap: anywhere; }
     .show-tables dialog li .row code { flex: 1 1 auto; }
     .show-tables dialog li .expires { flex: none; font-size: .8rem; color: #6b7280; white-space: nowrap; }
-    .show-tables dialog .copy, .show-tables dialog .view, .show-tables dialog .edit, .show-tables dialog .delete { flex: none; background: none; border: 0; color: #4a6fd3; cursor: pointer; font-size: 1rem; line-height: 1; padding: .15rem .3rem; border-radius: .3rem; }
+    .show-tables dialog .copy, .show-tables dialog .view, .show-tables dialog .edit, .show-tables dialog .delete { flex: none; background: none; border: 0; color: #4a6fd3; cursor: pointer; font-size: 1rem; line-height: 1; width: 1.6rem; padding: .15rem 0; text-align: center; border-radius: .3rem; }  /* fixed width: glyph widths differ, names must line up */
     .show-tables dialog .copy:hover, .show-tables dialog .view:hover, .show-tables dialog .edit:hover, .show-tables dialog .delete:hover { background: #dce7fb; }
     .show-tables dialog .delete { color: #c62828; }
     .show-tables dialog .delete:hover { background: #fbe3e3; }
@@ -143,9 +144,10 @@
     .table-name .name::after { content: " \270E"; font-weight: 400; opacity: .7; }
     .table-name .name:hover { background: #eef3fd; }
     .table-name .copy { background: none; border: 0; color: #4a6fd3; cursor: pointer; font-size: 1rem; line-height: 1; padding: .15rem .3rem; border-radius: .3rem; }
+    .table-name .expires { margin-left: .4rem; font-size: .8rem; color: #6b7280; white-space: nowrap; }
     .table-name .copy:hover { background: #dce7fb; }
     .table-name .copy:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
-    .table-name .editor { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+    .table-name .editor { display: flex; flex-direction: row; gap: .5rem; align-items: center; flex-wrap: wrap; }  /* row: also in the Tables viewer, where "dialog form" stacks */
     .table-name input[type=text] { font: inherit; min-width: 14rem; padding: .2rem .5rem; border: 1px solid #b9c7e6; border-radius: .4rem; }
     .table-name input[type=number] { font: inherit; width: 6rem; padding: .2rem .4rem; border: 1px solid #b9c7e6; border-radius: .4rem; }
     .table-name select { font: inherit; padding: .2rem .4rem; border: 1px solid #c4c9d4; border-radius: .4rem; color: #333; background: #f6f7f9; cursor: pointer; }
@@ -236,7 +238,7 @@
       {% elif item.type == "display" and item.kind == "table" %}
         {% with rows_url=item.rows_url, psv_url=item.psv_url, settings_url=item.settings_url, result_table=item.result_table, columns=item.columns %}{% include "display_table.html" %}{% endwith %}
       {% elif item.type == "display" and item.kind == "chart" %}
-        {% with spec_json=item.spec_json %}{% include "display_chart.html" %}{% endwith %}
+        {% with spec_json=item.spec_json, settings_url=item.settings_url %}{% include "display_chart.html" %}{% endwith %}
       {% endif %}
     {% endfor %}
     {% if turn.open %}</details>{% endif %}

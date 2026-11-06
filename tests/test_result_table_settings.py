@@ -87,3 +87,23 @@ def test_retention_change_moves_expiry_relative_to_creation(build_agent, web_cli
     assert client.get(f"/api/results/{name}/rows").status_code == 200
     clock.ms += 2
     assert client.get(f"/api/results/{name}/rows").status_code == 410
+
+
+def test_settings_give_the_time_left_before_the_table_expires(build_agent, web_client):
+    client, clock, name = shown_table(build_agent, web_client)
+    url = f"/api/results/{name}/settings"
+    assert client.get(url).json() == {"name": name, "retention_days": 1, "expires_in_ms": DAY}
+    clock.ms += DAY // 4
+    assert client.get(url).json()["expires_in_ms"] == DAY * 3 // 4
+    # A Retention change counts from the table's creation; the reply has the new time left.
+    assert client.post(url, data={"retention_days": "2"}).json()["expires_in_ms"] == 2 * DAY - DAY // 4
+    renamed = client.post(url, data={"name": "kept"}).json()
+    assert renamed == {"name": "kept", "retention_days": 2, "expires_in_ms": 2 * DAY - DAY // 4}
+    assert client.get("/api/results/kept/rows").json()["expires_in_ms"] == 2 * DAY - DAY // 4
+
+
+def test_settings_of_an_unknown_or_expired_table_are_not_found_or_gone(build_agent, web_client):
+    client, clock, name = shown_table(build_agent, web_client)
+    assert client.get("/api/results/r_nope/settings").status_code == 404
+    clock.ms += DAY + 1
+    assert client.get(f"/api/results/{name}/settings").status_code == 410

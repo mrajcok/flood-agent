@@ -90,7 +90,7 @@ def test_invalid_or_taken_names_are_rejected_and_nothing_changes(build_agent, we
 def test_saving_the_unchanged_name_with_a_new_retention_changes_only_the_retention(build_agent, web_client):
     client, _, old = make(build_agent, web_client)
     resp = client.post(f"/api/results/{old}/settings", data={"name": old, "retention_days": "7"})
-    assert resp.status_code == 200 and resp.json() == {"name": old, "retention_days": 7}
+    assert resp.status_code == 200 and resp.json()["name"] == old and resp.json()["retention_days"] == 7
     assert client.get(f"/api/results/{old}/rows").json()["retention_days"] == 7
 
 
@@ -124,16 +124,6 @@ def test_a_failure_saving_the_rename_in_the_app_database_undoes_the_sql_rename(b
         rename(client, a, "mine")
     assert client.get(f"/api/results/{a}/rows").status_code == 200
     assert client.get("/api/results/mine/rows").status_code == 404
-
-
-def test_the_display_follows_a_rename_for_paging_download_and_further_edits():
-    html = TEMPLATES.get_template("display_table.html").render(
-        rows_url="/r", psv_url="/p", result_table="t", columns=[], settings_url="/s")
-    # Every URL the Display uses is read from `urls`, which a save replaces from the server's new name;
-    # the data attributes are read once, at start.
-    assert html.count("dataset.") == 3
-    assert ':href="urls.psv"' in html and "urls.settings" in html and "urls.rows" in html
-    assert "this.follow(d.name)" in html.split("async save()")[1].split("follow(name)")[0]
 
 
 def test_retention_survives_a_rename(build_agent, web_client):

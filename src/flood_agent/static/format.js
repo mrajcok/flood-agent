@@ -54,7 +54,23 @@
     return values.length > 0 && values.every(isNum);
   }
 
-  const api = { isNumericColumn, formatBytes, formatTime, formatEnum, formatFlags, formatCell };
+  // A Saved or Result Table's Retention in days: under a day reads better in hours, under an hour in minutes.
+  function formatRetention(days) {
+    const [n, unit] = days >= 1 ? [Math.round(days * 100) / 100, "day"]
+      : days * 24 >= 1 ? [Math.round(days * 240) / 10, "hour"] : [Math.max(1, Math.round(days * 1440)), "minute"];
+    return n + " " + unit + (n === 1 ? "" : "s");
+  }
+
+  // Time left before a table expires, to the nearest hour, or the nearest day from a week on.
+  function formatExpiresIn(ms) {
+    const hours = Math.round(ms / 3600000);
+    if (hours < 1) return "expires in under 1h";
+    if (hours >= 7 * 24) return "expires in " + Math.round(ms / 86400000) + "d";  // from ms: rounding twice drifts
+    const d = Math.floor(hours / 24), h = hours % 24;
+    return "expires in " + [d && d + "d", h && h + "h"].filter(Boolean).join(" ");
+  }
+
+  const api = { isNumericColumn, formatBytes, formatTime, formatEnum, formatFlags, formatCell, formatRetention, formatExpiresIn };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.FloodFormat = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

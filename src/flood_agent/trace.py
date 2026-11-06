@@ -83,5 +83,13 @@ def split_system_prompt(prompt: str | None) -> tuple[str, str, str]:
     return head, "# Semantic Layer\n" + layer, (rt_sep + rest).lstrip("\n")
 
 
+def context_tokens(trace: dict) -> int | None:
+    """The prompt tokens of the latest LLM call in a Trace: how full the context was when it was sent."""
+    for e in reversed(trace["entries"]):
+        if e["kind"] == "llm_step" and e["usage"]:
+            return e["usage"]["prompt_tokens"]
+    return None
+
+
 def elapsed_ms(started: float) -> int:
     return int((time.monotonic() - started) * 1000)

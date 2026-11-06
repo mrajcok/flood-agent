@@ -1,0 +1,2 @@
+{# Context Usage: "187k of 1M" and a bar. `oob` swaps it in place when a turn ends. #}
+<span id="context-meter" class="ctx {{ context.level }}"{% if oob %} hx-swap-oob="true"{% endif %} title="{% if context.window %}Context used, from the latest LLM call{% else %}No model is called in Fake Mode{% endif %}">{{ context.text }}{% if context.window %} <span class="meter"><i style="width: {{ context.percent }}%"></i></span>{% endif %}</span>

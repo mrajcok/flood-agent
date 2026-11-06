@@ -34,6 +34,7 @@ class AgentConfig:
     app_db: Path
     semantic_layer: Path
     model: str
+    context_window: int  # tokens the model accepts; 0 when there is no model (Fake Mode)
     result_ttl_ms: int  # Result Tables expire this long after last Conversation activity
     query_timeout_s: float
     chart_row_cap: int

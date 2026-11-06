@@ -73,6 +73,9 @@ class Settings(BaseSettings):
         "Cheaper open-weight models to try (confirm with the eval runner first):\n"
         "deepseek/deepseek-v4-pro-0813, z-ai/glm-5.3"
     )
+    model_context_tokens: int = Field(
+        ge=1, description="Context window of the chat model, in tokens. The meter under the prompt box shows how much of it is used."
+    )
     telemetry_db: Path = Field(
         description="Read-only flow records. Create with: uv run python -m flood_agent.generator data/telemetry.db"
     )
@@ -136,6 +139,7 @@ class Settings(BaseSettings):
             semantic_layer=self.semantic_layer.resolve(),
             app_db=self.app_db.resolve(),
             model=model or self.openrouter_model,
+            context_window=self.model_context_tokens,
             result_ttl_ms=int(self.result_ttl_hours * 3600 * 1000),
             query_timeout_s=self.query_timeout_s,
             chart_row_cap=self.chart_row_cap,

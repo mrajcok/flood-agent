@@ -31,10 +31,11 @@ from flood_agent.agent import (
     TurnEnd,
     resolve_chart_data,
 )
+from flood_agent.context_usage import context_usage
 from flood_agent.lookup_tables import InvalidLookupTable
 from flood_agent.queries import InvalidSort
 from flood_agent.store import TablesChoice
-from flood_agent.trace import split_system_prompt
+from flood_agent.trace import context_tokens, split_system_prompt
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 TEMPLATES.env.filters["split_system_prompt"] = split_system_prompt
@@ -93,6 +94,11 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
             "fake_mode": fake_mode, "picker": picker or [],
         }
 
+    context_window = 0 if fake_mode else agent.config.context_window  # Fake Mode has no model, so no window
+
+    def meter(tokens: int | None) -> dict:
+        return {"context": context_usage(tokens, context_window), "model": "No model (Fake Mode)" if fake_mode else agent.config.model}
+
     def history(conversation_id: str) -> list[dict]:
         items = []
         transcript = agent.store.transcript(conversation_id)
@@ -122,15 +128,18 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
 
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request):
-        return TEMPLATES.TemplateResponse(request, "index.html", {**sidebar(None), "items": []})
+        return TEMPLATES.TemplateResponse(request, "index.html", {**sidebar(None), **meter(None), "items": []})
 
     @app.get("/c/{conversation_id}", response_class=HTMLResponse)
     def open_conversation(request: Request, conversation_id: str):
         if not agent.store.exists(conversation_id):
             raise HTTPException(404, "unknown conversation")
+        items = history(conversation_id)
+        traces = [i["trace"] for i in items if i["type"] == "trace"]
         return TEMPLATES.TemplateResponse(
             request, "index.html",
-            {**sidebar(conversation_id), "items": history(conversation_id), "current_id": conversation_id},
+            {**sidebar(conversation_id), **meter(context_tokens(traces[-1]) if traces else None),
+             "items": items, "current_id": conversation_id},
         )
 
     @app.get("/c/{conversation_id}/delete-preview")
@@ -278,7 +287,11 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
                         if ev.turn_id is not None and conversation.id:
                             yield _sse("turn", TEMPLATES.get_template("turn_delete.html").render(
                                 conversation_id=conversation.id, turn_id=ev.turn_id))
-                        yield _sse("trace", TEMPLATES.get_template("trace.html").render(trace=ev.trace))
+                        trace_html = TEMPLATES.get_template("trace.html").render(trace=ev.trace)
+                        # The meter under the prompt box refreshes in place (hx-swap-oob).
+                        meter_html = TEMPLATES.get_template("context_meter.html").render(
+                            oob=True, **meter(context_tokens(ev.trace)))
+                        yield _sse("trace", trace_html + meter_html)
                     elif isinstance(ev, TurnEnd):
                         break
             except Exception as e:  # keep the stream well-formed for the browser

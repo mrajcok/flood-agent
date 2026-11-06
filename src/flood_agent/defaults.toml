@@ -6,6 +6,7 @@
 
 llm_backend = "openrouter"  # or "fake" (Fake Mode: no LLM, no key)
 openrouter_model = "anthropic/claude-sonnet-5.5"
+model_context_tokens = 1_000_000  # of openrouter_model
 
 telemetry_db = "data/telemetry.db"
 results_db = "data/results.db"

@@ -262,71 +262,96 @@
       <button type="submit" class="send" title="Send message (Enter)" aria-label="Send message (Enter)"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M20 4v9a2 2 0 0 1-2 2H9v4l-6-5.5L9 8v4h8V4z"/></svg></button>
     </div>
   </form>
-  {# PROTOTYPE 2 (throwaway): one-line control strip under the prompt box, ?variant=A|B|C. All data is fake. #}
+  {# PROTOTYPE 3 (throwaway): one-line strip with rounded popover menus; ?variant=A|B|C picks the popover style. All data is fake. #}
   <style>
-    .pc { position: relative; margin-top: .3rem; color: #444; }
-    .pc.fa { font-size: .8rem; }
-    .pc.fb { font-size: .82rem; font-family: "Arial Narrow", "Liberation Sans Narrow", "Roboto Condensed", "Helvetica Neue", Arial, sans-serif; font-stretch: condensed; }
-    .pc.fc { font-size: .72rem; }
+    .pc { position: relative; margin-top: .3rem; color: #444; font-size: .9rem; }
     .pc .row { display: flex; align-items: center; flex-wrap: wrap; gap: .15rem .5rem; white-space: nowrap; }
     .pc .spacer { flex: 1; min-width: .5rem; }
-    .pc .row > *, .pc select { line-height: 1.5; }
-    .pc .row > span { padding: .1rem 0; }
-    /* Plain text until hovered: no border, no arrow, no background. */
-    .pc select, .pc input[type=text] { font: inherit; color: inherit; appearance: none; -webkit-appearance: none; field-sizing: content;
-        background: transparent; border: 0; border-radius: .3rem; padding: .1rem .25rem; margin: 0 -.25rem; cursor: pointer; }
-    .pc input[type=text] { cursor: text; width: 7ch; field-sizing: fixed; text-align: right; background: #eef0f4; }
-    .pc select:hover, .pc select:focus-visible { background: #e3e8f4; outline: none; }
-    .pc select:disabled { cursor: default; color: #999; background: transparent; }
     .pc .sep { color: #b4b8c2; }
-    .pc .meter { display: inline-block; width: 5rem; height: .4rem; background: #e3e7ef; border-radius: 999px; overflow: hidden; vertical-align: middle; }
+    .pc .dd { position: relative; }
+    /* Plain text until hovered. */
+    .pc .trig { font: inherit; color: inherit; background: transparent; border: 0; border-radius: .4rem; padding: .1rem .3rem; margin: 0 -.3rem; cursor: pointer; line-height: 1.5; }
+    .pc .trig:hover, .pc .trig.open { background: #e3e8f4; }
+    .pc .trig:disabled { cursor: default; color: #999; background: transparent; }
+    .pc .meter { display: inline-block; width: 4.5rem; height: .4rem; background: #e3e7ef; border-radius: 999px; overflow: hidden; vertical-align: middle; }
     .pc .meter i { display: block; height: 100%; background: #4a6fd3; }
     .pc .amber .meter i { background: #d98e04; } .pc .red .meter i { background: #c0392b; }
     .pc .ctx.amber { color: #8a5a00; } .pc .ctx.red { color: #a52a1e; font-weight: 600; }
+    .pc .panel { position: absolute; bottom: calc(100% + .45rem); left: -.4rem; z-index: 10; background: #fff; border: 1px solid #cfd5e2; box-shadow: 0 8px 24px rgba(30,40,80,.18);
+                 padding: .35rem; min-width: 12rem; display: grid; gap: .1rem; white-space: nowrap; }
+    .pc .panel.right { left: auto; right: -.4rem; }
+    .pc .item { display: flex; align-items: center; gap: .5rem; width: 100%; text-align: left; font: inherit; color: #333; background: transparent; border: 0; cursor: pointer; padding: .35rem .6rem; }
+    .pc .item:hover { background: #e9eefb; }
+    .pc .item .tick { width: 1em; color: #4a6fd3; } .pc .item small { color: #888; margin-left: auto; padding-left: 1rem; }
+    .pc .panel h6 { margin: .2rem .6rem .15rem; font-size: .7rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #8a91a3; }
+    .pc .panel input[type=text] { font: inherit; width: 8ch; margin: .2rem .6rem; padding: .25rem .5rem; border: 1px solid #cfd5e2; border-radius: .5rem; text-align: right; }
+    /* Popover styles */
+    .pc.fa .panel { border-radius: .7rem; } .pc.fa .item { border-radius: .45rem; }
+    .pc.fb .panel { border-radius: 1rem; padding: .5rem; min-width: 15rem; } .pc.fb .item { border-radius: .6rem; padding: .5rem .7rem; }
+    .pc.fc .panel { border-radius: 1rem; padding: .7rem; }
+    .pc.fc .chips { display: flex; flex-wrap: wrap; gap: .35rem; max-width: 16rem; white-space: normal; }
+    .pc.fc .chip { font: inherit; border: 1px solid #cfd5e2; background: #f6f7f9; border-radius: 999px; padding: .2rem .75rem; cursor: pointer; color: #333; }
+    .pc.fc .chip:hover { background: #e9eefb; } .pc.fc .chip.on { background: #4a6fd3; border-color: #4a6fd3; color: #fff; }
     .pc-switch { position: fixed; top: .5rem; left: 50%; transform: translateX(-50%); z-index: 50; background: #111; color: #fff; border-radius: 999px;
                  padding: .35rem .8rem; display: flex; gap: .6rem; align-items: center; font: .8rem system-ui; box-shadow: 0 4px 14px rgba(0,0,0,.35); }
     .pc-switch button { background: #333; color: #fff; border: 0; border-radius: 999px; padding: .15rem .6rem; cursor: pointer; }
     .pc-switch button.on { background: #4a6fd3; }
   </style>
-  {% macro model_select() %}<select x-model="model" aria-label="Model" title="Model" x-init="$nextTick(() => $el.value = model)" @change="if (!m.effort.length) effort = ''; else if (!m.effort.includes(effort)) effort = m.effort[1] || m.effort[0]">
-      <template x-for="x in models" :key="x.id"><option :value="x.id" x-text="x.label"></option></template></select>{% endmacro %}
-  {% macro effort_select() %}<select x-model="effort" aria-label="Effort" :title="m.effort.length ? 'Effort' : 'Effort is not supported by this model'" :disabled="!m.effort.length" x-init="$nextTick(() => $el.value = effort)">
-      <template x-if="!m.effort.length"><option value="">no effort</option></template>
-      <template x-for="e in m.effort" :key="e"><option :value="e" x-text="e"></option></template></select>{% endmacro %}
-  {% macro rows_select() %}<select x-model="choice" aria-label="Max result rows" title="Rows kept from each query run by this prompt" x-init="$nextTick(() => $el.value = choice)">
-      <template x-for="r in rowOptions" :key="r"><option :value="r" x-text="r === 'custom' ? 'custom…' : Number(r).toLocaleString()"></option></template></select>{% endmacro %}
-  {% macro ctx() %}<span class="ctx" :class="level" :title="m.window ? 'Context used by this Conversation, from the latest LLM call' : ''"><span x-text="meterText"></span>
-      <span class="meter" x-show="m.window"> <i :style="'width:' + pct + '%'"></i></span> <span x-show="level === 'red'">· consider starting a new chat</span></span>{% endmacro %}
-  <div class="pc" :class="[level, 'f' + variant.toLowerCase()]" x-data="{
-      variant: new URLSearchParams(location.search).get('variant') || 'A',
+  <div class="pc" :class="[level, 'f' + variant.toLowerCase()]" @click.outside="open = null" @keydown.escape.window="open = null" x-data="{
+      variant: new URLSearchParams(location.search).get('variant') || 'A', open: null,
       models: [{ id: 'sonnet', label: 'Claude Sonnet 5.5', window: 1000000, effort: ['low', 'medium', 'high'] },
                { id: 'haiku', label: 'Claude Haiku 4.5', window: 200000, effort: [] },
                { id: 'none', label: 'No model (Fake Mode)', window: 0, effort: [] }],
       model: 'sonnet', effort: 'medium', pct: 19, choice: '10000', custom: '',
-      rowOptions: ['10', '100', '1000', '10000', '100000', '1000000', 'custom'],
+      rowOptions: ['10', '100', '1000', '10000', '100000', '1000000'],
       get m() { return this.models.find(x => x.id === this.model) },
       get tokens() { return Math.round(this.m.window * this.pct / 100) },
       get level() { return !this.m.window ? '' : this.pct >= 70 ? 'red' : this.pct >= 40 ? 'amber' : '' },
       fmt(n) { return n >= 1e6 ? (n / 1e6).toFixed(2).replace(/\.?0+$/, '') + 'M' : Math.round(n / 1000) + 'k' },
       get meterText() { return this.m.window ? this.fmt(this.tokens) + ' of ' + this.fmt(this.m.window) : 'no context used' },
-      go(v) { this.variant = v; const u = new URL(location); u.searchParams.set('variant', v); history.replaceState(null, '', u); },
+      get rowsText() { return this.choice === 'custom' ? (this.custom || '?') : Number(this.choice).toLocaleString() },
+      pickModel(id) { this.model = id; if (!this.m.effort.length) this.effort = ''; else if (!this.m.effort.includes(this.effort)) this.effort = this.m.effort[1] || this.m.effort[0]; this.open = null },
+      go(v) { this.variant = v; this.open = null; const u = new URL(location); u.searchParams.set('variant', v); history.replaceState(null, '', u); },
       step(d) { const v = ['A', 'B', 'C']; this.go(v[(v.indexOf(this.variant) + d + 3) % 3]) },
     }" @keydown.window.arrow-left="if (!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) step(-1)"
        @keydown.window.arrow-right="if (!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) step(1)">
     <input type="hidden" id="max_rows" name="max_rows" :value="choice === 'custom' ? custom : choice" value="10000">
 
-    {# Same one line in all three; they differ in type size and face. A is the baseline, B a narrow face, C the smallest size. #}
     <div class="row">
-      {{ model_select() }}<span class="sep">·</span>{{ effort_select() }}
+      <span class="dd"><button type="button" class="trig" :class="{ open: open === 'm' }" title="Model" @click="open = open === 'm' ? null : 'm'" x-text="m.label"></button>
+        <div class="panel" x-show="open === 'm'" x-cloak>
+          <h6 x-show="variant !== 'A'">Model</h6>
+          <template x-for="x in models" :key="x.id"><button type="button" class="item" @click="pickModel(x.id)">
+            <span class="tick" x-text="x.id === model ? '✓' : ''"></span><span x-text="x.label"></span>
+            <small x-show="variant === 'B'" x-text="x.window ? fmt(x.window) + ' context' : 'scripted, no LLM'"></small></button></template>
+        </div></span>
+      <span class="sep">·</span>
+      <span class="dd"><button type="button" class="trig" :class="{ open: open === 'e' }" :disabled="!m.effort.length" :title="m.effort.length ? 'Effort' : 'Effort is not supported by this model'"
+              @click="open = open === 'e' ? null : 'e'" x-text="m.effort.length ? effort : 'no effort'"></button>
+        <div class="panel" x-show="open === 'e'" x-cloak style="min-width: 9rem">
+          <h6 x-show="variant !== 'A'">Effort</h6>
+          <template x-if="variant !== 'C'"><div style="display:grid; gap:.1rem"><template x-for="e in m.effort" :key="e"><button type="button" class="item" @click="effort = e; open = null">
+            <span class="tick" x-text="e === effort ? '✓' : ''"></span><span x-text="e"></span></button></template></div></template>
+          <template x-if="variant === 'C'"><div class="chips"><template x-for="e in m.effort" :key="e"><button type="button" class="chip" :class="{ on: e === effort }" @click="effort = e; open = null" x-text="e"></button></template></div></template>
+        </div></span>
+      <span class="sep">·</span>
+      <span class="ctx" :class="level" :title="m.window ? 'Context used by this Conversation, from the latest LLM call' : ''"><span x-text="meterText"></span>
+        <span class="meter" x-show="m.window"> <i :style="'width:' + pct + '%'"></i></span></span>
       <span class="spacer"></span>
-      <span>≤ {{ rows_select() }}<input type="text" inputmode="numeric" x-show="choice === 'custom'" x-model="custom" placeholder="rows"> rows per query</span>
-      <span class="sep">|</span>
-      {{ ctx() }}
+      <span class="dd"><button type="button" class="trig" :class="{ open: open === 'r' }" title="Rows kept from each query run by this prompt"
+              @click="open = open === 'r' ? null : 'r'" x-text="'≤ ' + rowsText + ' rows per query'"></button>
+        <div class="panel right" x-show="open === 'r'" x-cloak>
+          <h6 x-show="variant !== 'A'">Rows kept per query</h6>
+          <template x-if="variant !== 'C'"><div style="display:grid; gap:.1rem"><template x-for="r in rowOptions" :key="r"><button type="button" class="item" @click="choice = r; open = null">
+            <span class="tick" x-text="r === choice ? '✓' : ''"></span><span x-text="Number(r).toLocaleString()"></span></button></template></div></template>
+          <template x-if="variant === 'C'"><div class="chips"><template x-for="r in rowOptions" :key="r"><button type="button" class="chip" :class="{ on: r === choice }" @click="choice = r; open = null" x-text="Number(r).toLocaleString()"></button></template></div></template>
+          <input type="text" inputmode="numeric" placeholder="custom" x-model="custom" @input="custom = custom.replace(/\D/g, ''); choice = custom ? 'custom' : '10000'">
+        </div></span>
     </div>
 
     <div class="pc-switch" @click.stop>
       <button type="button" @click="step(-1)">◀</button>
-      <span x-text="{ A: 'A  0.8rem, system font', B: 'B  0.82rem, narrow font', C: 'C  0.72rem, system font' }[variant]"></span>
+      <span x-text="{ A: 'A  Plain rounded menu', B: 'B  Menu with headings and detail', C: 'C  Chip pickers' }[variant]"></span>
       <button type="button" @click="step(1)">▶</button>
       <span>| fake usage:</span>
       <template x-for="p in [19, 45, 75]" :key="p"><button type="button" :class="{ on: pct === p }" @click="pct = p" x-text="p + '%'"></button></template>

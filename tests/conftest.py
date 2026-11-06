@@ -317,14 +317,12 @@ def chrome():
 
 @pytest.fixture
 def live_page(chrome, live_server, request):
-    """`live_page(path="/", agent=None)` -> a fresh page (its own browser context) in headless system
-    Chrome, opened on the live app. CDN scripts (htmx, Alpine, Vega) are served from pytest's cache
-    after the first download, so browser tests run offline once warmed; with a cold cache and no
-    internet they skip."""
+    """`live_page(path="/", agent=None, timezone=None)` -> a fresh page (its own browser context) in
+    headless system Chrome, opened on the live app; `timezone` (e.g. "America/New_York") sets the
+    browser's. CDN scripts (htmx, Alpine, Vega) are served from pytest's cache after the first
+    download, so browser tests run offline once warmed; with a cold cache and no internet they skip."""
     cache_dir = request.config.cache.mkdir("cdn")
-    context = chrome.new_context()
-    page = context.new_page()
-    page.set_default_timeout(5000)  # the app is local: fail fast instead of Playwright's 30s
+    contexts = []
 
     def serve_cached(route):
         path = cache_dir / hashlib.sha256(route.request.url.encode()).hexdigest()
@@ -342,17 +340,21 @@ def live_page(chrome, live_server, request):
             os.replace(tmp, path)
         route.fulfill(path=path, content_type="application/javascript")
 
-    for pattern in CDN_HOSTS:
-        page.route(pattern, serve_cached)
-
-    def _open(path: str = "/", agent: Agent | None = None):
+    def _open(path: str = "/", agent: Agent | None = None, timezone: str | None = None):
+        context = chrome.new_context(timezone_id=timezone)
+        contexts.append(context)
+        page = context.new_page()
+        page.set_default_timeout(5000)  # the app is local: fail fast instead of Playwright's 30s
+        for pattern in CDN_HOSTS:
+            page.route(pattern, serve_cached)
         page.goto(live_server(agent) + path)
         if not page.evaluate("() => !!(window.Alpine && window.htmx)"):
             pytest.skip("CDN scripts unavailable (no internet and nothing cached yet)")
         return page
 
     yield _open
-    context.close()
+    for context in contexts:
+        context.close()
 
 
 def mcp_children() -> list[int]:

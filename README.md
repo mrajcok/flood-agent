@@ -107,6 +107,10 @@ internet access in the browser). The Alpine component in `templates/display_char
 finalizes the Vega view when htmx removes it. The Trace shows the Chart Spec before and
 after the data reference is resolved.
 
+Before embedding, `static/chart.js` adds interaction the LLM doesn't have to write: tooltips on
+every mark (on a line chart, from the point nearest the pointer anywhere in the plot), and on
+charts with a time x axis, Ctrl+scroll to zoom that axis, drag to pan and double-click to reset.
+
 ## Layout
 
 - `agent.py` - `Agent.run_turn(conversation, message)` yields `TextDelta`, `DisplayEvent`, `TurnEnd`.

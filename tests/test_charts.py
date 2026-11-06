@@ -214,5 +214,5 @@ async def test_no_telemetry_value_reaches_the_llm_with_charts(make_agent, teleme
 def test_chart_template_fills_the_pane_width():
     from pathlib import Path
 
-    tpl = (Path(__file__).parent.parent / "src/flood_agent/templates/display_chart.html").read_text()
-    assert "width: 'container'" in tpl and "fit-x" in tpl
+    js = (Path(__file__).parent.parent / "src/flood_agent/static/chart.js").read_text()
+    assert 'width: "container"' in js and "fit-x" in js

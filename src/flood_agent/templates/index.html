@@ -14,6 +14,7 @@
   <script src="https://cdn.jsdelivr.net/npm/vega@5.30.0"></script>
   <script src="https://cdn.jsdelivr.net/npm/vega-lite@5.21.0"></script>
   <script src="https://cdn.jsdelivr.net/npm/vega-embed@6.26.0"></script>
+  <script src="/static/chart.js?v={{ static_version('chart.js') }}"></script>
   <style>
     html, body { height: 100%; }
     body { font-family: system-ui, sans-serif; max-width: 60rem; margin: 0 auto; padding: 0 1rem; box-sizing: border-box;
@@ -153,6 +154,7 @@
     .table-name .editor button.primary:hover { background: #3b5cb8; border-color: #3b5cb8; }
     .table-name .err { color: #a00; font-size: .85rem; }
     .pager { display: flex; gap: .75rem; align-items: center; font-size: .9rem; }
+    .chart-hint { margin: .2rem 0 0; font-size: .8rem; color: #6b7280; }
     .badge-truncated { padding: .1rem .6rem; border: 1px solid #e0c36a; border-radius: 999px; background: #fdf3d0; color: #7a5b00; font-size: .8rem; }
     .pager button { padding: .25rem .8rem; border: 1px solid #b9c7e6; border-radius: 999px; background: #eef3fd; color: #2a4ba0; font: inherit; cursor: pointer; }
     .pager button:hover:not(:disabled) { background: #dce7fb; }

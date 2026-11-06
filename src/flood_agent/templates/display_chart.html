@@ -1,13 +1,15 @@
 <div class="display chart" data-spec="{{ spec_json }}"
-     x-data="{ view: null, error: false,
+     x-data="{ view: null, error: false, zoomable: false,
                async init() {
                  try {
                    const spec = JSON.parse($el.dataset.spec);
-                   const res = await vegaEmbed($refs.target, { ...spec, width: 'container', autosize: { type: 'fit-x', contains: 'padding' } }, { actions: false });
+                   this.zoomable = chartIsZoomable(spec);
+                   const res = await vegaEmbed($refs.target, chartEmbedSpec(spec), { actions: false });  /* static/chart.js */
                    this.view = res.view;
                  } catch (e) { this.error = true; }
                },
                destroy() { if (this.view) { this.view.finalize(); this.view = null; } } }">
   <p x-show="error" x-cloak>Could not render chart.</p>
   <div x-ref="target" style="width:100%"></div>
+  <p class="chart-hint" x-show="zoomable && !error" x-cloak>Ctrl+scroll to zoom, drag to pan, double-click to reset</p>
 </div>

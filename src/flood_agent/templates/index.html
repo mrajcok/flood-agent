@@ -154,7 +154,11 @@
     .table-name .editor button.primary:hover { background: #3b5cb8; border-color: #3b5cb8; }
     .table-name .err { color: #a00; font-size: .85rem; }
     .pager { display: flex; gap: .75rem; align-items: center; font-size: .9rem; }
-    .chart-hint { margin: .2rem 0 0; font-size: .8rem; color: #6b7280; }
+    .chart-hint { margin: .2rem 0 0; font-size: .8rem; color: #6b7280; text-align: right; }
+    /* No gap under a chart: a block canvas has no baseline space below it, and Vega's (empty) form
+       for parameter widgets would otherwise pick up the page's form margin. */
+    .display.chart canvas, .display.chart svg { display: block; }
+    .display.chart .vega-bindings:empty { display: none; }
     .badge-truncated { padding: .1rem .6rem; border: 1px solid #e0c36a; border-radius: 999px; background: #fdf3d0; color: #7a5b00; font-size: .8rem; }
     .pager button { padding: .25rem .8rem; border: 1px solid #b9c7e6; border-radius: 999px; background: #eef3fd; color: #2a4ba0; font: inherit; cursor: pointer; }
     .pager button:hover:not(:disabled) { background: #dce7fb; }

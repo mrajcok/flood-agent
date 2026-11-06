@@ -156,10 +156,15 @@ def test_only_charts_with_a_time_axis_show_the_zoom_hint(live_page, build_agent)
         "bar",
         {"x": {"field": "dport", "type": "nominal"}, "y": {"field": "bytes", "type": "quantitative"}},
     )
-    for script, shown in ((time_chart, True), (bar_chart, False)):
+    for script, shown in ((bar_chart, False), (time_chart, True)):
         page = live_page(agent=build_agent(ScriptedLLM(*script)))
         page.get_by_placeholder("Write a prompt").fill("chart it")
         page.get_by_role("button", name="Send message (Enter)").click()
         expect(page.locator(".display.chart canvas")).to_be_visible()
         hint = page.get_by_text("Ctrl+scroll to zoom, drag to pan, double-click to reset")
         expect(hint).to_be_visible() if shown else expect(hint).to_be_hidden()
+    # The hint sits just under the chart, at its right edge.
+    chart, note = page.locator(".display.chart canvas").bounding_box(), page.locator(".chart-hint").bounding_box()
+    assert chart and note
+    assert 0 <= note["y"] - (chart["y"] + chart["height"]) < 10
+    assert page.locator(".chart-hint").evaluate("el => getComputedStyle(el).textAlign") == "right"

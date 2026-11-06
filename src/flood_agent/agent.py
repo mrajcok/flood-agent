@@ -329,7 +329,7 @@ class Agent:
         """A registered Result Table that has not expired (after sweeping)."""
         return self.store.has_result_table(result_table) and not self.is_expired(result_table)
 
-    def _require_live_result_table(self, result_table: str) -> None:
+    def require_live_result_table(self, result_table: str) -> None:
         """KeyError unless the name is a registered Result Table; ResultTableExpired if it has expired."""
         if not self.store.has_result_table(result_table):
             raise KeyError(result_table)
@@ -427,7 +427,7 @@ class Agent:
         A `name` equal to the current one changes nothing. Returns the new settings. ValueError,
         changing nothing, if the new name is not allowed. Retention is unchanged by a rename: the
         rename form, not the server, offers a Saved Table's 30-day default (ADR 0004)."""
-        self._require_live_result_table(result_table)
+        self.require_live_result_table(result_table)
         if name is not None and name != result_table:
             self._rename(result_table, name)
             result_table = name
@@ -455,7 +455,7 @@ class Agent:
         """Internal data path used by the row-JSON endpoint. Not an LLM tool.
 
         Adds per-column display formats from the Semantic Layer."""
-        self._require_live_result_table(result_table)
+        self.require_live_result_table(result_table)
         data = queries.fetch_rows(self.config.results_db, result_table, columns, **page_args)
         data["formats"] = self.semantic_layer.column_formats(data["columns"])
         data["truncated_to"] = self.store.truncated_to(result_table)
@@ -467,12 +467,12 @@ class Agent:
 
     def iter_all_rows(self, result_table: str):
         """Internal data path for PSV export of the full Result Table. Not an LLM tool."""
-        self._require_live_result_table(result_table)
+        self.require_live_result_table(result_table)
         return queries.iter_all_rows(self.config.results_db, result_table)
 
     def fetch_chart_rows(self, result_table: str) -> list[dict]:
         """Internal data path for the chart-rows endpoint (chart cap). Not an LLM tool."""
-        self._require_live_result_table(result_table)
+        self.require_live_result_table(result_table)
         return queries.fetch_records(self.config.results_db, result_table, self.config.chart_row_cap)
 
     async def run_turn(

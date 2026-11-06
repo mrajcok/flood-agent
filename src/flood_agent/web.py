@@ -63,6 +63,12 @@ class PickerEntry:
     follow_ups: list["PickerEntry"] = field(default_factory=list)
 
 
+def _table_display_urls(result_table: str) -> dict:
+    """The URLs a table Display (display_table.html) loads and saves through."""
+    base = f"/api/results/{result_table}"
+    return {"rows_url": f"{base}/rows", "psv_url": f"{base}/psv", "settings_url": f"{base}/settings"}
+
+
 def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode: bool = False) -> FastAPI:
     """In Fake Mode the page shows a badge and the `picker` list of prompts."""
     @asynccontextmanager
@@ -101,9 +107,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
                 items.append(
                     {
                         **item,
-                        "rows_url": f"/api/results/{item['result_table']}/rows",
-                        "psv_url": f"/api/results/{item['result_table']}/psv",
-                        "settings_url": f"/api/results/{item['result_table']}/settings",
+                        **_table_display_urls(item["result_table"]),
                         "expired": item["result_table"] in expired,
                     }
                 )
@@ -209,6 +213,16 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
         except KeyError:
             raise HTTPException(404, "unknown table")
 
+    @app.get("/api/tables/{name}/display", response_class=HTMLResponse)
+    def table_display(name: str):
+        """A Saved or Result Table as the chat's table Display, for the Tables dialog's viewer.
+        404 for any other table (Telemetry, Lookup, unknown); 410 once it has expired."""
+        try:
+            agent.require_live_result_table(name)
+        except KeyError:
+            raise HTTPException(404, "not a Saved or Result Table")
+        return TEMPLATES.get_template("display_table.html").render(**_table_display_urls(name), result_table=name)
+
     @app.get("/api/tables")
     def list_tables():
         """Names of the tables the user can query, for the Tables dialog. Plain HTTP, never an MCP tool."""
@@ -252,9 +266,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
                         yield _sse("display", html)
                     elif isinstance(ev, DisplayEvent):
                         html = TEMPLATES.get_template("display_table.html").render(
-                            rows_url=f"/api/results/{ev.result_table}/rows",
-                            psv_url=f"/api/results/{ev.result_table}/psv",
-                            settings_url=f"/api/results/{ev.result_table}/settings",
+                            **_table_display_urls(ev.result_table),
                             result_table=ev.result_table,
                             columns=ev.columns,
                         ).strip()

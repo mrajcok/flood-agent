@@ -1,5 +1,6 @@
 <aside id="sidebar" {% if oob %}hx-swap-oob="true"{% endif %}>
   <div class="show-tables" x-data="{ open: false, tables: null, error: '', hideRt: false, hideLookup: false, request: 0, confirming: null,
+       viewing: null, viewerRequest: 0, viewerLoaded: false, viewerError: '', escapeInEditor: false,
        /* hideRt hides the Result Tables; the name is kept so saved choices survive. */
        init() { this.remember('hideRt'); this.remember('hideLookup'); },
        remember(key) {
@@ -8,9 +9,11 @@
          try { this[key] = localStorage.getItem(item) === '1'; } catch (e) {}
          this.$watch(key, v => { try { localStorage.setItem(item, v ? '1' : '0'); } catch (e) {} });
        },
-       async load() {
+       async load(quietly = false) {
+         /* quietly: keep showing the list (and its scroll position) until the new one arrives. */
          const request = ++this.request;  /* only the latest open's response is shown */
-         this.tables = null; this.error = ''; this.confirming = null;
+         if (!quietly) this.tables = null;
+         this.error = ''; this.confirming = null;
          try {
            const r = await fetch('/api/tables');
            if (!r.ok) throw new Error(r.status);
@@ -20,9 +23,12 @@
        },
        get sections() {
          if (!this.tables) return [];
-         return [['Telemetry', this.tables.telemetry, false, false], ['Lookup Tables', this.hideLookup ? [] : this.tables.lookup, true, true],
-                 ['Saved Tables', this.tables.saved, true, false], ['Result Tables', this.hideRt ? [] : this.tables.result, true, false]]
-           .filter(([, names]) => names.length).map(([title, names, deletable, editable]) => ({ title, names, deletable, editable }));
+         return [
+           { title: 'Telemetry', names: this.tables.telemetry },
+           { title: 'Lookup Tables', names: this.hideLookup ? [] : this.tables.lookup, deletable: true, editable: true },
+           { title: 'Saved Tables', names: this.tables.saved, deletable: true, viewable: true },
+           { title: 'Result Tables', names: this.hideRt ? [] : this.tables.result, deletable: true, viewable: true },
+         ].filter(section => section.names.length);
        },
        retention(name) {
          /* Only Saved and Result Tables have a Retention; '' for the rest. */
@@ -53,11 +59,45 @@
          } catch (e) { this.error = 'Could not delete ' + name + '. Try again.'; }
          this.confirming = null;
        },
-       closeIfOutside(e) {
+       closeIfOutside(e, close = () => { this.open = false; }) {
          /* A click on the backdrop targets the <dialog> itself, but so does one on its padding: compare coordinates. */
-         if (e.target !== this.$refs.dialog) return;
-         const r = this.$refs.dialog.getBoundingClientRect();
-         if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) this.open = false;
+         if (e.target !== e.currentTarget) return;
+         const r = e.currentTarget.getBoundingClientRect();
+         if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) close();
+       },
+       async view(name) {
+         /* The chat's table Display for a Saved or Result Table (paging, sorting, PSV, rename), in a modal over this one. */
+         const request = ++this.viewerRequest;  /* only the latest open's response is shown */
+         this.viewing = name; this.showInViewer(''); this.viewerError = '';
+         try {
+           const r = await fetch('/api/tables/' + encodeURIComponent(name) + '/display');
+           const html = r.ok ? await r.text() : '';
+           if (request !== this.viewerRequest || this.viewing === null) return;
+           if (r.status === 410) this.viewerError = name + ' has expired and been deleted.';
+           else if (!r.ok) throw new Error(r.status);
+           else this.showInViewer(html);
+         } catch (e) { if (request === this.viewerRequest) this.viewerError = 'Could not load ' + name + '. Try again.'; }
+       },
+       closeViewer() {
+         /* A rename or Retention change in the viewer shows in the list (not refreshed if the list closed too). */
+         if (this.viewing === null) return;
+         this.viewing = null; this.viewerRequest++; this.showInViewer('');
+         if (this.$refs.dialog.open) this.load(true);
+       },
+       showInViewer(html) {
+         /* Not x-html: it starts the Display inside its own effect, so the Display's state becomes x-html's
+            dependency and a rename re-inserts the original HTML (old name). Alpine's observer starts it here. */
+         this.$refs.viewerBody.innerHTML = html; this.viewerLoaded = html !== '';
+       },
+       closeBeforeDisplayCopy(e) {
+         /* The Display's copy button inserts into the chat box, which both modals would keep focus from: close them first. */
+         if (!e.target.closest('.table-name .copy')) return;
+         this.$refs.viewer.close(); this.$refs.dialog.close();
+       },
+       keepViewerOpen(e) {
+         /* Escape in the Display's rename form cancels the edit, as in the chat; it must not also close the viewer. */
+         if (this.escapeInEditor) e.preventDefault();
+         this.escapeInEditor = false;
        },
        copy(name) {
          this.$refs.dialog.close();  /* first: a modal dialog keeps focus from the chat box */
@@ -82,6 +122,7 @@
                   <template x-if="confirming !== name">
                     <div class="row"><span class="row-actions">
                       <button type="button" class="copy" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into the chat'" @click="copy(name)">&#x29C9;</button>
+                      <button type="button" class="view" :style="section.viewable ? '' : 'visibility: hidden'" :disabled="!section.viewable" :aria-label="'View ' + name" :title="'View the rows of ' + name" @click="view(name)">&#x25A6;&#xFE0E;</button>
                       <!-- Hidden, not removed, where not offered so the names line up across sections. -->
                       <button type="button" class="delete" :style="section.deletable ? '' : 'visibility: hidden'" :disabled="!section.deletable" :aria-label="'Delete ' + name" :title="'Delete ' + name" @click="confirming = name">&#x1F5D1;&#xFE0E;</button>
                       <button type="button" class="edit" :style="section.editable ? '' : 'visibility: hidden'" :disabled="!section.editable" :aria-label="'Edit ' + name" :title="'Edit ' + name" @click="$dispatch('edit-lookup', name)">&#x270E;&#xFE0E;</button>
@@ -103,6 +144,15 @@
         <p x-show="tables && !sections.length" x-cloak>No tables to show.</p>
       </div>
       <div class="actions"><button type="button" @click="open = false">Close</button></div>
+    </dialog>
+    <dialog x-ref="viewer" class="table-viewer" aria-label="Table rows"
+            x-effect="viewing !== null ? $el.open || $el.showModal() : $el.open && $el.close()"
+            @close="closeViewer()" @click="closeIfOutside($event, () => $el.close())" @click.capture="closeBeforeDisplayCopy($event)"
+            @keydown.escape.capture="escapeInEditor = !!$event.target.closest('.editor')" @cancel="keepViewerOpen($event)">
+      <p x-show="!viewerLoaded && !viewerError">Loading&hellip;</p>
+      <p class="error" x-show="viewerError" x-text="viewerError" x-cloak></p>
+      <div class="viewer-body" x-ref="viewerBody"></div>
+      <div class="actions"><button type="button" @click="$refs.viewer.close()">Close</button></div>
     </dialog>
   </div>
   <div class="lookup" x-data="{ open: false, editing: null, name: '', rows: '', sep: 'comma', overwrite: false, busy: false, error: '',

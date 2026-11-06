@@ -19,7 +19,7 @@ def tables(build_agent, web_client):
 
 def open_tables(page):
     page.get_by_role("button", name="Tables", exact=True).click()
-    dialog = page.locator(".show-tables dialog")
+    dialog = page.locator(".show-tables dialog:not(.table-viewer)")
     expect(dialog).to_have_attribute("open", "")
     return dialog
 

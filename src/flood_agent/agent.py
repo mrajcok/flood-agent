@@ -572,7 +572,8 @@ class Agent:
                     calls.append(chunk)
                 elif isinstance(chunk, UsageChunk):
                     usage = chunk
-            trace.llm_step(system_prompt, text, calls, usage, step_started)
+            sent_bytes = len(json.dumps({"messages": messages, "tools": tools}, default=str).encode())
+            trace.llm_step(system_prompt, text, calls, usage, step_started, sent_bytes)
             await self._flag_unseen_values(text, system_prompt, messages, calls, trace, queue)
             assistant: dict = {"role": "assistant", "content": text}
             if calls:

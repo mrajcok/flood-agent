@@ -194,3 +194,19 @@ def test_an_unchanged_system_prompt_is_not_reported_as_changed(build_agent, web_
     cid, _ = ask(client, "how many")
     page = client.get(f"/c/{cid}").text
     assert "changed" not in page.split('class="trace"')[1]
+
+
+async def test_each_llm_step_records_how_many_bytes_were_sent_to_the_model(make_agent):
+    llm = ScriptedLLM([tool_call("run_query", sql=SQL, title="t")], [TextChunk("Done.")])
+    _, trace = await run(make_agent, llm)
+
+    first, second = of_kind(trace, "llm_step")
+    sent_first = len(json.dumps(llm.calls[0]).encode())
+    assert sent_first <= first["request_bytes"] < sent_first + 20_000  # messages plus the tool definitions
+    assert second["request_bytes"] > first["request_bytes"]  # the context grows with the tool result
+
+
+def test_trace_shows_kilobytes_sent_after_each_llm_call(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
+    _, body = ask(client, "hello")
+    assert re.search(r"LLM step &middot; \d+ ms &middot; [\d.]+ KB sent", body)

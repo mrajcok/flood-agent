@@ -10,20 +10,24 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncIterator, Callable
+from typing import AsyncIterator, Callable, Literal
 
 from mcp import StdioServerParameters
 from mcp.types import TextContent
 
-from flood_agent import flagging, queries, table_names
+from flood_agent import flagging, queries
 from flood_agent.catalog import Catalog
 from flood_agent.llm import LLMClient, LLMError, ModelSpec, TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
 from flood_agent.mcp_protocol import QUERY_TOOLS
 from flood_agent.mcp_server import ServerSettings
 from flood_agent.semantic_layer import SemanticLayer
-from flood_agent.store import ConversationStore, TablesChoice
+from flood_agent.store import ConversationStore
 from flood_agent.trace import TraceBuilder
+
+# Whether deleting a Conversation or exchange also drops its live Result Tables (those still named
+# rt_*). Its Saved Tables are always kept (ADR 0004).
+TablesChoice = Literal["keep", "delete_rt"]
 
 
 @dataclass
@@ -337,64 +341,35 @@ class Agent:
             raise KeyError(conversation_id)
         return Conversation(conversation_id, repair_history(self.store.messages(conversation_id)))
 
+    def delete_preview(self, conversation_id: str, turn_id: int | None = None) -> dict:
+        """Counts for the delete dialog: the live Result Tables that delete_rt would drop (`result`) and
+        the live Saved Tables that are always kept (`saved`). KeyError if the Conversation, or the turn
+        in it, is unknown."""
+        if not self.store.exists(conversation_id) or (
+                turn_id is not None and not self.store.has_turn(conversation_id, turn_id)):
+            raise KeyError(turn_id if turn_id is not None else conversation_id)
+        owned = self.tables.owned(conversation_id, turn_id)
+        return {"result": len(owned.result), "saved": len(owned.saved)}
+
     def delete_conversation(self, conversation_id: str, tables: TablesChoice = "keep") -> None:
         """Delete a saved Conversation; `tables` (keep or delete_rt) says whether to drop its live
-        Result Tables. Its Saved Tables are always kept (KeyError if unknown)."""
+        Result Tables. Its Saved Tables are always kept (KeyError if unknown). The tables go first, so a
+        store failure leaves the Conversation in place and the delete can be retried."""
         if not self.store.exists(conversation_id):
             raise KeyError(conversation_id)
-        self._drop_tables(self.store.delete_conversation(conversation_id, tables))
+        if tables == "delete_rt":
+            self.tables.drop_owned(conversation_id)
+        self.store.delete_conversation(conversation_id)
 
     def delete_turn(self, conversation_id: str, turn_id: int, tables: TablesChoice = "keep") -> None:
         """Delete one prompt/answer exchange; `tables` says whether to drop the Result Tables it
         created. Saved Tables are always kept (KeyError if unknown)."""
-        self._drop_tables(self.store.delete_turn(conversation_id, turn_id, tables))
+        if not self.store.has_turn(conversation_id, turn_id):
+            raise KeyError(turn_id)
+        if tables == "delete_rt":
+            self.tables.drop_owned(conversation_id, turn_id)
+        self.store.delete_turn(conversation_id, turn_id)
 
-    def _drop_tables(self, names: list[str]) -> None:
-        if not names or not self.config.results_db.exists():
-            return
-        con = sqlite3.connect(self.config.results_db)
-        try:
-            for n in names:
-                con.execute(f"DROP TABLE IF EXISTS {table_names.quote(n)}")
-            con.commit()
-        finally:
-            con.close()
-
-
-    def list_tables(self) -> dict:
-        """Names of every table the user can query, by kind, each sorted: Telemetry Database tables
-        described in the Semantic Layer, Lookup Tables, and the live Saved Tables and Result Tables
-        from every Conversation, plus `retention_days` and `expires_in_ms` for each of the last two
-        (the only kinds with a Retention). For the web page only; touches no Conversation, message or Trace."""
-        lifetimes = {n: self.tables[n] for n in self.tables.names()}
-        saved, result = [], []
-        for name in lifetimes:  # every live query-made table
-            (result if table_names.is_result_table_name(name) else saved).append(name)
-        return {
-            "telemetry": sorted(self.semantic_layer.table_names()),
-            "lookup": self.store.lookup_table_names(),
-            "saved": saved,
-            "result": result,
-            "retention_days": {name: life.retention_days for name, life in lifetimes.items()},
-            "expires_in_ms": {name: life.expires_in_ms for name, life in lifetimes.items()},
-        }
-
-    def delete_table(self, name: str) -> None:
-        """Delete a Lookup Table, Saved Table or Result Table the user picked in the Tables dialog.
-
-        A deleted Saved or Result Table stays registered as expired, so Displays of it in any
-        Conversation render as expired (ADR 0004). ValueError for a Telemetry Database table, which
-        cannot be deleted; KeyError for any other name that is not a live table of those kinds."""
-        if name.lower() in {t.lower() for t in self.semantic_layer.table_names()}:
-            raise ValueError(f"{name} is a Telemetry Database table and cannot be deleted.")
-        if self.store.is_lookup_table(name):
-            self._drop_tables([name])
-            self.store.unregister_lookup_table(name)
-        elif name in self.tables:
-            self._drop_tables([name])
-            self.store.mark_expired([name])
-        else:
-            raise KeyError(name)
 
     def update_result_table(
         self, result_table: str, name: str | None = None, retention_days: float | None = None

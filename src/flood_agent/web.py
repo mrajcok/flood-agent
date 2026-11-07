@@ -27,6 +27,7 @@ from flood_agent.agent import (
     DisplayEvent,
     FlagEvent,
     LlmCallStarted,
+    TablesChoice,
     TextDelta,
     TraceLive,
     TraceReady,
@@ -37,7 +38,6 @@ from flood_agent.catalog import TableExpired
 from flood_agent.context_usage import context_usage
 from flood_agent.lookup_tables import InvalidLookupTable
 from flood_agent.queries import InvalidSort
-from flood_agent.store import TablesChoice
 from flood_agent.trace import context_tokens, short_model, split_system_prompt
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -210,7 +210,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
         if not agent.store.exists(conversation_id):
             raise HTTPException(404, "unknown conversation")
         try:
-            return agent.store.delete_preview(conversation_id, turn_id)
+            return agent.delete_preview(conversation_id, turn_id)
         except KeyError:
             raise HTTPException(404, "unknown turn")
 
@@ -280,7 +280,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
     def delete_table(name: str):
         """Delete a Lookup, Saved or Result Table from the Tables dialog. Plain HTTP, never an MCP tool."""
         try:
-            agent.delete_table(name)
+            agent.tables.delete(name)
         except ValueError as e:
             raise HTTPException(400, str(e))
         except KeyError:
@@ -299,7 +299,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
     @app.get("/api/tables")
     def list_tables():
         """Names of the tables the user can query, for the Tables dialog. Plain HTTP, never an MCP tool."""
-        return agent.list_tables()
+        return agent.tables.listing()
 
     @app.post("/chat", response_class=HTMLResponse)
     def chat(request: Request, message: str = Form(...), conversation_id: str = Form(""), max_rows: str = Form(...),

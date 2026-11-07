@@ -1,7 +1,7 @@
 """App database: Conversations, turns, messages, Display definitions.
 
 The registry of Result Tables and Lookup Tables lives in the same file but belongs to the Table
-Catalog (`catalog.py`), which creates it; the store still reads it for deleting, renaming and sweeping.
+Catalog (`catalog.py`). The store only renames a Result Table's Displays and registry row together.
 
 A separate SQLite file (not the Telemetry Database, not the results database). Displays are
 stored as definitions only (kind + Result Table + options), never rows, so reopening a
@@ -19,9 +19,6 @@ import time
 import uuid
 from contextlib import closing
 from pathlib import Path
-from typing import Literal
-
-from flood_agent import table_names
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversations (
@@ -56,11 +53,6 @@ CREATE TABLE IF NOT EXISTS displays (
 CREATE INDEX IF NOT EXISTS displays_conv ON displays(conversation_id, id);
 """
 
-# Whether deleting a Conversation or exchange also drops its live Result Tables (those still named
-# rt_*). Its Saved Tables are always kept (ADR 0004).
-TablesChoice = Literal["keep", "delete_rt"]
-
-
 def _follow_rename(node, old: str, new: str):
     """A saved Chart Spec with every {"name": old} data reference pointing at `new`."""
     if isinstance(node, dict):
@@ -74,6 +66,7 @@ def _follow_rename(node, old: str, new: str):
 
 def _now() -> int:
     return int(time.time() * 1000)
+
 
 
 class ConversationStore:
@@ -130,75 +123,26 @@ class ConversationStore:
             )
             return [dict(r) for r in rows]
 
-    def _live_tables(self, con, conversation_id: str) -> list[sqlite3.Row]:
-        return con.execute(
-            "SELECT name FROM result_tables "
-            "WHERE conversation_id=? AND expired=0", (conversation_id,)).fetchall()
-
-    def _turn_owned(self, con, conversation_id: str, turn_id: int) -> list[sqlite3.Row]:
-        """Live Result Tables a turn owns: a table belongs to the earliest turn whose messages
-        mention its whole name (`rt_X` is not a mention of `rt_X_2`)."""
-        bodies = con.execute(
-            "SELECT turn_id, body FROM messages WHERE conversation_id=? ORDER BY id", (conversation_id,)).fetchall()
-
-        shown = con.execute(
-            "SELECT turn_id, result_table FROM displays WHERE conversation_id=? ORDER BY id", (conversation_id,)
-        ).fetchall()  # a renamed table is only still named in Displays
-
-        def first_mention(name: str):
-            mention = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])")
-            turns = [b["turn_id"] for b in bodies if mention.search(b["body"])]
-            turns += [d["turn_id"] for d in shown if d["result_table"] == name]
-            return min(turns, default=None)
-
-        return [t for t in self._live_tables(con, conversation_id) if first_mention(t["name"]) == turn_id]
-
-    @staticmethod
-    def _choose(tables: list[sqlite3.Row], choice: TablesChoice) -> list[str]:
-        """The names to delete under `choice`: none for keep, the Result Tables for delete_rt."""
-        if choice == "delete_rt":
-            return [t["name"] for t in tables if table_names.is_result_table_name(t["name"])]
-        return []
-
-    def delete_preview(self, conversation_id: str, turn_id: int | None = None) -> dict:
-        """Counts for the delete dialog: the live Result Tables that delete_rt would drop (`result`)
-        and the live Saved Tables that are always kept (`saved`). KeyError if the turn is not in the
-        Conversation."""
+    def has_turn(self, conversation_id: str, turn_id: int) -> bool:
         with closing(self._connect()) as con:
-            if turn_id is None:
-                tables = self._live_tables(con, conversation_id)
-            else:
-                if con.execute("SELECT 1 FROM turns WHERE id=? AND conversation_id=?",
-                               (turn_id, conversation_id)).fetchone() is None:
-                    raise KeyError(turn_id)
-                tables = self._turn_owned(con, conversation_id, turn_id)
-        result = len(self._choose(tables, "delete_rt"))
-        return {"result": result, "saved": len(tables) - result}
+            return con.execute("SELECT 1 FROM turns WHERE id=? AND conversation_id=?",
+                               (turn_id, conversation_id)).fetchone() is not None
 
-    def delete_conversation(self, conversation_id: str, tables: TablesChoice = "keep") -> list[str]:
-        """Remove a Conversation and everything it owns except the Result Tables the user keeps
-        (they outlive it until they expire); returns the names of the tables to drop. Dropped tables
-        stay registered as expired, so other Conversations' Displays of them render as expired."""
+    def delete_conversation(self, conversation_id: str) -> None:
+        """Remove a Conversation with its turns, messages and Displays. Tables are the Catalog's."""
         with closing(self._connect()) as con, con:
-            dropped = self._choose(self._live_tables(con, conversation_id), tables)
-            con.executemany("UPDATE result_tables SET expired=1 WHERE name=?", [(n,) for n in dropped])
             for table in ("displays", "messages", "turns"):
                 con.execute(f"DELETE FROM {table} WHERE conversation_id=?", (conversation_id,))
             con.execute("DELETE FROM conversations WHERE id=?", (conversation_id,))
-        return dropped
 
-    def delete_turn(self, conversation_id: str, turn_id: int, tables: TablesChoice = "keep") -> list[str]:
-        """Remove one prompt/answer exchange; returns the Result Tables it created that are to be
-        dropped (now expired). Displays elsewhere that show a dropped table render as expired."""
+    def delete_turn(self, conversation_id: str, turn_id: int) -> None:
+        """Remove one prompt/answer exchange (KeyError if it is not in the Conversation)."""
         with closing(self._connect()) as con, con:
             if con.execute("SELECT 1 FROM turns WHERE id=? AND conversation_id=?", (turn_id, conversation_id)).fetchone() is None:
                 raise KeyError(turn_id)
-            dropped = self._choose(self._turn_owned(con, conversation_id, turn_id), tables)
-            con.executemany("UPDATE result_tables SET expired=1 WHERE name=?", [(n,) for n in dropped])
             for table in ("displays", "messages"):
                 con.execute(f"DELETE FROM {table} WHERE turn_id=?", (turn_id,))
             con.execute("DELETE FROM turns WHERE id=?", (turn_id,))
-        return dropped
 
     def start_turn(self, conversation_id: str, user_message: str) -> int:
         return self._write(
@@ -251,31 +195,6 @@ class ConversationStore:
         with closing(self._connect()) as con, con:
             if retention_ms is not None:
                 con.execute("UPDATE result_tables SET retention_ms=? WHERE name=?", (retention_ms, name))
-
-    def lookup_tables(self) -> list[dict]:
-        """The Lookup Tables registry: name, created time, columns and row count."""
-        with closing(self._connect()) as con:
-            return [{**dict(r), "columns": json.loads(r["columns"])} for r in con.execute(
-                "SELECT name, created_at, columns, row_count FROM lookup_tables ORDER BY name")]
-
-    def lookup_table_names(self) -> list[str]:
-        """Names of the registered Lookup Tables, sorted."""
-        with closing(self._connect()) as con:
-            return [r[0] for r in con.execute("SELECT name FROM lookup_tables ORDER BY name")]
-
-    def unregister_lookup_table(self, name: str) -> None:
-        """Forget a Lookup Table (SQL names ignore case, so this does too)."""
-        self._write("DELETE FROM lookup_tables WHERE name=? COLLATE NOCASE", (name,))
-
-    def is_lookup_table(self, name: str) -> bool:
-        """SQL table names ignore case, so this does too."""
-        with closing(self._connect()) as con:
-            return con.execute(
-                "SELECT 1 FROM lookup_tables WHERE name=? COLLATE NOCASE", (name,)).fetchone() is not None
-
-    def mark_expired(self, names: list[str]) -> None:
-        with closing(self._connect()) as con, con:
-            con.executemany("UPDATE result_tables SET expired=1 WHERE name=?", [(n,) for n in names])
 
     def messages(self, conversation_id: str) -> list[dict]:
         """LLM-facing message history, in order."""

@@ -342,7 +342,7 @@ async def test_show_tools_refuse_expired_and_unknown_tables_alike(make_agent, to
     llm = ScriptedLLM()
     agent = await make_agent(llm)
     gone = await first_conversation_table(agent, llm)
-    agent.store.mark_expired([gone])
+    agent.tables.delete(gone)
 
     llm.steps = [[tool_call(tool, "c1", **show_args(tool, gone))], [tool_call(tool, "c2", **show_args(tool, "rt_deadbeef"))],
                  [TextChunk("done")]]

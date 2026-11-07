@@ -13,7 +13,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Callable, Iterable, Literal
+from typing import Callable, Iterable, Literal, NamedTuple
 
 from flood_agent import lookup_tables, table_names
 
@@ -70,6 +70,13 @@ class Table:
         return {"name": self.name, "retention_days": self.retention_days, "expires_in_ms": self.expires_in_ms}
 
 
+class Owned(NamedTuple):
+    """The live tables a Conversation or one turn owns: Result Tables (still named `rt_*`) and Saved Tables."""
+
+    result: list[Table]
+    saved: list[Table]
+
+
 def _now() -> int:
     return int(time.time() * 1000)
 
@@ -115,6 +122,31 @@ class CatalogView:
             return self[wanted].kind
         except (KeyError, TableExpired):
             return None
+
+    def lookups(self) -> list[dict]:
+        """The Lookup Tables registry: name, created time, columns and row count, sorted by name."""
+        with closing(self._connect()) as con:
+            return [{**dict(r), "columns": json.loads(r["columns"])} for r in con.execute(
+                "SELECT name, created_at, columns, row_count FROM lookup_tables ORDER BY name")]
+
+    def listing(self) -> dict:
+        """The Tables dialog data: names by kind (each sorted), and each live Result or Saved Table's
+        Retention in days and time left in ms."""
+        live = [self[n] for n in self.names()]
+        return {
+            "telemetry": sorted(self.telemetry_tables),
+            "lookup": sorted(self.lookup_names()),
+            "saved": [t.name for t in live if t.kind == "saved"],
+            "result": [t.name for t in live if t.kind == "result"],
+            "retention_days": {t.name: t.retention_days for t in live},
+            "expires_in_ms": {t.name: t.expires_in_ms for t in live},
+        }
+
+    def owned(self, conversation_id: str, turn_id: int | None = None) -> Owned:
+        """The live tables a Conversation (or just its turn `turn_id`) made, by the turn recorded when
+        each was registered."""
+        tables = [t for t in self.tables_of(conversation_id) if turn_id is None or t.turn_id == turn_id]
+        return Owned([t for t in tables if t.kind == "result"], [t for t in tables if t.kind == "saved"])
 
     def readable(self) -> set[str]:
         """Every table a query may read (ADR 0003): all live Result and Saved Tables, from any Conversation,
@@ -225,6 +257,43 @@ class Catalog(CatalogView):
                  self.default_retention_ms),
             )
             con.execute("UPDATE conversations SET last_activity_at=? WHERE id=?", (now, conversation_id))
+
+    def _drop_physical(self, names: Iterable[str]) -> None:
+        names = list(names)
+        if not names or self.results_db is None or not self.results_db.exists():
+            return
+        with closing(sqlite3.connect(self.results_db)) as con, con:
+            for n in names:
+                con.execute(f"DROP TABLE IF EXISTS {table_names.quote(n)}")
+
+    def _mark_expired(self, names: list[str]) -> None:
+        with closing(self._connect()) as con, con:
+            con.executemany("UPDATE result_tables SET expired=1 WHERE name=?", [(n,) for n in names])
+
+    def drop_owned(self, conversation_id: str, turn_id: int | None = None) -> list[str]:
+        """Drop the Result Tables a Conversation (or one turn) owns that are still named `rt_*`, never
+        its Saved Tables. They stay registered as expired. Returns the names dropped."""
+        names = [t.name for t in self.owned(conversation_id, turn_id).result]
+        self._drop_physical(names)
+        self._mark_expired(names)
+        return names
+
+    def delete(self, name: str) -> None:
+        """Delete a Lookup, Saved or Result Table. A Saved or Result Table stays registered as expired,
+        so Displays of it render as expired (ADR 0004). ValueError for a Telemetry table; KeyError for any
+        name that is not a live table of those kinds."""
+        kind = self.kind_of(name)
+        if kind == "telemetry":
+            raise ValueError(f"{name} is a Telemetry Database table and cannot be deleted.")
+        if kind is None:
+            raise KeyError(name)
+        name = name.lower()
+        self._drop_physical([name])
+        if kind == "lookup":
+            with closing(self._connect()) as con, con:
+                con.execute("DELETE FROM lookup_tables WHERE name=?", (name,))
+        else:
+            self._mark_expired([name])
 
     def _register_lookup(self, name: str, parsed: lookup_tables.ParsedRows) -> dict:
         # The registry is in the app database, a separate file, so it cannot join the results-database

@@ -33,6 +33,7 @@ def test_canned_prompts_show_only_while_no_model_is_selected(live_page):
     choose(page, "No model")
     expect(canned).to_be_visible()
     expect(page.locator("body")).not_to_contain_text("Fake Mode")
+    expect(page.locator("button[title='Effort for the next prompt']")).to_be_disabled()
 
     choose(page, "Claude Opus 5.5")
     expect(canned).to_be_hidden()

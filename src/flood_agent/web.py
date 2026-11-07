@@ -91,7 +91,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
         return JSONResponse({"detail": "This result has expired and been deleted. Ask again to regenerate it."}, 410)
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-    pending: dict[str, tuple[Conversation, str, int, str]] = {}
+    pending: dict[str, tuple[Conversation, str, int, str, str | None]] = {}
 
     def sidebar(current: str | None) -> dict:
         return {
@@ -99,8 +99,9 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
             "picker": picker or [],
         }
 
-    models = [{"id": m.id, "label": m.label, "disabled": not has_api_key} for m in agent.config.models]
-    models.append({"id": NO_MODEL, "label": "No model", "disabled": False})
+    models = [{"id": m.id, "label": m.label, "disabled": not has_api_key, "efforts": m.efforts,
+               "default_effort": m.default_effort} for m in agent.config.models]
+    models.append({"id": NO_MODEL, "label": "No model", "disabled": False, "efforts": [], "default_effort": None})
     default_model = agent.config.model if has_api_key else NO_MODEL
 
     def meter(tokens: int | None, model: str | None = None) -> dict:
@@ -125,6 +126,15 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
         if choice != NO_MODEL and not has_api_key:
             raise HTTPException(422, f"{choice} {NEEDS_KEY}: set it in .env and restart the app")
         return choice
+
+    def effort_choice(model: str, raw: str | None) -> str | None:
+        """The Effort a prompt asked for (None: the model's default), checked against the model's levels (422 otherwise)."""
+        if model == NO_MODEL or not raw:
+            return None
+        spec = next(m for m in agent.config.models if m.id == model)
+        if raw not in spec.efforts:
+            raise HTTPException(422, f"{spec.label} does not offer effort {raw!r}")
+        return raw
 
     def history(conversation_id: str) -> list[dict]:
         items = []
@@ -277,9 +287,10 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
 
     @app.post("/chat", response_class=HTMLResponse)
     def chat(request: Request, message: str = Form(...), conversation_id: str = Form(""), max_rows: str = Form(...),
-             model: str | None = Form(None)):
+             model: str | None = Form(None), effort: str | None = Form(None)):
         max_result_rows = _parse_max_rows(max_rows)
         chosen_model = model_choice(model)
+        chosen_effort = effort_choice(chosen_model, effort)
         if conversation_id:
             try:
                 conversation = agent.open_conversation(conversation_id)
@@ -288,7 +299,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
         else:
             conversation = Conversation()
         turn_id = uuid.uuid4().hex
-        pending[turn_id] = (conversation, message, max_result_rows, chosen_model)
+        pending[turn_id] = (conversation, message, max_result_rows, chosen_model, chosen_effort)
         if conversation.id is None:  # persist now so the sidebar and form can reference it
             conversation.id = agent.store.create_conversation()
         return TEMPLATES.TemplateResponse(
@@ -301,11 +312,11 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
         entry = pending.pop(turn_id, None)
         if entry is None:
             raise HTTPException(404)
-        conversation, message, max_result_rows, chosen_model = entry
+        conversation, message, max_result_rows, chosen_model, chosen_effort = entry
 
         async def events():
             try:
-                async for ev in agent.run_turn(conversation, message, max_result_rows, chosen_model):
+                async for ev in agent.run_turn(conversation, message, max_result_rows, chosen_model, chosen_effort):
                     if isinstance(ev, TextDelta):
                         yield _sse("text", f'<span class="md-delta">{escape(ev.text)}</span>')  # markdown.js renders it
                     elif isinstance(ev, DisplayEvent) and ev.kind == "chart":

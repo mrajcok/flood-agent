@@ -60,6 +60,14 @@ class LLMError(Exception):
     The message is safe to show the user."""
 
 
+def caching_fields(model: str) -> dict:
+    """Extra request-body fields a model needs for prompt caching, keyed on model-ID prefix.
+    DeepSeek and GLM cache automatically; Claude only caches when the request carries cache_control."""
+    if model.startswith("anthropic/"):
+        return {"cache_control": {"type": "ephemeral"}}
+    return {}
+
+
 class OpenRouterClient:
     """OpenAI-compatible streaming chat completions with tool calling."""
 
@@ -70,6 +78,7 @@ class OpenRouterClient:
     async def stream_chat(self, messages, tools, reasoning: dict | None = None):
         body = {"model": self.model, "messages": messages, "tools": tools, "stream": True,
             "stream_options": {"include_usage": True}, "usage": {"include": True}}
+        body.update(caching_fields(self.model))
         if reasoning:
             body["reasoning"] = reasoning
         headers = {"Authorization": f"Bearer {self.api_key}"}

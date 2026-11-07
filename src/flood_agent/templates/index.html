@@ -347,8 +347,8 @@
       <span class="dd">
         <button type="button" class="trig" :class="{ open: effortOpen }" :disabled="!efforts.length" aria-haspopup="true" :aria-expanded="effortOpen"
                 title="Effort for the next prompt" @click="effortOpen = !effortOpen; modelOpen = false; open = false" x-text="effortLabel">no effort</button>
-        <div class="panel left" role="dialog" aria-label="Effort" x-show="effortOpen" x-cloak>
-          <h6>Effort</h6>
+        <div class="panel left" role="dialog" aria-label="Reasoning effort" x-show="effortOpen" x-cloak>
+          <h6>Reasoning effort</h6>
           <template x-for="level in efforts" :key="level"><button type="button" class="item" @click="setEffort(level)">
             <span class="tick" x-text="level === effort ? '\u2713' : ''"></span><span x-text="level"></span></button></template>
         </div>

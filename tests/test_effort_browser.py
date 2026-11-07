@@ -19,7 +19,7 @@ def pick_model(page, label):
 
 def pick_effort(page, level):
     effort_button(page).click()
-    page.get_by_role("dialog", name="Effort").get_by_role("button", name=level, exact=True).click()
+    page.get_by_role("dialog", name="Reasoning effort").get_by_role("button", name=level, exact=True).click()
 
 
 def test_the_dropdown_lists_the_selected_models_levels_with_its_default_selected(live_page):
@@ -29,8 +29,8 @@ def test_the_dropdown_lists_the_selected_models_levels_with_its_default_selected
     expect(effort_button(page)).to_have_text("high")
     expect(page.locator("#effort")).to_have_value("high")
     effort_button(page).click()
-    panel = page.get_by_role("dialog", name="Effort")
-    expect(panel.get_by_role("heading")).to_have_text("Effort")
+    panel = page.get_by_role("dialog", name="Reasoning effort")
+    expect(panel.get_by_role("heading")).to_have_text("Reasoning effort")
     expect(panel.locator(".item > span:nth-child(2)")).to_have_text(["max", "high", "low", "none"])
 
 

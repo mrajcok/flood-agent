@@ -44,6 +44,7 @@ class UsageChunk:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cost: float | None = None
+    cached_tokens: int = 0
 
 
 Chunk = TextChunk | ToolCallChunk | UsageChunk
@@ -93,7 +94,9 @@ class OpenRouterClient:
                         raise LLMError(_describe_error(obj["error"]))
                     if obj.get("usage"):
                         u = obj["usage"]
-                        usage = UsageChunk(u.get("prompt_tokens", 0), u.get("completion_tokens", 0), u.get("cost"))
+                        details = u.get("prompt_tokens_details") or {}
+                        usage = UsageChunk(u.get("prompt_tokens", 0), u.get("completion_tokens", 0), u.get("cost"),
+                                           details.get("cached_tokens") or 0)
                     choices = obj.get("choices") or []
                     if not choices:
                         continue

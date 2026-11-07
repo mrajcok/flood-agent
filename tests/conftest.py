@@ -123,6 +123,7 @@ class ScriptedLLM:
         self.steps = list(steps)
         self.calls: list[list[dict]] = []
         self.tools_seen_names: list[str] = []
+        self.cached_tokens = 0
 
     async def stream_chat(self, messages, tools):
         self.calls.append(copy.deepcopy(messages))
@@ -131,7 +132,7 @@ class ScriptedLLM:
         chunks = step(messages) if callable(step) else step
         for c in chunks:
             yield c
-        yield UsageChunk(prompt_tokens=100, completion_tokens=20, cost=0.0012)
+        yield UsageChunk(prompt_tokens=100, completion_tokens=20, cost=0.0012, cached_tokens=self.cached_tokens)
 
     def all_sent_text(self) -> str:
         return json.dumps(self.calls)

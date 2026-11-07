@@ -25,7 +25,7 @@ def edit(page, table):
 
 
 def retention_of(agent, name):
-    return agent.result_table_settings(name)["retention_days"]
+    return agent.tables[name].retention_days
 
 
 def test_renaming_a_result_table_switches_its_retention_to_30_days(build_agent, live_page):

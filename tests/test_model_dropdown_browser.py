@@ -28,7 +28,7 @@ def test_the_dropdown_lists_the_curated_models_in_order_with_the_default_presele
     panel = open_model_panel(page)
 
     expect(panel.get_by_role("heading")).to_have_text("Model")
-    expect(panel.locator(".item > span:nth-child(2)")).to_have_text(LABELS)
+    expect(panel.locator(".item > span:nth-child(2)")).to_have_text([*LABELS, "No model"])
     expect(panel.get_by_role("button", name="GLM 5.3")).to_be_enabled()
 
 
@@ -77,5 +77,6 @@ def test_with_no_key_real_models_are_disabled_and_a_remembered_one_falls_back(li
 
     for label in LABELS:
         expect(panel.get_by_role("button", name=label)).to_be_disabled()
+    expect(panel.get_by_role("button", name="No model")).to_be_enabled()
     expect(panel).to_contain_text("needs OPENROUTER_API_KEY")
-    expect(page.locator("#model")).to_have_value("z-ai/glm-5.3")
+    expect(page.locator("#model")).to_have_value("no-model")

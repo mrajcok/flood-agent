@@ -196,8 +196,9 @@
     @keyframes spin { to { transform: rotate(360deg); } }
     @media (prefers-reduced-motion: reduce) { .thinking { animation-duration: 3s; } }
     form { display: flex; gap: .5rem; margin-top: 1rem; }
-    .badge { font-size: .5em; vertical-align: middle; padding: .15rem .5rem; background: #fde68a; border-radius: .25rem; }
-    .canned { margin-top: 1rem; font-size: .9rem; }
+    .canned { display: none; margin-top: 1rem; font-size: .9rem; }
+    body[data-model=no-model] .canned { display: block; }  /* Canned Prompts show only under "No model" */
+    .refusal { margin: .4rem 0; padding: .4rem .6rem; border-left: 4px solid #b00; background: #fdecec; font-size: .9rem; }
     .canned .fails { color: #a40; }
     .canned ul { list-style: none; padding: 0; margin: .25rem 0; }
     .canned .follow-up { margin-left: 1.5rem; }
@@ -212,13 +213,13 @@
     .chat-box .send:focus-visible { outline: 2px solid #2a4ba0; outline-offset: 2px; }
   </style>
 </head>
-<body>
+<body data-model="{{ default_model }}">
   {% macro entry(c, css_class="") %}
-  <li{% if css_class %} class="{{ css_class }}"{% endif %}><button type="button" hx-post="/chat" hx-include="#conversation_id, #max_rows, #model" hx-vals='{{ {"message": c.prompt} | tojson }}'
+  <li{% if css_class %} class="{{ css_class }}"{% endif %}><button type="button" hx-post="/chat" hx-include="#conversation_id, #max_rows" hx-vals='{{ {"message": c.prompt, "model": "no-model"} | tojson }}'
     hx-target="#chat" hx-swap="beforeend">{{ c.prompt }}</button>{% if c.fails_on_purpose %} <small class="fails">fails on purpose</small>{% endif %}</li>
   {% endmacro %}
   <div class="topbar">
-    <h1>Flood Agent{% if fake_mode %} <span class="badge">Fake Mode — no LLM</span>{% endif %}</h1>
+    <h1>Flood Agent</h1>
     <div class="controls">
     <button type="button" class="toggle-all" x-data="{ anyOpen: true }"
             x-init="const refresh = () => { anyOpen = !!document.querySelector('details.turn[open]') };
@@ -247,9 +248,9 @@
     {% endfor %}
     {% if turn.open %}</details>{% endif %}
   </div>
-  {% if fake_mode %}
+  {% if picker %}
   <div class="canned">
-    <strong>You can only use the following canned prompts with Fake Mode:</strong>
+    <strong>Canned prompts (no model is called):</strong>
     <ul>
     {% for c in picker %}
       {{ entry(c) }}
@@ -305,11 +306,10 @@
                                   htmx.ajax('GET', '/context-meter?model=' + encodeURIComponent(this.model) + '&conversation_id=' + encodeURIComponent(cid),
                                             { target: '#context-meter', swap: 'outerHTML' });
                                 } }"
-       {% if not fake_mode %}x-init="load()" {% endif %}@click.outside="open = false; modelOpen = false" @keydown.escape.window="open = false; modelOpen = false">
+       x-init="load()" x-effect="document.body.dataset.model = model" @click.outside="open = false; modelOpen = false" @keydown.escape.window="open = false; modelOpen = false">
     <input type="hidden" id="max_rows" name="max_rows" :value="choice === 'custom' ? custom : choice" value="10000">
-    {% if not fake_mode %}<input type="hidden" id="model" name="model" :value="model" value="{{ default_model }}">{% endif %}
+    <input type="hidden" id="model" name="model" :value="model" value="{{ default_model }}">
     <div class="row">
-      {% if fake_mode %}<span title="Model">{{ model }}</span>{% else %}
       <span class="dd">
         <button type="button" class="trig" :class="{ open: modelOpen }" aria-haspopup="true" :aria-expanded="modelOpen" title="Model for the next prompt"
                 @click="modelOpen = !modelOpen; open = false" x-text="modelLabel">{{ (models | selectattr("id", "equalto", default_model) | first).label }}</button>
@@ -319,7 +319,7 @@
             <span class="tick" x-text="m.id === model ? '\u2713' : ''"></span><span x-text="m.label"></span>
             <small x-show="m.disabled">{{ needs_key }}</small></button></template>
         </div>
-      </span>{% endif %}
+      </span>
       <span class="sep">&middot;</span>
       {% include "context_meter.html" %}
       <span class="spacer"></span>
@@ -400,6 +400,21 @@
       input.setSelectionRange(head.length, head.length);
       input.dispatchEvent(new Event("input", { bubbles: true }));
     }
+  </script>
+  <script>
+    // A refused prompt (for example a real model with no API key) shows its reason in the chat; htmx
+    // does not swap error responses itself.
+    document.body.addEventListener("htmx:responseError", (event) => {
+      const xhr = event.detail.xhr;
+      if (event.detail.pathInfo.requestPath !== "/chat") return;
+      let reason = "The prompt was not sent (HTTP " + xhr.status + ").";
+      try { const detail = JSON.parse(xhr.responseText).detail; if (typeof detail === "string") reason = detail; } catch (e) {}
+      const note = document.createElement("p");
+      note.className = "refusal";
+      note.setAttribute("role", "alert");
+      note.textContent = reason;
+      document.getElementById("chat").appendChild(note);
+    });
   </script>
   <script>
     // Keep the newest streamed content in view, unless the user has scrolled up to read.

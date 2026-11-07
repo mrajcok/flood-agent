@@ -79,6 +79,6 @@ def test_the_stream_refreshes_the_meter_in_place_when_the_turn_ends(build_agent,
     assert 'id="context-meter"' in body and 'hx-swap-oob="true"' in body and "100 of 1.05M" in body
 
 
-def test_fake_mode_has_no_context_window(build_agent, web_client):
-    page = web_client(build_agent(ScriptedLLM()), fake_mode=True).get("/").text
+def test_no_model_has_no_context_window(build_agent, web_client):
+    page = web_client(build_agent(ScriptedLLM()), has_api_key=False).get("/").text
     assert "no context used" in meter(page).group(1)

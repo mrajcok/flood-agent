@@ -72,7 +72,7 @@ def test_a_missing_model_field_means_the_default_model(build_agent, web_client):
     assert GLM in finish_turn(client, post_chat(client))
 
 
-@pytest.mark.parametrize("bad", ["nobody/nothing", "no-model"])
+@pytest.mark.parametrize("bad", ["nobody/nothing", "No model"])
 def test_an_unknown_model_id_is_rejected_before_any_turn_starts(build_agent, web_client, bad):
     llm = ScriptedLLM([TextChunk("never")])
     agent = build_agent(llm)
@@ -98,7 +98,7 @@ def test_with_no_key_every_real_model_shows_as_disabled(build_agent, web_client)
     page = web_client(build_agent(ScriptedLLM()), has_api_key=False).get("/").text
 
     assert "needs OPENROUTER_API_KEY" in page
-    assert re.search(r'disabled(?:"|&#34;):\s*true', page) and not re.search(r'disabled(?:"|&#34;):\s*false', page)
+    assert re.search(r'disabled(?:"|&#34;):\s*true', page) and len(re.findall(r"disabled(?:\"|&#34;):\s*false", page)) == 1  # only No model is enabled
 
 
 def test_with_a_key_the_default_model_is_selectable(build_agent, web_client):

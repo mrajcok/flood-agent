@@ -8,7 +8,7 @@ import uvicorn
 
 from flood_agent.agent import Agent
 from flood_agent.config import Settings
-from flood_agent.fake_llm import CannedPrompt
+from flood_agent.fake_llm import CannedPrompt, load_canned_prompts
 from flood_agent.web import PickerEntry, create_app
 
 
@@ -24,12 +24,12 @@ def picker_entries(canned_prompts: list[CannedPrompt]) -> list[PickerEntry]:
 
 def build_app(settings: Settings | None = None):
     settings = settings or Settings()  # pyright: ignore[reportCallIssue]  # pydantic-settings fills fields from env/TOML
-    backend = settings.llm_backend_choice()
-    config = settings.agent_config(backend.model)
+    config = settings.agent_config()
     config.results_db.parent.mkdir(parents=True, exist_ok=True)
-    picker = picker_entries(backend.canned_prompts or [])
-    has_api_key = settings.openrouter_api_key is not None
-    return create_app(Agent(config, backend.client_for), picker=picker, fake_mode=backend.fake_mode, has_api_key=has_api_key)
+    picker = picker_entries(load_canned_prompts())
+    # llm_backend="fake" (removed in #60) still means: no real model can be chosen.
+    has_api_key = settings.openrouter_api_key is not None and settings.llm_backend != "fake"
+    return create_app(Agent(config, settings.client_factory()), picker=picker, has_api_key=has_api_key)
 
 
 if __name__ == "__main__":

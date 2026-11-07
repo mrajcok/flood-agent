@@ -6,10 +6,10 @@
 // expired it dispatches `table-expired` and hides.
 document.addEventListener("alpine:init", () => {
   Alpine.data("tableName", () => ({
-    settingsUrl: "", name: "", retentionDays: 1, expiresInMs: null, gone: false,
-    editing: false, draft: "", choice: "1", custom: 1, saveError: "",
-    originalChoice: "1", retentionTouched: false,
-    presets: ["1", "7", "30", "365"],
+    settingsUrl: "", name: "", retentionDays: 0, expiresInMs: null, gone: false,
+    editing: false, draft: "", choice: "", custom: 0, saveError: "",
+    originalChoice: "", retentionTouched: false,
+    policy: { result_days: 0, saved_days: 0, max_days: 0 },  // the server's Retention policy, set by apply()
 
     async init() {
       this.settingsUrl = this.$el.dataset.settingsUrl;
@@ -21,6 +21,15 @@ document.addEventListener("alpine:init", () => {
     },
     apply(settings) {
       this.name = settings.name; this.retentionDays = settings.retention_days; this.expiresInMs = settings.expires_in_ms;
+      this.policy = settings.policy;
+    },
+    // The Retention choices: the deployment's Result Table default, the Saved Table default, a week and a year.
+    get presets() {
+      const days = [this.policy.result_days, 7, this.policy.saved_days, 365].filter((d) => d > 0 && d <= this.policy.max_days);
+      return [...new Set(days)].sort((a, b) => a - b).map(String);
+    },
+    presetLabel(days) {
+      return FloodFormat.formatRetention(Number(days)) + (Number(days) === this.policy.result_days ? " (rt_ default)" : "");
     },
     expire() { this.gone = true; this.editing = false; this.$dispatch("table-expired"); },
     get expiresIn() { return this.expiresInMs === null ? "" : FloodFormat.formatExpiresIn(this.expiresInMs); },
@@ -36,8 +45,8 @@ document.addEventListener("alpine:init", () => {
     renamed() {
       // Renaming a Result Table (rt_*) makes it a Saved Table, kept 30 days unless the user picks
       // a Retention in this edit or it is already kept at least that long (ADR 0004).
-      if (this.retentionTouched || !this.name.toLowerCase().startsWith("rt_") || this.retentionDays >= 30) return;
-      this.choice = this.draft.trim() === this.name ? this.originalChoice : "30";
+      if (this.retentionTouched || !this.name.toLowerCase().startsWith("rt_") || this.retentionDays >= this.policy.saved_days) return;
+      this.choice = this.draft.trim() === this.name ? this.originalChoice : String(this.policy.saved_days);
     },
     async save() {
       const days = this.choice === "custom" ? this.custom : this.choice;
@@ -47,7 +56,7 @@ document.addEventListener("alpine:init", () => {
         if (r.status === 410) return this.expire();
         if (!r.ok) {
           this.saveError = r.status === 422
-            ? ((await r.json()).detail || "Enter a valid name and a number of days between 0 and 3650.") : "Could not save.";
+            ? ((await r.json()).detail || "Enter a valid name and a number of days between 0 and " + this.policy.max_days + ".") : "Could not save.";
           return;
         }
         const old = this.name;

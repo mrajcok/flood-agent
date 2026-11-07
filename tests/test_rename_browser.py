@@ -95,3 +95,19 @@ def test_the_table_name_has_the_same_pointer_cursor_as_the_copy_icon(build_agent
     _, page, _ = ask_for_a_table(build_agent, live_page)
     cursor = "e => getComputedStyle(e).cursor"
     assert page.locator(".table-name .name").evaluate(cursor) == page.locator(".table-name .copy").evaluate(cursor) == "pointer"
+
+
+def test_the_form_shows_the_deployments_retention_policy(build_agent, live_page):
+    from dataclasses import replace
+
+    agent, page, table = ask_for_a_table(build_agent, live_page)
+    agent.tables.policy = replace(agent.tables.policy, result_days=3, saved_days=14, max_days=100)
+    page.reload()
+    page.locator("aside ul li a").first.click()
+    name, retention = edit(page, table)
+    expect(retention).to_have_value("custom")  # created with 1 day, which is no longer a preset
+    expect(retention.locator("option", has_text="rt_ default")).to_have_text("3 days (rt_ default)")
+    name.fill("keeper")
+    expect(retention).to_have_value("14")  # the Saved Table default comes from the policy
+    retention.select_option("custom")
+    expect(page.get_by_label("Retention in days")).to_have_attribute("max", "100")  # the policy's cap

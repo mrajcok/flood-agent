@@ -139,6 +139,20 @@ class FlagEvent:
 
 
 @dataclass
+class LlmCallStarted:
+    """The turn is about to make its `number`th LLM call (1-based); for the live view only."""
+
+    number: int
+
+
+@dataclass
+class TraceLive:
+    """A Trace entry, the moment it is added to the turn's Trace; for the live view only."""
+
+    entry: dict
+
+
+@dataclass
 class TurnError:
     """The turn failed partway. `message` was already streamed to the user (and saved); `detail`
     is the technical description (also in the Trace) for harnesses such as the eval runner."""
@@ -152,12 +166,26 @@ class TurnEnd:
     pass
 
 
-Event = TextDelta | DisplayEvent | TraceEntry | FlagEvent | TraceReady | TurnError | TurnEnd
+Event = TextDelta | DisplayEvent | TraceEntry | FlagEvent | TraceReady | LlmCallStarted | TraceLive | TurnError | TurnEnd
 
 GIVE_UP_MESSAGE = (
     "Sorry, I couldn't build a working query for that after several attempts. "
     "Please try rephrasing your question."
 )
+
+
+STOPPED_NOTE = "*Stopped by user.*"
+
+
+@dataclass
+class _LiveStep:
+    """The LLM step in progress, so that a stop can keep what it had already streamed."""
+
+    text: str = ""
+    system_prompt: str = ""
+    started: float = 0.0
+    in_trace: bool = False  # the Trace already has this step
+    open: bool = False  # started, and not yet saved to the history
 
 
 STEP_LIMIT_MESSAGE = (
@@ -228,6 +256,8 @@ class Agent:
         self._connection: McpConnection | None = None
         self._restart_lock = asyncio.Lock()
         self._turn_tasks: set[asyncio.Task] = set()
+        self._keyed_turns: dict[str, asyncio.Task] = {}  # running turns by the key `run_turn` was given
+        self._stopped_turns: set[asyncio.Task] = set()  # turns `stop_turn` cancelled
         self.sweep_expired()
 
     async def start(self) -> None:
@@ -494,7 +524,7 @@ class Agent:
 
     async def run_turn(
         self, conversation: Conversation, user_message: str, max_result_rows: int, model: str | None = None,
-        effort: str | None = None,
+        effort: str | None = None, turn_key: str | None = None,
     ) -> AsyncIterator[Event]:
         """Run one turn on the Agent's MCP connection (`start()` first).
 
@@ -503,13 +533,17 @@ class Agent:
 
         `max_result_rows` is the row cap for this turn's queries; the user chooses it in the UI.
         `model` is the Model Choice for this turn (an id the client factory knows); the default model when None.
-        `effort` is the Effort level the user picked; it reaches the provider only when it is not the model's default."""
+        `effort` is the Effort level the user picked; it reaches the provider only when it is not the model's default.
+        `turn_key` names the turn for `stop_turn`, which ends it early but cleanly (the events still finish with a Trace)."""
         if self._connection is None:
             raise RuntimeError("Agent not started: call `await agent.start()` or use `async with agent`")
         queue = _TurnQueue()
         task = asyncio.create_task(self._produce(conversation, user_message, queue, max_result_rows, model or self.config.model, effort))
         self._turn_tasks.add(task)
         task.add_done_callback(self._turn_tasks.discard)
+        if turn_key is not None:
+            self._keyed_turns[turn_key] = task
+            task.add_done_callback(lambda _t: self._keyed_turns.pop(turn_key, None))
         finished = False
         try:
             while True:
@@ -525,6 +559,16 @@ class Agent:
             if not finished:
                 task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+    def stop_turn(self, turn_key: str) -> bool:
+        """Stop a running turn now. What it had streamed is kept (history, Trace) and its events end
+        normally. False if no such turn is running."""
+        task = self._keyed_turns.get(turn_key)
+        if task is None or task.done():
+            return False
+        self._stopped_turns.add(task)
+        task.cancel()
+        return True
 
     async def _produce(
         self, conversation: Conversation, user_message: str, queue: _TurnQueue, max_result_rows: int, model: str,
@@ -547,17 +591,31 @@ class Agent:
             conversation.id = self.store.create_conversation()
         turn_id = self.store.start_turn(conversation.id, user_message)
         self._record(conversation, turn_id, {"role": "user", "content": user_message})
-        trace = TraceBuilder(model)
+        trace = TraceBuilder(model, on_add=lambda entry: queue.put_nowait(TraceLive(entry)))
+        live = _LiveStep()
         try:
-            await self._converse(conversation, turn_id, user_message, trace, queue, max_result_rows, model, effort)
+            await self._converse(conversation, turn_id, user_message, trace, queue, max_result_rows, model, effort, live)
         except asyncio.CancelledError:
-            self.store.save_trace(turn_id, trace.finish())
-            raise
+            if asyncio.current_task() not in self._stopped_turns:  # the client left or the app is closing
+                self.store.save_trace(turn_id, trace.finish())
+                raise
+            self._record_stop(conversation, turn_id, live, trace, queue)
         except Exception as e:
             await self._fail_turn(conversation, turn_id, trace, queue, e)
         finished = trace.finish()
         self.store.save_trace(turn_id, finished)
         await queue.put(TraceReady(finished, turn_id))
+
+    def _record_stop(self, conversation, turn_id, live: _LiveStep, trace: TraceBuilder, queue: _TurnQueue) -> None:
+        """The user stopped the turn: keep the text of the step in progress, and say so, in the page,
+        the history and the Trace. A step cut off before its tool calls were answered keeps only its text."""
+        partial = live.text if live.open else ""
+        if live.open and not live.in_trace:
+            trace.llm_step(live.system_prompt, live.text, [], None, live.started)
+        trace.add("stopped")
+        message = (partial.rstrip() + "\n\n" if partial.strip() else "") + STOPPED_NOTE
+        self._record(conversation, turn_id, {"role": "assistant", "content": message})
+        queue.put_nowait(TextDelta(queue.paragraph_break() + STOPPED_NOTE))
 
     async def _fail_turn(self, conversation, turn_id, trace: TraceBuilder, queue: _TurnQueue, error: BaseException) -> None:
         """A turn failed partway: tell the user, record it in the Trace and in the history."""
@@ -574,8 +632,9 @@ class Agent:
 
     async def _converse(
         self, conversation, turn_id, user_message, trace: TraceBuilder, queue: _TurnQueue, max_result_rows: int,
-        model: str, effort: str | None = None,
+        model: str, effort: str | None = None, live: _LiveStep | None = None,
     ):
+        live = live or _LiveStep()
         llm = self.client_for(model)
         spec = self.config.spec_of(model)
         # Only a non-default Effort is sent; the default sends nothing extra.
@@ -585,17 +644,20 @@ class Agent:
         connection = await self._ensure_connection()
         tools = connection.tools
         failed_attempts = 0
-        for _ in range(self.config.max_llm_steps):
+        for call_number in range(1, self.config.max_llm_steps + 1):
             system_prompt = self.semantic_layer.system_prompt(self.store.live_result_tables(conversation.id))
             messages = [{"role": "system", "content": system_prompt}]
             messages += conversation.messages
             text, calls, usage = "", [], None
             step_started = time.monotonic()
+            live.text, live.system_prompt, live.started, live.in_trace, live.open = "", system_prompt, step_started, False, True
+            queue.put_nowait(LlmCallStarted(call_number))
             async for chunk in llm.stream_chat(messages, tools, reasoning=reasoning, session_id=session_id):
                 if isinstance(chunk, TextChunk):
                     # Each step's text is a new paragraph on the page, as it is when the turn is reloaded.
                     shown = chunk.text if text or not chunk.text else queue.paragraph_break() + chunk.text
                     text += chunk.text
+                    live.text = text
                     await queue.put(TextDelta(shown))
                 elif isinstance(chunk, ToolCallChunk):
                     calls.append(chunk)
@@ -603,6 +665,7 @@ class Agent:
                     usage = chunk
             sent_bytes = len(json.dumps({"messages": messages, "tools": tools}, default=str).encode())
             trace.llm_step(system_prompt, text, calls, usage, step_started, sent_bytes)
+            live.in_trace = True
             await self._flag_unseen_values(text, system_prompt, messages, calls, trace, queue)
             assistant: dict = {"role": "assistant", "content": text}
             if calls:
@@ -632,6 +695,7 @@ class Agent:
                 items.append(({"role": "tool", "tool_call_id": c.id, "content": content}, displays))
             self.store.add_step(conversation.id, turn_id, items)
             conversation.messages.extend(m for m, _ in items)
+            live.open = False
             if not calls:
                 break
             if failed_attempts >= self.config.max_failed_attempts:

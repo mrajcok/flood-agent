@@ -183,13 +183,30 @@ def test_sidebar_offers_a_delete_control_per_conversation(build_agent, web_clien
     assert f'action="/c/{cid}/delete"' in client.get("/").text
 
 
-def test_a_submitted_prompt_shows_a_thinking_spinner_until_the_first_event_arrives(build_agent, web_client):
+def test_a_submitted_prompt_shows_a_live_trace_block_until_the_trace_or_the_end_arrives(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
     posted = client.post("/chat", data={"message": "hello", "conversation_id": "", "max_rows": "1000"}).text
-    holder = re.search(r'<div sse-swap="([^"]*)" hx-swap="delete">\s*<span class="thinking" role="status"', posted)
-    assert holder, "spinner removes itself when it receives an event"
-    # whichever stream event arrives first removes it, including a stream that only ends
-    assert set(holder[1].split(",")) == {"text", "flag", "display", "trace", "end"}
+    assert "thinking" not in posted  # no spinner: the Send button turns into Stop instead
+    holder = re.search(r'<div class="live-trace" sse-swap="([^"]*)" hx-swap="delete">', posted)
+    assert holder, "the live block removes itself when the turn's Trace line arrives"
+    assert set(holder[1].split(",")) == {"trace", "end"}
+    assert 'sse-swap="live-step"' in posted
+
+
+def test_the_stream_sends_each_llm_call_as_a_live_step_with_its_entries(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
+    posted = client.post("/chat", data={"message": "hello", "conversation_id": "", "max_rows": "1000"}).text
+    stream = posted.split('sse-connect="')[1].split('"')[0]
+    body = client.get(stream).text
+    assert "event: live-step" in body and 'id="live-body-' in body
+    assert "event: entry" in body and 'hx-swap-oob="beforeend:#live-body-' in body
+    assert 'hx-swap-oob="innerHTML:#live-meta-' in body
+    assert body.index("event: live-step") < body.index("event: entry") < body.index("event: trace")
+
+
+def test_stopping_an_unknown_turn_is_harmless(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM()))
+    assert client.post("/chat/stop/nope").status_code == 204
 
 
 def test_each_prompt_and_its_response_collapse_under_the_prompt(build_agent, web_client):

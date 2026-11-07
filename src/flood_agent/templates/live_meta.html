@@ -1,0 +1,2 @@
+{% from "trace_macros.html" import cache_parts %}
+ &middot; {{ "%.1f"|format(e.duration_ms / 1000) }} s{% set n = e.raw_response.tool_calls|length %}{% if n %} &middot; {{ n }} tool call{{ "" if n == 1 else "s" }}{% endif %}{% if e.usage %} &middot; {{ e.usage.prompt_tokens }} tokens in / {{ e.usage.completion_tokens }} out{% endif %}

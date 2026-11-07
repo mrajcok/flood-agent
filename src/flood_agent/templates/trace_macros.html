@@ -1,0 +1,2 @@
+{# Older stored traces have no cache_write_tokens, hence the truthiness tests. #}
+{% macro cache_parts(u) %}{% if u.cached_tokens %} &middot; {{ u.cached_tokens }} cached{% endif %}{% if u.cache_write_tokens %} &middot; {{ u.cache_write_tokens }} cache write{% endif %}{% endmacro %}

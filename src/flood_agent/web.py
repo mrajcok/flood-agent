@@ -26,8 +26,10 @@ from flood_agent.agent import (
     Conversation,
     DisplayEvent,
     FlagEvent,
+    LlmCallStarted,
     ResultTableExpired,
     TextDelta,
+    TraceLive,
     TraceReady,
     TurnEnd,
     resolve_chart_data,
@@ -146,6 +148,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
         items = []
         transcript = agent.store.transcript(conversation_id)
         expired = agent.expired_among({i["result_table"] for i in transcript if i["type"] == "display"})
+        prompt_at = None  # where the current turn's prompt is in `items`
         for item in transcript:
             if item["type"] == "display" and item["kind"] == "chart":
                 spec = resolve_chart_data(item["spec"], item["result_table"])
@@ -162,11 +165,18 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
                     }
                 )
             elif item["type"] == "trace":
-                items.append({**item, "flags": [e for e in item["trace"]["entries"] if e["kind"] == "flag"]})
+                # The Trace goes right after the prompt, where the live view of the turn was; the note about
+                # unseen values belongs to the reply, so it stays after it.
+                flags = [e for e in item["trace"]["entries"] if e["kind"] == "flag"]
+                if flags:
+                    items.append({"type": "flags", "flags": flags})
+                items.insert(prompt_at + 1 if prompt_at is not None else len(items), item)
             else:
                 m = item["message"]
                 if m["role"] in ("user", "assistant") and m.get("content"):
                     items.append({"type": m["role"], "text": m["content"], "turn_id": item["turn_id"]})
+                    if m["role"] == "user":
+                        prompt_at = len(items) - 1
         return items
 
     def model_picker() -> dict:
@@ -320,8 +330,9 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
         conversation, message, max_result_rows, chosen_model, chosen_effort = entry
 
         async def events():
+            call_number = 0
             try:
-                async for ev in agent.run_turn(conversation, message, max_result_rows, chosen_model, chosen_effort):
+                async for ev in agent.run_turn(conversation, message, max_result_rows, chosen_model, chosen_effort, turn_key=turn_id):
                     if isinstance(ev, TextDelta):
                         yield _sse("text", f'<span class="md-delta">{escape(ev.text)}</span>')  # markdown.js renders it
                     elif isinstance(ev, DisplayEvent) and ev.kind == "chart":
@@ -336,6 +347,16 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
                             columns=ev.columns,
                         ).strip()
                         yield _sse("display", html)
+                    elif isinstance(ev, LlmCallStarted):
+                        call_number = ev.number
+                        yield _sse("live-step", TEMPLATES.get_template("live_step.html").render(number=ev.number, turn_id=turn_id).strip())
+                    elif isinstance(ev, TraceLive):
+                        entry_html = TEMPLATES.get_template("trace_entry.html").render(e=ev.entry, step=call_number).strip()
+                        oob = f'<div hx-swap-oob="beforeend:#live-body-{turn_id}-{call_number}">{entry_html}</div>'
+                        if ev.entry["kind"] == "llm_step":  # the call is over: its summary line gets the figures
+                            meta = TEMPLATES.get_template("live_meta.html").render(e=ev.entry).strip()
+                            oob += f'<span hx-swap-oob="innerHTML:#live-meta-{turn_id}-{call_number}">{meta}</span>'
+                        yield _sse("entry", oob)
                     elif isinstance(ev, FlagEvent):
                         yield _sse("flag", TEMPLATES.get_template("flag_note.html").render(flags=ev.items))
                     elif isinstance(ev, TraceReady):
@@ -351,6 +372,11 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
             yield _sse("end", "done")
 
         return StreamingResponse(events(), media_type="text/event-stream")
+
+    @app.post("/chat/stop/{turn_id}", status_code=204)
+    async def stop(turn_id: str):  # async: it touches the event loop's tasks
+        """Stop a running turn now; its stream still ends with the Trace. Does nothing if it already ended."""
+        agent.stop_turn(turn_id)
 
     @app.get("/api/results/{result_table}/rows")
     def rows(

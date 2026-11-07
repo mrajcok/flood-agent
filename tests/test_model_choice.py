@@ -121,7 +121,7 @@ def test_the_meter_uses_the_window_of_the_model_selected_for_the_next_prompt(bui
     glm = client.get("/context-meter", params={"model": GLM, "conversation_id": cid}).text
     sonnet = client.get("/context-meter", params={"model": SONNET, "conversation_id": cid}).text
 
-    assert "100 of 1.05M" in meter_text(glm) and "100 of 1M" in meter_text(sonnet)
+    assert "100 tokens of 1.05M" in meter_text(glm) and "100 tokens of 1M" in meter_text(sonnet)
     assert client.get("/context-meter", params={"model": "nobody/nothing"}).status_code == 422
 
 

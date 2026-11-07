@@ -193,9 +193,11 @@
     .trace summary { cursor: pointer; }
     .trace pre { white-space: pre-wrap; word-break: break-word; background: #f6f6f6; padding: .4rem; margin: .2rem 0; }
     .trace h4 { margin: .6rem 0 .2rem; }
-    .thinking { display: inline-block; width: 1rem; height: 1rem; margin: .5rem 0; border: 2px solid #c8d4ea; border-top-color: #4a6fd3; border-radius: 50%; animation: spin .8s linear infinite; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    @media (prefers-reduced-motion: reduce) { .thinking { animation-duration: 3s; } }
+    .live-trace { margin: .5rem 0; font-size: .85rem; color: #444; }
+    .live-trace summary { cursor: pointer; }
+    .live-trace .live-step { margin: .15rem 0; }
+    .live-trace pre { white-space: pre-wrap; word-break: break-word; background: #f6f6f6; padding: .4rem; margin: .2rem 0; }
+    .live-trace h4 { margin: .6rem 0 .2rem; }
     form { display: flex; gap: .5rem; margin-top: 1rem; }
     .canned { display: none; margin-top: 1rem; font-size: .9rem; }
     body[data-model={{ no_model }}] .canned { display: block; }  /* Canned Prompts show only under "No model" */
@@ -211,6 +213,30 @@
                       background: #4a6fd3; color: #fff; font-size: 1.1rem; line-height: 1; cursor: pointer;
                       display: inline-flex; align-items: center; justify-content: center; }
     .chat-box .send:hover { background: #2a4ba0; }
+    .chat-box .send.stop:disabled { opacity: .6; cursor: default; }
+    /* Send and Stop share one spot and cross-fade as the turn starts and ends (the form's data-busy). */
+    .chat-box .send { transition: opacity var(--fade) ease, transform var(--fade) ease, background .15s; }
+    form:not([data-busy]) .send.stop, form[data-busy] .send:not(.stop) {
+      opacity: 0; transform: scale(.7); pointer-events: none; visibility: hidden;
+      transition: opacity var(--fade) ease, transform var(--fade) ease, visibility 0s linear var(--fade);
+    }
+    /* While busy, the Stop icon's dashed ring turns slowly. */
+    .send.stop circle { transform-box: fill-box; transform-origin: center; stroke-dasharray: 10 6; }
+    form[data-busy] .send.stop circle { animation: ring-turn 3s linear infinite; }
+    @keyframes ring-turn { to { transform: rotate(360deg); } }
+    /* A turn's live trace: each LLM call fades in, the one before folds away smoothly, and the whole block
+       fades and folds away when the turn's Trace line fades in. (Folding needs Chrome 131+; elsewhere it is abrupt.) */
+    :root { --fade: .35s; --appear: .4s; --collapse: .5s; --leave: .6s; interpolate-size: allow-keywords; }
+    @keyframes fade-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+    .live-step, .live-step section, .turn[data-turn-id] details.trace { animation: fade-in var(--appear) ease-out; }
+    .live-step::details-content { height: 0; overflow: clip; transition: height var(--collapse) ease, content-visibility var(--collapse) allow-discrete; }
+    .live-step[open]::details-content { height: auto; }
+    .live-trace.leaving { overflow: hidden; opacity: 0; max-height: 0 !important; margin-top: 0; margin-bottom: 0; pointer-events: none;
+                          transition: opacity var(--leave) ease, max-height var(--leave) ease, margin var(--leave) ease; }
+    @media (prefers-reduced-motion: reduce) {
+      :root { --fade: 0s; --appear: 0s; --collapse: 0s; --leave: 0s; }
+      form[data-busy] .send.stop circle { animation-duration: 12s; }
+    }
     .chat-box .send:focus-visible { outline: 2px solid #2a4ba0; outline-offset: 2px; }
   </style>
 </head>
@@ -239,7 +265,8 @@
     {% for item in items %}
       {% if item.type == "user" %}{% if turn.open %}</details>{% endif %}<details class="turn" open><summary class="user"><span>{{ item.text }}</span><span class="turn-actions">{% if item.turn_id %}{% with conversation_id=current_id, turn_id=item.turn_id %}{% include "turn_delete.html" %}{% endwith %}{% endif %}</span></summary>{% set turn.open = true %}
       {% elif item.type == "assistant" %}<div class="reply"><span class="md-delta">{{ item.text }}</span></div>
-      {% elif item.type == "trace" %}{% if item.flags %}{% with flags=item.flags %}{% include "flag_note.html" %}{% endwith %}{% endif %}{% with trace=item.trace %}{% include "trace.html" %}{% endwith %}
+      {% elif item.type == "flags" %}{% with flags=item.flags %}{% include "flag_note.html" %}{% endwith %}
+      {% elif item.type == "trace" %}{% with trace=item.trace %}{% include "trace.html" %}{% endwith %}
       {% elif item.type == "display" and item.expired %}<p class="expired"><em>expired</em> (this result has been deleted)</p>
       {% elif item.type == "display" and item.kind == "table" %}
         {% with rows_url=item.rows_url, psv_url=item.psv_url, settings_url=item.settings_url, result_table=item.result_table, columns=item.columns %}{% include "display_table.html" %}{% endwith %}
@@ -262,8 +289,16 @@
   {% endif %}
   </div>
   <form hx-post="/chat" hx-include="#max_rows, #model, #effort" hx-target="#chat" hx-swap="beforeend" hx-on::after-request="this.reset()"
-        hx-on::before-request="if (!this.elements.message.value.trim()) event.preventDefault()"
-        x-data="{ lastEscape: 0,
+        hx-on::before-request="if (!this.elements.message.value.trim() || this.dataset.busy) event.preventDefault()"
+        :data-busy="busy || null"
+        @htmx:sse-open.window="if ($event.target.dataset && $event.target.dataset.turnId) { busy = true; stopping = false; turnId = $event.target.dataset.turnId }"
+        @htmx:sse-close.window="busy = false" @htmx:sse-error.window="busy = false"
+        x-data="{ busy: false, stopping: false, turnId: '', lastEscape: 0,
+          stop() {
+            /* The stream stays open until the turn has wound down and sent its Trace; it then ends `busy`. */
+            this.stopping = true;
+            fetch('/chat/stop/' + encodeURIComponent(this.turnId), { method: 'POST' }).catch(() => {});
+          },
           escape() {
             /* Two presses within 600 ms clear the box. */
             const now = Date.now();
@@ -279,12 +314,13 @@
     <input type="hidden" id="conversation_id" name="conversation_id" value="{{ current_id or '' }}">
     <div class="chat-box">
       <textarea name="message" x-ref="message" rows="1" placeholder="Write a prompt to analyze Flood data (Shift-Enter for newline, Esc-Esc to clear)" autocomplete="off" required
-                @input="grow()" @keydown.escape="escape()" @keydown.enter="if (!$event.shiftKey && !$event.isComposing && $event.keyCode !== 229) { $event.preventDefault(); $el.form.requestSubmit(); }"></textarea>
+                @input="grow()" @keydown.escape="escape()" @keydown.enter="if (!$event.shiftKey && !$event.isComposing && $event.keyCode !== 229) { $event.preventDefault(); if (!busy) $el.form.requestSubmit(); }"></textarea>
+      <button type="button" class="send stop" :disabled="stopping" @click="stop()" title="Stop" aria-label="Stop"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><rect x="8.5" y="8.5" width="7" height="7" rx="1" fill="currentColor" stroke="none"/></svg></button>
       <button type="submit" class="send" title="Send message (Enter)" aria-label="Send message (Enter)"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M20 4v9a2 2 0 0 1-2 2H9v4l-6-5.5L9 8v4h8V4z"/></svg></button>
     </div>
   </form>
   <div class="strip" x-data="{ choice: '10000', custom: '', open: false, options: ['10', '100', '1000', '10000', '100000', '1000000'],
-                                modelOpen: false, effortOpen: false, effort: '', models: {{ models | tojson | forceescape }}, model: {{ default_model | tojson | forceescape }},
+                                modelOpen: false, effortOpen: false, meterRequests: 0, effort: '', models: {{ models | tojson | forceescape }}, model: {{ default_model | tojson | forceescape }},
                                 defaultModel: {{ default_model | tojson | forceescape }},
                                 get shown() { return this.choice === 'custom' ? (this.custom || '?') : Number(this.choice).toLocaleString() },
                                 get current() { return this.models.find(m => m.id === this.model) || {} },
@@ -323,10 +359,18 @@
                                   this.refreshMeter();
                                 },
                                 refreshMeter() {
-                                  /* The meter shows the window of the model selected for the next prompt. */
+                                  /* The meter shows the window of the model selected for the next prompt. Only the newest request
+                                     counts, and it is swapped into the meter as it is when the answer arrives (an older request,
+                                     or one htmx had queued behind it, would target a meter that has since been replaced). */
                                   const cid = document.getElementById('conversation_id').value;
-                                  htmx.ajax('GET', '/context-meter?model=' + encodeURIComponent(this.model) + '&conversation_id=' + encodeURIComponent(cid),
-                                            { target: '#context-meter', swap: 'outerHTML' });
+                                  const seq = ++this.meterRequests;
+                                  fetch('/context-meter?model=' + encodeURIComponent(this.model) + '&conversation_id=' + encodeURIComponent(cid))
+                                    .then(r => r.ok ? r.text() : null)
+                                    .then(html => {
+                                      const meter = document.getElementById('context-meter');
+                                      if (html && meter && seq === this.meterRequests) meter.outerHTML = html;
+                                    })
+                                    .catch(() => {});
                                 } }"
        @htmx:sse-close.window="refreshMeter()" x-init="load()" x-effect="document.body.dataset.model = model" @click.outside="open = false; modelOpen = false; effortOpen = false" @keydown.escape.window="open = false; modelOpen = false; effortOpen = false">
     <input type="hidden" id="max_rows" name="max_rows" :value="choice === 'custom' ? custom : choice" value="10000">
@@ -447,6 +491,23 @@
       note.setAttribute("role", "alert");
       note.textContent = reason;
       document.getElementById("chat").appendChild(note);
+    });
+  </script>
+  <script>
+    // htmx deletes a turn's live trace block the moment the Trace line arrives. Hold that back, fade and fold
+    // the block away (see .leaving), and remove it once that is done.
+    document.body.addEventListener("htmx:sseBeforeMessage", (event) => {
+      const block = event.target;
+      if (!block.classList || !block.classList.contains("live-trace") || !["trace", "end"].includes(event.detail.type)) return;
+      event.preventDefault();
+      if (block.dataset.leaving) return;
+      block.dataset.leaving = "1";
+      block.setAttribute("aria-hidden", "true");
+      block.style.maxHeight = block.scrollHeight + "px";
+      block.offsetHeight; // make the browser see the starting height before the transition
+      block.classList.add("leaving");
+      const seconds = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--leave")) || 0;
+      setTimeout(() => block.remove(), seconds * 1000);
     });
   </script>
   <script>

@@ -112,7 +112,7 @@ def test_flag_note_streams_and_survives_restart(build_agent, web_client):
     restarted = web_client(build_agent(ScriptedLLM()))
     page = restarted.get(f"/c/{cid}").text
     assert 'class="flag-note"' in page and "203.0.113.99" in page and "4.2M" in page
-    assert page.index('class="flag-note"') < page.index('class="trace"')
+    assert page.index('class="trace"') < page.index('class="flag-note"')  # the note stays with the reply
     assert "&lt;b&gt;packets&lt;/b&gt;" in page
 
 
@@ -172,3 +172,13 @@ CTX = ["User asked about 10.1.2.3 and port 8443; window_end 1600000100000; 12,34
 )
 def test_heuristic_table(reply, expected):
     assert find_unseen_values(reply, CTX) == expected
+
+
+def test_a_saved_turn_shows_its_trace_after_the_prompt_and_its_flag_note_after_the_reply(build_agent, web_client):
+    llm = ScriptedLLM([TextChunk("The server at 203.0.113.99 was busy.")])
+    client = web_client(build_agent(llm))
+    posted = client.post("/chat", data={"message": "hello", "conversation_id": "", "max_rows": "1000"}).text
+    client.get(posted.split('sse-connect="')[1].split('"')[0])
+    cid = posted.split('name="conversation_id" value="')[1].split('"')[0]
+    page = client.get(f"/c/{cid}").text
+    assert page.index("hello") < page.index('class="trace"') < page.index("203.0.113.99 was busy") < page.index('class="flag-note"')

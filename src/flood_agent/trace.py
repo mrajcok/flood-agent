@@ -4,7 +4,7 @@ A Trace is a plain JSON-able dict: turn-level `model` and `system_prompt`, an or
 `entries`, and `totals`. It is stored in `turns.trace` and rendered by `templates/trace.html`.
 It is never part of any message sent to the LLM.
 
-Entry kinds: llm_step, tool_call, query_error, result_table, chart_spec, flag
+Entry kinds: llm_step, tool_call, query_error, result_table, chart_spec, flag, stopped (the user stopped the turn)
 (`flag`: {"type": "ip"|"number", "token": str}, one per unseen value in a completed reply).
 """
 
@@ -15,12 +15,16 @@ from flood_agent.mcp_protocol import QUERY_TOOLS
 
 
 class TraceBuilder:
-    def __init__(self, model: str):
+    def __init__(self, model: str, on_add=None):
+        """`on_add(entry)` is called with each entry as it is added, for the live view."""
         self.trace: dict = {"version": 1, "model": model, "system_prompt": None, "entries": []}
+        self._on_add = on_add
 
     def add(self, kind: str, **fields) -> dict:
         entry = {"kind": kind, **fields}
         self.trace["entries"].append(entry)
+        if self._on_add:
+            self._on_add(entry)
         return entry
 
     def llm_step(self, system_prompt: str, text: str, calls: list, usage, started: float,

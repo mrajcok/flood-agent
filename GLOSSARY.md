@@ -69,7 +69,8 @@ The single integer `run_count_query` returns to the LLM from a `SELECT COUNT(...
 _Avoid_: Count result
 
 **Trace**:
-The per-turn record of what passed between the Agent and the LLM — prompts, generated SQL, Query Metadata, errors, Chart Specs, cost and timings — shown to the user on demand.
+The per-turn record of what passed between the Agent and the LLM — prompts, generated SQL, Query Metadata, errors, Chart Specs, cost and timings — shown to the user on demand. While a turn runs, the same entries appear live, one section per LLM call, each collapsing when the next call starts; the whole live view is replaced by the one Trace line when the turn ends.
+A user can **stop** a running turn: what it had streamed is kept (in the page, the history and the Trace, marked stopped), and the next prompt sees it.
 _Avoid_: Debug log, details
 
 **Display**:
@@ -97,5 +98,5 @@ How much reasoning the user asks the chosen model to spend on a prompt. Only som
 _Avoid_: Reasoning level, thinking budget
 
 **Context Usage**:
-How much of the chosen model's context window the Conversation occupies, as the provider's token count for the latest LLM call against the window size (e.g. 187k of 1M). Shown so the user can tell when to start a new Conversation.
+How much of the chosen model's context window the Conversation occupies, as the provider's token count for the latest LLM call against the window size (e.g. 187k tokens of 1M). Shown so the user can tell when to start a new Conversation.
 _Avoid_: Context size, token count, memory

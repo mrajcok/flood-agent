@@ -69,12 +69,12 @@ def test_the_meter_ignores_fake_turns(build_agent, web_client):
         return meter_text(client.get("/context-meter", params={"model": model, "conversation_id": cid}).text)
 
     assert 'id="context-meter"' not in fake_body  # a fake turn leaves the meter alone
-    assert meter_for(GLM) == "0 of 1.05M"
+    assert meter_for(GLM) == "0 tokens of 1.05M"
     assert meter_for(NO_MODEL) == "no context used"
 
     finish_turn(client, post_chat(client, model=SONNET, conversation_id=cid))
     finish_turn(client, post_chat(client, model=NO_MODEL, conversation_id=cid))  # a later fake turn changes nothing
-    assert meter_for(GLM) == "100 of 1.05M"
+    assert meter_for(GLM) == "100 tokens of 1.05M"
 
 
 def test_a_reopened_conversation_meter_skips_its_fake_turns(build_agent, web_client):
@@ -85,7 +85,7 @@ def test_a_reopened_conversation_meter_skips_its_fake_turns(build_agent, web_cli
     posted = post_chat(client, model=NO_MODEL)
     finish_turn(client, posted)
 
-    assert meter_text(client.get(f"/c/{conversation_id(posted)}").text) == "0 of 1.05M"
+    assert meter_text(client.get(f"/c/{conversation_id(posted)}").text) == "0 tokens of 1.05M"
 
 
 def test_no_model_is_listed_last_and_is_always_selectable(build_agent, web_client):

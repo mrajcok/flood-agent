@@ -4,11 +4,13 @@ Watches the package (code, templates, static files, Canned Prompts, defaults), t
 Semantic Layer file and .env. Settings come from the same places as `python -m flood_agent`.
 """
 
+import logging
 import os
 from pathlib import Path
 
 from watchfiles import run_process
 
+from flood_agent import logs
 from flood_agent.config import Settings
 
 
@@ -34,5 +36,9 @@ def serve() -> None:
 def main() -> None:
     settings = Settings()  # pyright: ignore[reportCallIssue]  # pydantic-settings fills fields from env/TOML
     paths = watched_paths(settings.semantic_layer.resolve())
-    print("Watching " + ", ".join(str(p) for p in paths), flush=True)
+    log = logging.getLogger("flood_agent.dev")
+    log.addHandler(logs.handler())
+    log.setLevel(logging.INFO)
+    log.propagate = False
+    log.info("Watching " + ", ".join(str(p) for p in paths))
     run_process(*paths, target=serve)

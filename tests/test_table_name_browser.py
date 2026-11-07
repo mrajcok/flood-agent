@@ -18,6 +18,7 @@ def ask_for_a_chart(build_agent, live_page):
     page.get_by_placeholder("Write a prompt").fill("chart it")
     page.get_by_role("button", name="Send message (Enter)").click()
     expect(page.locator(".display.chart canvas")).to_be_visible()
+    expect(page.locator(".live-trace")).to_have_count(0)  # the layout stops moving once the live trace has folded away
     (table,) = agent.store.all_live_result_table_names()
     return agent, page, table
 

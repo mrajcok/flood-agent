@@ -1,0 +1,7 @@
+{# One LLM call in the live view of a running turn. Its entries and summary arrive as out-of-band
+   swaps (see the `entry` event in web.py), so no event listener has to exist before they do.
+   Starting a call collapses the one before it. #}
+<details class="live-step" open x-data x-init="$el.previousElementSibling?.removeAttribute('open')">
+  <summary>LLM call {{ number }}<span id="live-meta-{{ turn_id }}-{{ number }}"> &middot; running&hellip;</span></summary>
+  <div id="live-body-{{ turn_id }}-{{ number }}"></div>
+</details>

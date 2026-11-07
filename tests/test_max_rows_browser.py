@@ -38,8 +38,8 @@ def test_a_custom_row_cap_is_what_gets_sent(live_page):
 def test_the_context_meter_updates_in_place_when_a_turn_ends(build_agent, live_page):
     page = live_page(agent=build_agent(ScriptedLLM([TextChunk("hi")])))
     meter = page.locator("#context-meter")
-    expect(meter).to_contain_text("0 of 1.05M")
+    expect(meter).to_contain_text("0 tokens of 1.05M")
     page.locator("textarea[name=message]").fill("hello")
     page.locator("textarea[name=message]").press("Enter")
-    expect(meter).to_contain_text("100 of 1.05M")
+    expect(meter).to_contain_text("100 tokens of 1.05M")
     expect(page.locator("#context-meter")).to_have_count(1)

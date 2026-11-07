@@ -61,13 +61,13 @@ def test_a_remembered_model_that_no_longer_exists_falls_back_to_the_default(live
 def test_the_meter_follows_the_selected_models_window(live_page):
     page = live_page()
     meter = page.locator("#context-meter")
-    expect(meter).to_contain_text("0 of 1.05M")
+    expect(meter).to_contain_text("0 tokens of 1.05M")
 
     open_model_panel(page).get_by_role("button", name="Qwen3.8 27B").click()
-    expect(meter).to_contain_text("0 of 1.02M")
+    expect(meter).to_contain_text("0 tokens of 1.02M")
 
     open_model_panel(page).get_by_role("button", name="Claude Sonnet 5.5").click()
-    expect(meter).to_contain_text("0 of 1M")
+    expect(meter).to_contain_text("0 tokens of 1M")
     expect(page.locator("#context-meter")).to_have_count(1)
 
 
@@ -108,4 +108,4 @@ def test_after_a_turn_the_meter_shows_the_window_of_the_model_selected_for_the_n
     gate.set()
 
     expect(page.locator("#chat")).to_contain_text("Sonnet-5.5")  # the Trace: Sonnet ran
-    expect(page.locator("#context-meter")).to_contain_text("100 of 1.02M")
+    expect(page.locator("#context-meter")).to_contain_text("100 tokens of 1.02M")

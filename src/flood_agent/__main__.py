@@ -4,8 +4,12 @@ Settings come from defaults.toml, a .env file in the working directory, and the
 environment, in that order of increasing priority. See .env.example for every setting.
 """
 
-import uvicorn
+import copy
 
+import uvicorn
+from uvicorn.config import LOGGING_CONFIG
+
+from flood_agent import logs
 from flood_agent.agent import Agent
 from flood_agent.config import Settings
 from flood_agent.fake_llm import CannedPrompt, load_canned_prompts
@@ -22,6 +26,15 @@ def picker_entries(canned_prompts: list[CannedPrompt]) -> list[PickerEntry]:
     return [entry(c) for c in canned_prompts if c.after is None]
 
 
+def log_config() -> dict:
+    """Uvicorn's terminal logging, with an HH:MM:SS time before each line's INFO:/ERROR: prefix."""
+    config = copy.deepcopy(LOGGING_CONFIG)
+    for formatter in config["formatters"].values():
+        formatter["fmt"] = "%(asctime)s " + formatter["fmt"]
+        formatter["datefmt"] = logs.DATE_FORMAT
+    return config
+
+
 def build_app(settings: Settings | None = None):
     settings = settings or Settings()  # pyright: ignore[reportCallIssue]  # pydantic-settings fills fields from env/TOML
     config = settings.agent_config()
@@ -33,7 +46,7 @@ def build_app(settings: Settings | None = None):
 
 def main() -> None:
     settings = Settings()  # pyright: ignore[reportCallIssue]  # pydantic-settings fills fields from env/TOML
-    uvicorn.run(build_app(settings), host=settings.host, port=settings.port)
+    uvicorn.run(build_app(settings), host=settings.host, port=settings.port, log_config=log_config())
 
 
 if __name__ == "__main__":

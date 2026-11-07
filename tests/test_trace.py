@@ -234,7 +234,7 @@ async def test_each_llm_step_records_how_many_bytes_were_sent_to_the_model(make_
 def test_trace_shows_kilobytes_sent_after_each_llm_call(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
     _, body = ask(client, "hello")
-    assert re.search(r"LLM step &middot; \d+ ms &middot; [\d.]+ KB sent", body)
+    assert re.search(r"LLM step \d+ &middot; \d+ ms &middot; [\d.]+ KB sent", body)
 
 
 def render_trace(totals, usage):
@@ -248,7 +248,7 @@ def render_trace(totals, usage):
 def test_an_old_stored_trace_without_cache_write_tokens_still_renders():
     old = {"prompt_tokens": 10, "completion_tokens": 2, "cost": 0.001, "duration_ms": 5, "cached_tokens": 4}
     html = render_trace(old, {"prompt_tokens": 10, "completion_tokens": 2, "cost": 0.001, "cached_tokens": 4})
-    assert "10 in / 2 out tokens &middot; 4 cached &middot;" in html and "cache write" not in html
+    assert "10 tokens in / 2 out &middot; 4 cached &middot;" in html and "cache write" not in html
 
 
 def test_cache_write_tokens_show_in_totals_and_steps():
@@ -263,7 +263,7 @@ def test_a_stored_trace_lacking_both_cache_fields_renders_with_zero_totals():
     assert UsageChunk.from_dict(old_step).cached_tokens == 0
     assert UsageChunk.total([old_step, old_step]).cache_write_tokens == 0
     html = render_trace({"prompt_tokens": 20, "completion_tokens": 4, "cost": 0.002, "duration_ms": 5}, old_step)
-    assert "10 in / 2 out" in html and "cached" not in html and "cache write" not in html
+    assert "10 tokens in / 2 out" in html and "cached" not in html and "cache write" not in html
 
 
 def test_usage_total_sums_across_values_and_keeps_cost_none_when_unreported():
@@ -275,9 +275,9 @@ def test_usage_total_sums_across_values_and_keeps_cost_none_when_unreported():
     assert UsageChunk.total([]) == UsageChunk()
 
 
-def test_trace_summary_shows_total_time_in_seconds():
+def test_trace_summary_shows_total_time_in_secs():
     html = render_trace({"prompt_tokens": 1, "completion_tokens": 1, "cost": None, "duration_ms": 5974}, None)
-    assert "6.0 seconds" in html and "5974" not in html
+    assert "6.0 secs" in html and "5974" not in html
 
 
 def test_trace_summary_names_the_turn_and_its_llm_call_count():

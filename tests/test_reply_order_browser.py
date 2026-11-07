@@ -22,7 +22,7 @@ def order_in(turn):
         const out = [];
         const walk = n => {
             if (n.nodeType === Node.TEXT_NODE) { if (n.textContent.trim()) out.push('text: ' + n.textContent.trim()); return; }
-            if (n.matches && n.matches('summary, .trace, details.trace, .thinking')) return;
+            if (n.matches && n.matches('summary, .trace, details.trace, .live-trace')) return;
             if (n.classList && n.classList.contains('display')) { out.push('display'); return; }
             n.childNodes.forEach(walk);
         };
@@ -47,3 +47,21 @@ def test_text_before_a_table_shows_above_it_and_text_after_below_it(live_page, b
     turn = page.locator("details.turn").last
     expect(turn.locator(".display table")).to_be_visible()
     assert order_in(turn) == expected
+
+
+def test_the_trace_line_sits_right_after_the_prompt_live_and_after_a_reload(live_page, build_agent):
+    page = live_page(agent=build_agent(ScriptedLLM(*reply_script())))
+    page.get_by_placeholder("Write a prompt").fill("show me ports")
+    page.get_by_role("button", name="Send message (Enter)").click()
+    turn = page.locator("details.turn").last
+    expect(turn.locator("details.trace")).to_have_count(1)
+
+    def trace_is_before_the_reply(turn):
+        return turn.evaluate("t => !!(t.querySelector('details.trace').compareDocumentPosition(t.querySelector('.reply'))"
+                             " & Node.DOCUMENT_POSITION_FOLLOWING)")
+
+    assert trace_is_before_the_reply(turn)
+    page.locator("aside ul li a").first.click()  # the saved Conversation, rendered from history
+    turn = page.locator("details.turn").last
+    expect(turn.locator("details.trace")).to_have_count(1)
+    assert trace_is_before_the_reply(turn)

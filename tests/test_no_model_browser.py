@@ -82,7 +82,7 @@ def test_one_conversation_mixes_fake_and_real_turns_each_trace_showing_its_model
     box.fill("now for real")
     box.press("Enter")
     expect(page.locator("#chat")).to_contain_text("real answer")
-    expect(meter).to_contain_text("100 of 1M")
+    expect(meter).to_contain_text("100 tokens of 1M")
 
     traces = page.locator(".trace-totals")
     expect(traces).to_have_count(2)
@@ -93,7 +93,7 @@ def test_one_conversation_mixes_fake_and_real_turns_each_trace_showing_its_model
     choose(page, "No model")  # the meter ignores the fake turn and shows no model's usage
     expect(meter).to_contain_text("no context used")
     choose(page, "GLM 5.3")
-    expect(meter).to_contain_text("100 of 1.05M")  # the one real call still counts
+    expect(meter).to_contain_text("100 tokens of 1.05M")  # the one real call still counts
 
 
 def test_trace_shows_cached_tokens_only_when_some_were_cached(build_agent, live_page):
@@ -106,7 +106,7 @@ def test_trace_shows_cached_tokens_only_when_some_were_cached(build_agent, live_
     box.press("Enter")
     expect(page.locator(".trace-totals")).to_contain_text("80 cached")
     page.locator("details.trace > summary").click()
-    expect(page.locator(".trace-llm_step h4")).to_contain_text("80 cached")
+    expect(page.locator("details.trace .trace-llm_step h4")).to_contain_text("80 cached")
 
     plain = live_page(agent=agent_with_fake_and_real(build_agent, ScriptedLLM([TextChunk("second")])))
     plain.locator("textarea[name=message]").fill("hello")
@@ -126,7 +126,7 @@ def test_trace_shows_cache_write_tokens_only_when_some_were_written(build_agent,
     box.press("Enter")
     expect(page.locator(".trace-totals")).to_contain_text("70 cache write")
     page.locator("details.trace > summary").click()
-    expect(page.locator(".trace-llm_step h4")).to_contain_text("70 cache write")
+    expect(page.locator("details.trace .trace-llm_step h4")).to_contain_text("70 cache write")
 
     plain = live_page(agent=agent_with_fake_and_real(build_agent, ScriptedLLM([TextChunk("second")])))
     plain.locator("textarea[name=message]").fill("hello")

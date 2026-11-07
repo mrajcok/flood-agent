@@ -27,7 +27,7 @@ from pathlib import Path
 import anyio.to_thread
 from mcp.server.fastmcp import Context, FastMCP
 
-from flood_agent import queries
+from flood_agent import logs, queries
 from flood_agent.mcp_protocol import META_MAX_RESULT_ROWS
 
 
@@ -329,4 +329,5 @@ def create_server(settings: ServerSettings) -> FastMCP:
 
 
 if __name__ == "__main__":
+    logs.configure_root()  # before FastMCP, which would otherwise log bare messages with no level
     create_server(ServerSettings.from_env(os.environ)).run(transport="stdio")

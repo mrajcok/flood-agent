@@ -1,7 +1,7 @@
 """Context Usage: the share of the model's context window a Conversation occupies (see GLOSSARY.md).
 
 The number is the provider's token count for the latest LLM call; the window comes from config.
-The page shows it as "187k of 1M" with a bar that turns amber at 40% and red at 70%.
+The page shows it as "187k tokens of 1M" with a bar that turns amber at 40% and red at 70%.
 """
 
 AMBER_AT = 0.40
@@ -24,5 +24,5 @@ def context_usage(tokens: int | None, window: int) -> dict:
     used = tokens or 0
     share = used / window
     level = "red" if share >= RED_AT else "amber" if share >= AMBER_AT else ""
-    return {"text": f"{format_tokens(used)} of {format_tokens(window)}", "percent": min(100, round(share * 100, 1)),
+    return {"text": f"{format_tokens(used)} tokens of {format_tokens(window)}", "percent": min(100, round(share * 100, 1)),
             "level": level, "window": window}

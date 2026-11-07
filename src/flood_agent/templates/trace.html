@@ -1,51 +1,21 @@
 {# Per-turn Trace, collapsed by default. Autoescaped: it holds SQL, raw LLM output and error text. #}
-{# Older stored traces have no cache_write_tokens, hence the truthiness tests. #}
-{% macro cache_parts(u) %}{% if u.cached_tokens %} &middot; {{ u.cached_tokens }} cached{% endif %}{% if u.cache_write_tokens %} &middot; {{ u.cache_write_tokens }} cache write{% endif %}{% endmacro %}
+{% from "trace_macros.html" import cache_parts %}
 <details class="trace">
   <summary>Trace
     <span class="trace-totals" title="This turn only. Each LLM call re-sends the conversation, so the token counts here are summed over the turn's calls and can far exceed the context size.">{{ "No model" if trace.model == "no-model" else trace.model|short_model }} &middot;
       {% if trace.totals.llm_steps %}{{ trace.totals.llm_steps }} LLM call{{ "" if trace.totals.llm_steps == 1 else "s" }} &middot;
-      {% endif %}      {{ trace.totals.prompt_tokens }} in / {{ trace.totals.completion_tokens }} out tokens{{ cache_parts(trace.totals) }} &middot;
+      {% endif %}      {{ trace.totals.prompt_tokens }} tokens in / {{ trace.totals.completion_tokens }} out{{ cache_parts(trace.totals) }} &middot;
       {% if trace.totals.cost is not none %}${{ "%.3f"|format(trace.totals.cost) }}{% else %}cost n/a{% endif %} &middot;
-      {{ "%.1f"|format(trace.totals.duration_ms / 1000) }} seconds</span></summary>
+      {{ "%.1f"|format(trace.totals.duration_ms / 1000) }} secs{% if trace.entries|selectattr("kind", "equalto", "stopped")|list %} &middot; stopped{% endif %}</span></summary>
   {% set parts = trace.system_prompt|split_system_prompt %}
   <details class="trace-part"><summary>System prompt</summary><pre>{{ parts[0] }}</pre></details>
   <details class="trace-part"><summary>Semantic Layer</summary><pre>{{ parts[1] }}</pre></details>
   <details class="trace-part" open><summary>Result Tables and turn activity</summary>
   <pre>{{ parts[2] }}</pre>
+  {% set steps = namespace(n=0) %}
   {% for e in trace.entries %}
-  <section class="trace-entry trace-{{ e.kind }}">
-    {% if e.kind == "llm_step" %}
-      <h4>LLM step &middot; {{ e.duration_ms }} ms{% if e.request_bytes %} &middot; {{ "%.1f"|format(e.request_bytes / 1024) }} KB sent{% endif %}{% if e.usage %} &middot; {{ e.usage.prompt_tokens }} in / {{ e.usage.completion_tokens }} out{{ cache_parts(e.usage) }}{% if e.usage.cost is not none %} &middot; ${{ "%.3f"|format(e.usage.cost) }}{% endif %}{% endif %}</h4>
-      {% if e.system_prompt %}{% set now = e.system_prompt|split_system_prompt %}
-        {% if now[0] != parts[0] %}<details class="trace-part"><summary>System prompt changed</summary><pre>{{ now[0] }}</pre></details>{% endif %}
-        {% if now[1] != parts[1] %}<details class="trace-part"><summary>Semantic Layer changed</summary><pre>{{ now[1] }}</pre></details>{% endif %}
-        {% if now[2] != parts[2] %}<details class="trace-part" open><summary>Result Tables changed</summary><pre>{{ now[2] }}</pre></details>{% endif %}
-      {% endif %}
-      <p>Raw response</p><pre>{{ e.raw_response.content }}</pre>
-      {% for c in e.raw_response.tool_calls %}<p>Tool call {{ c.name }} ({{ c.id }})</p><pre>{{ c.arguments }}</pre>{% endfor %}
-    {% elif e.kind == "tool_call" %}
-      <h4>Tool {{ e.name }} &middot; {{ e.duration_ms }} ms</h4>
-      {% if e.sql %}<p>Generated SQL</p><pre>{{ e.sql }}</pre>{% endif %}
-      {% if e.executed_sql %}<p>Executed CTAS</p><pre>{{ e.executed_sql }}</pre>{% endif %}
-      <p>Sent to the LLM (Query Metadata / tool result)</p><pre>{{ e.query_metadata }}</pre>
-    {% elif e.kind == "query_error" %}
-      <h4>Query error</h4>
-      <p>Raw error (not sent to the LLM)</p><pre>{{ e.raw_error }}</pre>
-      <p>Sanitized error (sent to the LLM)</p><pre>{{ e.sanitized_error }}</pre>
-    {% elif e.kind == "result_table" %}
-      <h4>Result Table {{ e.name }} &middot; {{ e.row_count }} rows</h4>
-    {% elif e.kind == "chart_spec" %}
-      <h4>Chart Spec for {{ e.result_table }}</h4>
-      <p>Before data-reference resolution</p><pre>{{ e.source_spec|tojson(indent=2) }}</pre>
-      <p>After resolution</p><pre>{{ e.spec|tojson(indent=2) }}</pre>
-    {% elif e.kind == "flag" %}
-      <h4>Flagged {% if e.type == "ip" %}IP address{% else %}number{% endif %} <code>{{ e.token }}</code></h4>
-      <p>Not found in the user's messages, the Semantic Layer, Query Metadata or the LLM's own SQL. Shown to the analyst only; not sent to the LLM.</p>
-    {% else %}
-      <h4>{{ e.kind }}</h4><pre>{{ e|tojson(indent=2) }}</pre>
-    {% endif %}
-  </section>
+  {% if e.kind == "llm_step" %}{% set steps.n = steps.n + 1 %}{% endif %}{% set step = steps.n %}
+  {% include "trace_entry.html" %}
   {% endfor %}
   </details>
 </details>

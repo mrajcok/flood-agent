@@ -27,7 +27,7 @@ def test_levels_turn_amber_at_40_percent_and_red_at_70(tokens, level):
 
 def test_usage_text_and_bar_width():
     usage = context_usage(187_000, 1_000_000)
-    assert usage["text"] == "187k of 1M" and usage["percent"] == 18.7
+    assert usage["text"] == "187k tokens of 1M" and usage["percent"] == 18.7
     assert context_usage(2_000_000, 1_000_000)["percent"] == 100  # the bar never overflows
 
 
@@ -36,7 +36,7 @@ def test_no_window_means_no_context_is_used():
 
 
 def test_no_calls_yet_is_zero():
-    assert context_usage(None, 1_000_000)["text"] == "0 of 1M"
+    assert context_usage(None, 1_000_000)["text"] == "0 tokens of 1M"
 
 
 def test_context_tokens_is_the_latest_llm_steps_prompt_tokens():
@@ -64,20 +64,20 @@ def meter(html):
 
 def test_a_new_page_shows_zero_used(build_agent, web_client):
     page = web_client(build_agent(ScriptedLLM())).get("/").text
-    assert "0 of 1.05M" in meter(page).group(1)
+    assert "0 tokens of 1.05M" in meter(page).group(1)
 
 
 def test_a_reopened_conversation_shows_its_latest_calls_prompt_tokens(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM([tool_call("run_query", sql="SELECT 1 AS x", title="t")], [TextChunk("ok")])))
     cid, _ = ask(client, "hello")
-    assert "100 of 1.05M" in meter(client.get(f"/c/{cid}").text).group(1)  # ScriptedLLM reports 100 prompt tokens
+    assert "100 tokens of 1.05M" in meter(client.get(f"/c/{cid}").text).group(1)  # ScriptedLLM reports 100 prompt tokens
 
 
 def test_after_a_turn_the_context_meter_endpoint_reports_its_tokens_against_the_requested_models_window(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
     cid, _ = ask(client, "hello")
     page = client.get("/context-meter", params={"model": "anthropic/claude-sonnet-5.5", "conversation_id": cid}).text
-    assert "100 of 1M" in meter(page).group(1)
+    assert "100 tokens of 1M" in meter(page).group(1)
 
 
 def test_no_model_has_no_context_window(build_agent, web_client):

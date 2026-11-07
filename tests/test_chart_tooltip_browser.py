@@ -31,6 +31,7 @@ def tooltip_on_hover(page):
     page.get_by_role("button", name="Send message (Enter)").click()
     plot = page.locator(".display.chart canvas, .display.chart svg.marks").first
     expect(plot).to_be_visible()
+    expect(page.locator(".live-trace")).to_have_count(0)  # the layout stops moving once the live trace has folded away
     tooltip = page.locator("#vg-tooltip-element.visible")
     box = plot.bounding_box()
     assert box
@@ -163,6 +164,7 @@ def test_only_charts_with_a_time_axis_show_the_zoom_hint(live_page, build_agent)
         expect(page.locator(".display.chart canvas")).to_be_visible()
         hint = page.get_by_text("Ctrl+scroll to zoom, drag to pan, double-click to reset")
         expect(hint).to_be_visible() if shown else expect(hint).to_be_hidden()
+    expect(page.locator(".live-trace")).to_have_count(0)  # the layout stops moving once the live trace has folded away
     # The hint sits just under the chart, at its right edge.
     chart, note = page.locator(".display.chart canvas").bounding_box(), page.locator(".chart-hint").bounding_box()
     assert chart and note

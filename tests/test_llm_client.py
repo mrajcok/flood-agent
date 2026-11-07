@@ -137,17 +137,41 @@ def test_models_that_cache_automatically_need_no_extra_fields():
     assert caching_fields("deepseek/deepseek-v4") == {}
 
 
-def test_glm_models_get_the_conversation_id_as_session_id():
+SESSION_PREFIXES = ["anthropic/claude-sonnet-5.5", "openai/gpt-5.6-terra", "qwen/qwen3.8-27b",
+                    "deepseek/deepseek-v4", "z-ai/glm-5.3"]
+
+
+@pytest.mark.parametrize("model", SESSION_PREFIXES)
+def test_models_that_benefit_get_the_conversation_id_as_session_id(model):
     from flood_agent.llm import caching_fields
 
-    assert caching_fields("z-ai/glm-5.3", session_id="c7") == {"session_id": "c7"}
+    assert caching_fields(model, session_id="c7")["session_id"] == "c7"
 
 
-def test_other_models_never_get_a_session_id():
+def test_no_session_id_is_sent_without_a_conversation_id():
     from flood_agent.llm import caching_fields
 
-    for m in ("anthropic/claude-sonnet-5.5", "deepseek/deepseek-v4", "qwen/qwen3-max"):
-        assert "session_id" not in caching_fields(m, session_id="c7")
+    assert "session_id" not in caching_fields("z-ai/glm-5.3")
+
+
+def test_unlisted_models_never_get_a_session_id():
+    from flood_agent.llm import caching_fields
+
+    assert caching_fields("meta-llama/llama-4", session_id="c7") == {}
+
+
+@pytest.mark.parametrize("model", SESSION_PREFIXES)
+async def test_session_id_is_stable_within_a_conversation_and_differs_between(model):
+    a1 = await request_body(model, session_id="c1")
+    a2 = await request_body(model, session_id="c1")
+    b = await request_body(model, session_id="c2")
+
+    assert a1["session_id"] == a2["session_id"] == "c1"
+    assert b["session_id"] == "c2"
+
+
+async def test_an_unlisted_models_request_body_is_unchanged():
+    assert "session_id" not in await request_body("meta-llama/llama-4", session_id="c1")
 
 
 async def request_body(model, reasoning=None, **kw):
@@ -179,6 +203,3 @@ async def test_a_glm_request_body_carries_the_session_id():
 
     assert body["session_id"] == "c7"
 
-
-async def test_a_deepseek_request_body_has_no_session_id():
-    assert "session_id" not in await request_body("deepseek/deepseek-v4", session_id="c7")

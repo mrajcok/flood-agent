@@ -61,15 +61,20 @@ class LLMError(Exception):
     The message is safe to show the user."""
 
 
+SESSION_ID_PREFIXES = ("anthropic/", "openai/", "qwen/", "deepseek/", "z-ai/")
+
+
 def caching_fields(model: str, session_id: str | None = None) -> dict:
     """Extra request-body fields a model needs for prompt caching, keyed on model-ID prefix.
-    DeepSeek caches automatically; Claude only caches when the request carries cache_control;
-    GLM caches automatically but hits more often when OpenRouter can route a conversation by `session_id`."""
+    Claude only caches when the request carries cache_control. Claude, GPT-5.6, Qwen and GLM hit
+    more often when OpenRouter can route a conversation to one endpoint by `session_id`;
+    DeepSeek caches on every endpoint, so it is harmless there."""
+    fields: dict = {}
     if model.startswith("anthropic/"):
-        return {"cache_control": {"type": "ephemeral"}}
-    if model.startswith("z-ai/") and session_id:
-        return {"session_id": session_id}
-    return {}
+        fields["cache_control"] = {"type": "ephemeral"}
+    if session_id and model.startswith(SESSION_ID_PREFIXES):
+        fields["session_id"] = session_id
+    return fields
 
 
 class OpenRouterClient:

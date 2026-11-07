@@ -125,10 +125,30 @@ async def test_malformed_chunk_raises():
 OK = sse({"choices": [{"delta": {"content": "hi"}, "finish_reason": "stop"}]})
 
 
-def test_claude_models_need_a_top_level_ephemeral_cache_control():
+def test_claude_models_need_a_top_level_ephemeral_cache_control_and_prefer_anthropics_own_endpoint():
     from flood_agent.llm import caching_fields
 
-    assert caching_fields("anthropic/claude-sonnet-5.5") == {"cache_control": {"type": "ephemeral"}}
+    # Google Vertex cannot read a cache entry written seconds earlier, which is every step of a tool-call
+    # turn; Anthropic's endpoint can. A preference, not a pin: with fallbacks on, an account that does not
+    # allow Anthropic still gets an answer (uncached) from another provider.
+    assert caching_fields("anthropic/claude-sonnet-5.5") == {
+        "cache_control": {"type": "ephemeral"},
+        "provider": {"order": ["anthropic"]},
+    }
+
+
+@pytest.mark.parametrize("model", ["openai/gpt-5.6-terra", "deepseek/deepseek-v4", "z-ai/glm-5.3", "qwen/qwen3.8-27b"])
+def test_only_claude_models_state_a_provider_preference(model):
+    from flood_agent.llm import caching_fields
+
+    assert "provider" not in caching_fields(model, session_id="c7")
+
+
+async def test_a_claude_request_body_prefers_anthropic_without_forbidding_other_providers():
+    body = await request_body("anthropic/claude-sonnet-5.5")
+
+    assert body["provider"] == {"order": ["anthropic"]}
+    assert "allow_fallbacks" not in body["provider"]  # OpenRouter's default is to fall back
 
 
 def test_models_that_cache_automatically_need_no_extra_fields():

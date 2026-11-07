@@ -1,7 +1,8 @@
 """App database: Conversations, turns, messages, Display definitions.
 
 The registry of Result Tables and Lookup Tables lives in the same file but belongs to the Table
-Catalog (`catalog.py`). The store only renames a Result Table's Displays and registry row together.
+Catalog (`catalog.py`). The store only supplies the Display rename hook (`follow_rename`), which
+makes every Display follow a table's new name inside the Catalog's rename transaction.
 
 A separate SQLite file (not the Telemetry Database, not the results database). Displays are
 stored as definitions only (kind + Result Table + options), never rows, so reopening a

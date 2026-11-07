@@ -6,14 +6,11 @@
     <input type="text" x-ref="nameInput" x-model="draft" @input="renamed()" maxlength="60" required aria-label="Table name (SQL)">
     <label>Keep for
       <select x-model="choice" @change="retentionTouched = true" aria-label="Retention">
-        <option value="1">1 day (rt_ default)</option>
-        <option value="7">7 days</option>
-        <option value="30">30 days</option>
-        <option value="365">365 days</option>
+        <template x-for="days in presets" :key="days"><option :value="days" :selected="days === choice" x-text="presetLabel(days)"></option></template>
         <option value="custom">Custom</option>
       </select>
     </label>
-    <span x-show="choice === 'custom'" x-cloak><input type="number" x-model="custom" min="0.01" max="3650" step="any" aria-label="Retention in days"> days</span>
+    <span x-show="choice === 'custom'" x-cloak><input type="number" x-model="custom" min="0.01" :max="policy.max_days" step="any" aria-label="Retention in days"> days</span>
     <button type="submit" class="primary">Save</button>
     <button type="button" @click="editing = false">Cancel</button>
     <span class="err" x-show="saveError" x-text="saveError"></span>

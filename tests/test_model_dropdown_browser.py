@@ -1,9 +1,12 @@
 """The strip's Model dropdown: the curated list, the remembered choice and its fallback."""
 
+import asyncio
+import threading
+
 from conftest import ScriptedLLM
 from playwright.sync_api import expect
 
-from flood_agent.llm import TextChunk
+from flood_agent.llm import TextChunk, UsageChunk
 
 LABELS = [
     "Claude Sonnet 5.5", "Claude Opus 5.5", "Claude Haiku 5.5", "DeepSeek V4 Pro", "GLM 5.3", "Qwen3.8 27B",
@@ -80,3 +83,29 @@ def test_with_no_key_real_models_are_disabled_and_a_remembered_one_falls_back(li
     expect(panel.get_by_role("button", name="No model")).to_be_enabled()
     expect(panel).to_contain_text("needs OPENROUTER_API_KEY")
     expect(page.locator("#model")).to_have_value("no-model")
+
+
+class GatedLLM:
+    """Answers once `gate` is set, so a test can change the dropdown while the turn is still running."""
+
+    def __init__(self, gate: threading.Event):
+        self.gate = gate
+
+    async def stream_chat(self, messages, tools, **extra):
+        while not self.gate.is_set():
+            await asyncio.sleep(0.02)
+        yield TextChunk("hi")
+        yield UsageChunk(prompt_tokens=100, completion_tokens=20, cost=0.0012)
+
+
+def test_after_a_turn_the_meter_shows_the_window_of_the_model_selected_for_the_next_prompt(build_agent, live_page):
+    gate = threading.Event()
+    page = live_page(agent=build_agent(GatedLLM(gate)))
+    open_model_panel(page).get_by_role("button", name="Claude Sonnet 5.5").click()  # 1M window
+    page.locator("textarea[name=message]").fill("hello")
+    page.locator("textarea[name=message]").press("Enter")
+    open_model_panel(page).get_by_role("button", name="Qwen3.8 27B").click()  # 1.02M window, mid-turn
+    gate.set()
+
+    expect(page.locator("#chat")).to_contain_text("anthropic/claude-sonnet-5.5")  # the Trace: Sonnet ran
+    expect(page.locator("#context-meter")).to_contain_text("100 of 1.02M")

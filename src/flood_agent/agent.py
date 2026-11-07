@@ -42,10 +42,14 @@ class AgentConfig:
     max_llm_steps: int
     clock: Callable[[], int] = lambda: int(time.time() * 1000)  # epoch ms; injectable for tests
 
+    def spec_of(self, model_id: str) -> ModelSpec | None:
+        """The curated model with this id; None for an id outside the list (NO_MODEL included)."""
+        return next((m for m in self.models if m.id == model_id), None)
 
     def window_of(self, model: str) -> int:
         """The context window of a curated model; 0 for an id outside the list (NO_MODEL: no context window)."""
-        return next((m.context_window for m in self.models if m.id == model), 0)
+        spec = self.spec_of(model)
+        return spec.context_window if spec else 0
 
 
 NO_MODEL = "no-model"
@@ -573,7 +577,7 @@ class Agent:
         model: str, effort: str | None = None,
     ):
         llm = self.client_for(model)
-        spec = next((m for m in self.config.models if m.id == model), None)
+        spec = self.config.spec_of(model)
         # Only a non-default Effort is sent; the default sends nothing extra.
         extra = {"reasoning": {"effort": effort}} if effort and spec and effort != spec.default_effort else {}
         connection = await self._ensure_connection()

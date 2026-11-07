@@ -198,7 +198,7 @@
     @media (prefers-reduced-motion: reduce) { .thinking { animation-duration: 3s; } }
     form { display: flex; gap: .5rem; margin-top: 1rem; }
     .canned { display: none; margin-top: 1rem; font-size: .9rem; }
-    body[data-model=no-model] .canned { display: block; }  /* Canned Prompts show only under "No model" */
+    body[data-model={{ no_model }}] .canned { display: block; }  /* Canned Prompts show only under "No model" */
     .refusal { margin: .4rem 0; padding: .4rem .6rem; border-left: 4px solid #b00; background: #fdecec; font-size: .9rem; }
     .canned .fails { color: #a40; }
     .canned ul { list-style: none; padding: 0; margin: .25rem 0; }
@@ -216,7 +216,7 @@
 </head>
 <body data-model="{{ default_model }}">
   {% macro entry(c, css_class="") %}
-  <li{% if css_class %} class="{{ css_class }}"{% endif %}><button type="button" hx-post="/chat" hx-include="#conversation_id, #max_rows" hx-vals='{{ {"message": c.prompt, "model": "no-model"} | tojson }}'
+  <li{% if css_class %} class="{{ css_class }}"{% endif %}><button type="button" hx-post="/chat" hx-include="#conversation_id, #max_rows" hx-vals='{{ {"message": c.prompt, "model": no_model} | tojson }}'
     hx-target="#chat" hx-swap="beforeend">{{ c.prompt }}</button>{% if c.fails_on_purpose %} <small class="fails">fails on purpose</small>{% endif %}</li>
   {% endmacro %}
   <div class="topbar">
@@ -329,7 +329,7 @@
                                   htmx.ajax('GET', '/context-meter?model=' + encodeURIComponent(this.model) + '&conversation_id=' + encodeURIComponent(cid),
                                             { target: '#context-meter', swap: 'outerHTML' });
                                 } }"
-       x-init="load()" x-effect="document.body.dataset.model = model" @click.outside="open = false; modelOpen = false; effortOpen = false" @keydown.escape.window="open = false; modelOpen = false; effortOpen = false">
+       @htmx:sse-close.window="refreshMeter()" x-init="load()" x-effect="document.body.dataset.model = model" @click.outside="open = false; modelOpen = false; effortOpen = false" @keydown.escape.window="open = false; modelOpen = false; effortOpen = false">
     <input type="hidden" id="max_rows" name="max_rows" :value="choice === 'custom' ? custom : choice" value="10000">
     <input type="hidden" id="effort" name="effort" :value="effort" value="">
     <input type="hidden" id="model" name="model" :value="model" value="{{ default_model }}">

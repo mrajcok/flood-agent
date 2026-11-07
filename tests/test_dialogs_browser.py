@@ -98,7 +98,7 @@ def test_deleting_a_prompt_with_a_saved_table_says_the_saved_table_is_kept(build
     page = live_page(agent=agent)
     native = no_native_dialogs(page)
     ask_for_a_table(page)
-    (table,) = agent.store.all_live_result_table_names()
+    (table,) = agent.tables.names()
     agent.update_result_table(table, "keeper")
     page.locator("aside ul li a").first.click()  # open the Conversation, so its prompts show their delete buttons
 

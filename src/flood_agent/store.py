@@ -1,4 +1,7 @@
-"""App database: Conversations, turns, messages, Display definitions, Result Table ownership.
+"""App database: Conversations, turns, messages, Display definitions.
+
+The registry of Result Tables and Lookup Tables lives in the same file but belongs to the Table
+Catalog (`catalog.py`), which creates it; the store still reads it for deleting, renaming and sweeping.
 
 A separate SQLite file (not the Telemetry Database, not the results database). Displays are
 stored as definitions only (kind + Result Table + options), never rows, so reopening a
@@ -6,7 +9,6 @@ Conversation re-renders them from their Result Tables.
 
 Extension points for later tickets:
 - `conversations.last_activity_at` (epoch ms) is touched on every write (Result Table expiry).
-- `result_tables` records which Conversation owns each Result Table.
 - `turns.trace` is a nullable BLOB reserved for the per-turn Trace.
 """
 
@@ -52,35 +54,7 @@ CREATE TABLE IF NOT EXISTS displays (
   definition TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS displays_conv ON displays(conversation_id, id);
-CREATE TABLE IF NOT EXISTS result_tables (
-  name TEXT PRIMARY KEY,
-  conversation_id TEXT NOT NULL REFERENCES conversations(id),
-  created_at INTEGER NOT NULL,
-  title TEXT NOT NULL DEFAULT '',
-  columns TEXT NOT NULL DEFAULT '[]',
-  request TEXT NOT NULL DEFAULT '',
-  expired INTEGER NOT NULL DEFAULT 0,
-  truncated_to INTEGER,
-  retention_ms INTEGER
-);
-CREATE TABLE IF NOT EXISTS lookup_tables (
-  name TEXT PRIMARY KEY,
-  created_at INTEGER NOT NULL,
-  columns TEXT NOT NULL DEFAULT '[]',
-  row_count INTEGER NOT NULL DEFAULT 0
-);
 """
-
-# Columns added to result_tables after #8, for app databases created before then.
-_RESULT_TABLE_MIGRATIONS = {
-    "title": "TEXT NOT NULL DEFAULT ''",
-    "columns": "TEXT NOT NULL DEFAULT '[]'",
-    "request": "TEXT NOT NULL DEFAULT ''",
-    "expired": "INTEGER NOT NULL DEFAULT 0",
-    "truncated_to": "INTEGER",
-    "retention_ms": "INTEGER",
-}
-_LOOKUP_TABLE_MIGRATIONS = {"row_count": "INTEGER NOT NULL DEFAULT 0"}
 
 # Whether deleting a Conversation or exchange also drops its live Result Tables (those still named
 # rt_*). Its Saved Tables are always kept (ADR 0004).
@@ -115,12 +89,6 @@ class ConversationStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as con:
             con.executescript(SCHEMA)
-            for table, migrations in (("result_tables", _RESULT_TABLE_MIGRATIONS),
-                                      ("lookup_tables", _LOOKUP_TABLE_MIGRATIONS)):
-                have = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
-                for col, decl in migrations.items():
-                    if col not in have:
-                        con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
 
     def _connect(self) -> sqlite3.Connection:
         con = sqlite3.connect(self.path)
@@ -276,72 +244,20 @@ class ConversationStore:
             con.execute("UPDATE conversations SET last_activity_at=? WHERE id=?", (self._now(), conversation_id))
         return ids
 
-    def add_result_table(
-        self, conversation_id: str, name: str, title: str = "", columns: list[dict] | None = None,
-        request: str = "", truncated_to: int | None = None,
-    ) -> None:
-        """`truncated_to`: the row cap the table was cut to, or None if it is complete."""
-        self._write(
-            "INSERT OR IGNORE INTO result_tables(name, conversation_id, created_at, title, columns, request,"
-            " truncated_to) VALUES (?,?,?,?,?,?,?)",
-            (name, conversation_id, self._now(), title, json.dumps(columns or []), request, truncated_to),
-            conversation_id,
-        )
-
-    def truncated_to(self, name: str) -> int | None:
-        """The row cap the Result Table was cut to, or None if it is complete (or unknown)."""
-        with closing(self._connect()) as con:
-            row = con.execute("SELECT truncated_to FROM result_tables WHERE name=?", (name,)).fetchone()
-            return row["truncated_to"] if row else None
-
-    def result_tables(self, conversation_id: str) -> list[str]:
-        """Names of the Conversation's live (unexpired) Result Tables."""
-        return [t["name"] for t in self.live_result_tables(conversation_id)]
-
-    def live_result_tables(self, conversation_id: str) -> list[dict]:
-        """Name, title, column schema and originating request of live Result Tables (no row values)."""
-        with closing(self._connect()) as con:
-            rows = con.execute(
-                "SELECT name, title, columns, request FROM result_tables "
-                "WHERE conversation_id=? AND expired=0 ORDER BY created_at, name", (conversation_id,))
-            return [{**dict(r), "columns": json.loads(r["columns"])} for r in rows]
-
-    def all_live_result_table_names(self) -> list[str]:
-        """Names of live (unexpired) Result Tables across all Conversations, including tables whose
-        Conversation was deleted, sorted."""
-        with closing(self._connect()) as con:
-            return [r[0] for r in con.execute("SELECT name FROM result_tables WHERE expired=0 ORDER BY name")]
-
-    def live_result_table_lifetimes(self, default_retention_ms: int) -> dict[str, "Lifetime"]:
+    def live_result_table_lifetimes(self) -> dict[str, "Lifetime"]:
         """Live Result Tables (and Saved Tables) across all Conversations, sorted by name, each with
-        its retention (`default_retention_ms` unless the user chose one) and time left until it expires."""
+        its retention and time left until it expires."""
         now = self._now()
         with closing(self._connect()) as con:
             return {r[0]: Lifetime(r[1], r[2] + r[1] - now) for r in con.execute(
-                "SELECT name, COALESCE(retention_ms, ?), created_at FROM result_tables WHERE expired=0 ORDER BY name",
-                (default_retention_ms,))}
+                "SELECT name, retention_ms, created_at FROM result_tables WHERE expired=0 ORDER BY name")}
 
-    def due_for_expiry(self, ttl_ms: int) -> list[str]:
-        """Live Result Tables created longer ago than the table's
-        retention (`ttl_ms` unless the user chose one)."""
+    def due_for_expiry(self) -> list[str]:
+        """Registered tables not yet dropped whose Retention has run out."""
         now = self._now()
         with closing(self._connect()) as con:
             return [r[0] for r in con.execute(
-                "SELECT name FROM result_tables "
-                "WHERE expired=0 AND created_at <= ? - COALESCE(retention_ms, ?)", (now, ttl_ms))]
-
-    def result_table_settings(self, name: str, default_retention_ms: int) -> dict | None:
-        """The name, retention in ms and time left in ms of a Result Table, or None if unknown."""
-        with closing(self._connect()) as con:
-            row = con.execute("SELECT retention_ms, created_at FROM result_tables WHERE name=?", (name,)).fetchone()
-        if row is None:
-            return None
-        retention_ms = row["retention_ms"] if row["retention_ms"] is not None else default_retention_ms
-        return {"name": name, "retention_ms": retention_ms, "expires_in_ms": row["created_at"] + retention_ms - self._now()}
-
-    def has_result_table(self, name: str) -> bool:
-        with closing(self._connect()) as con:
-            return con.execute("SELECT 1 FROM result_tables WHERE name=?", (name,)).fetchone() is not None
+                "SELECT name FROM result_tables WHERE expired=0 AND created_at + retention_ms <= ?", (now,))]
 
     def rename_result_table(self, old: str, new: str) -> None:
         """Make `new` the table's one name, in the registry and in the Displays that show it."""
@@ -386,22 +302,6 @@ class ConversationStore:
     def mark_expired(self, names: list[str]) -> None:
         with closing(self._connect()) as con, con:
             con.executemany("UPDATE result_tables SET expired=1 WHERE name=?", [(n,) for n in names])
-
-    def is_expired(self, name: str) -> bool:
-        with closing(self._connect()) as con:
-            return con.execute(
-                "SELECT 1 FROM result_tables WHERE name=? AND expired=1", (name,)).fetchone() is not None
-
-    def expired_among(self, names) -> set[str]:
-        """The subset of `names` that have expired (one query per 500 names)."""
-        names, out = list(set(names)), set()
-        with closing(self._connect()) as con:
-            for i in range(0, len(names), 500):
-                chunk = names[i:i + 500]
-                marks = ",".join("?" * len(chunk))
-                out.update(r[0] for r in con.execute(
-                    f"SELECT name FROM result_tables WHERE expired=1 AND name IN ({marks})", chunk))
-        return out
 
     def messages(self, conversation_id: str) -> list[dict]:
         """LLM-facing message history, in order."""

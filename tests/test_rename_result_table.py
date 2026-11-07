@@ -100,7 +100,8 @@ def two_tables(build_agent, web_client):
     names = []
     for _ in range(2):
         meta = queries.run_query(agent.config.telemetry_db, agent.config.results_db, BY_PORT, **query_limits())
-        agent.store.add_result_table(agent.store.create_conversation(), meta["result_table"])
+        cid = agent.store.create_conversation()
+        agent.tables.register(meta["result_table"], cid, agent.store.start_turn(cid, "q"))
         names.append(meta["result_table"])
     return agent, client, names
 

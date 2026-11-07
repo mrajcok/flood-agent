@@ -106,7 +106,7 @@ async def test_sweep_expires_a_table_whose_conversation_is_gone(make_agent):
     con.commit()
     con.close()
     clock.ms += HOUR + 1
-    assert agent.is_expired(name)
+    assert name not in agent.tables
 
 
 async def test_expired_table_is_gone_from_prompt_and_unqueryable(make_agent):

@@ -16,6 +16,7 @@ from mcp import StdioServerParameters
 from mcp.types import TextContent
 
 from flood_agent import flagging, lookup_tables, queries, table_names
+from flood_agent.catalog import Catalog
 from flood_agent.llm import LLMClient, LLMError, ModelSpec, TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
 from flood_agent.mcp_protocol import QUERY_TOOLS
@@ -57,10 +58,6 @@ NO_MODEL = "no-model"
 
 ClientFactory = Callable[[str], LLMClient]
 """Gives the client that runs a model id: the real OpenRouter client (made lazily, reused) or a scripted fake."""
-
-
-class ResultTableExpired(Exception):
-    """The Result Table existed but was deleted by expiry (HTTP layer maps this to 410)."""
 
 
 @dataclass
@@ -252,6 +249,7 @@ class Agent:
         self.config = config
         self.client_for = client_for
         self.semantic_layer = SemanticLayer(config.semantic_layer)
+        self.tables = Catalog(config.app_db, config.clock, config.result_ttl_ms)
         self.store = ConversationStore(config.app_db, config.clock)
         self._connection: McpConnection | None = None
         self._restart_lock = asyncio.Lock()
@@ -357,31 +355,11 @@ class Agent:
 
         Runs on app start, before each turn, and before any row read.
         """
-        names = self.store.due_for_expiry(self.config.result_ttl_ms)
+        names = self.store.due_for_expiry()
         if not names:
             return
         self._drop_tables(names)
         self.store.mark_expired(names)
-
-    def is_expired(self, result_table: str) -> bool:
-        self.sweep_expired()
-        return self.store.is_expired(result_table)
-
-    def expired_among(self, result_tables) -> set[str]:
-        """Sweep once, then return which of the given Result Tables have expired."""
-        self.sweep_expired()
-        return self.store.expired_among(result_tables)
-
-    def _is_live_result_table(self, result_table: str) -> bool:
-        """A registered Result Table that has not expired (after sweeping)."""
-        return self.store.has_result_table(result_table) and not self.is_expired(result_table)
-
-    def require_live_result_table(self, result_table: str) -> None:
-        """KeyError unless the name is a registered Result Table; ResultTableExpired if it has expired."""
-        if not self.store.has_result_table(result_table):
-            raise KeyError(result_table)
-        if not self._is_live_result_table(result_table):
-            raise ResultTableExpired(f"Result Table {result_table} has expired.")
 
     def add_lookup_table(self, suffix: str, text: str, overwrite: bool = False) -> dict:
         """Create `lookup_<suffix>` from pasted rows and register it. Touches no Conversation, message
@@ -429,7 +407,7 @@ class Agent:
         from every Conversation, plus `retention_days` and `expires_in_ms` for each of the last two
         (the only kinds with a Retention). For the web page only; touches no Conversation, message or Trace."""
         self.sweep_expired()
-        lifetimes = self.store.live_result_table_lifetimes(self.config.result_ttl_ms)
+        lifetimes = self.store.live_result_table_lifetimes()
         saved, result = [], []
         for name in lifetimes:  # every live query-made table
             (result if table_names.is_result_table_name(name) else saved).append(name)
@@ -453,18 +431,11 @@ class Agent:
         if self.store.is_lookup_table(name):
             self._drop_tables([name])
             self.store.unregister_lookup_table(name)
-        elif self._is_live_result_table(name):
+        elif name in self.tables:
             self._drop_tables([name])
             self.store.mark_expired([name])
         else:
             raise KeyError(name)
-
-    def result_table_settings(self, result_table: str) -> dict:
-        """The Result Table's name, retention in days and time left in ms (KeyError if unknown)."""
-        found = self.store.result_table_settings(result_table, self.config.result_ttl_ms)
-        if found is None:
-            raise KeyError(result_table)
-        return {"name": found["name"], "retention_days": found["retention_ms"] / DAY_MS, "expires_in_ms": found["expires_in_ms"]}
 
     def update_result_table(
         self, result_table: str, name: str | None = None, retention_days: float | None = None
@@ -474,13 +445,13 @@ class Agent:
         A `name` equal to the current one changes nothing. Returns the new settings. ValueError,
         changing nothing, if the new name is not allowed. Retention is unchanged by a rename: the
         rename form, not the server, offers a Saved Table's 30-day default (ADR 0004)."""
-        self.require_live_result_table(result_table)
+        self.tables[result_table]  # KeyError if unknown, TableExpired if expired
         if name is not None and name != result_table:
             self._rename(result_table, name)
             result_table = name
         if retention_days is not None:
             self.store.update_result_table(result_table, max(1, round(retention_days * DAY_MS)))
-        return self.result_table_settings(result_table)
+        return self.tables[result_table].to_json()
 
     def _rename(self, old: str, new: str) -> None:
         """Rename in the results database, then in the app database. These are two files, so if the
@@ -502,24 +473,21 @@ class Agent:
         """Internal data path used by the row-JSON endpoint. Not an LLM tool.
 
         Adds per-column display formats from the Semantic Layer."""
-        self.require_live_result_table(result_table)
-        data = queries.fetch_rows(self.config.results_db, result_table, columns, **page_args)
+        table = self.tables[result_table]
+        data = queries.fetch_rows(self.config.results_db, table.name, columns, **page_args)
         data["formats"] = self.semantic_layer.column_formats(data["columns"])
-        data["truncated_to"] = self.store.truncated_to(result_table)
-        try:
-            data.update(self.result_table_settings(result_table))
-        except KeyError:  # not owned by a Conversation: no user settings
-            data.update(name=result_table, retention_days=self.config.result_ttl_ms / DAY_MS)
+        data["truncated_to"] = table.truncated_to
+        data.update(table.to_json())
         return data
 
     def iter_all_rows(self, result_table: str):
         """Internal data path for PSV export of the full Result Table. Not an LLM tool."""
-        self.require_live_result_table(result_table)
+        self.tables[result_table]
         return queries.iter_all_rows(self.config.results_db, result_table)
 
     def fetch_chart_rows(self, result_table: str) -> list[dict]:
         """Internal data path for the chart-rows endpoint (chart cap). Not an LLM tool."""
-        self.require_live_result_table(result_table)
+        self.tables[result_table]
         return queries.fetch_records(self.config.results_db, result_table, self.config.chart_row_cap)
 
     async def run_turn(
@@ -645,7 +613,7 @@ class Agent:
         tools = connection.tools
         failed_attempts = 0
         for call_number in range(1, self.config.max_llm_steps + 1):
-            system_prompt = self.semantic_layer.system_prompt(self.store.live_result_tables(conversation.id))
+            system_prompt = self.semantic_layer.system_prompt(self.tables.tables_of(conversation.id))
             messages = [{"role": "system", "content": system_prompt}]
             messages += conversation.messages
             text, calls, usage = "", [], None
@@ -684,13 +652,13 @@ class Agent:
             for c in calls:
                 call_started = time.monotonic()
                 content, args, executed_sql, failed = await self._run_tool(
-                    connection, c, queue, trace, conversation.id, max_result_rows
+                    connection, c, queue, trace, conversation.id, turn_id, user_message, max_result_rows
                 )
                 failed_attempts += failed
                 trace.tool_call(c.name, args, content, call_started, executed_sql)
                 self._trace_result_table(trace, content)
                 displays = await self._prepare_displays(
-                    conversation, content, args, queue, user_message, trace
+                    conversation, content, args, queue, trace
                 )
                 items.append(({"role": "tool", "tool_call_id": c.id, "content": content}, displays))
             self.store.add_step(conversation.id, turn_id, items)
@@ -711,7 +679,7 @@ class Agent:
 
     async def _run_tool(
         self, connection: McpConnection, c: ToolCallChunk, queue: asyncio.Queue, trace: TraceBuilder,
-        conversation_id: str, max_result_rows: int,
+        conversation_id: str, turn_id: int, request: str, max_result_rows: int,
     ) -> tuple[str, dict, str | None, int]:
         """Execute one LLM tool call. Returns (content, args, executed_sql, failed 0/1).
 
@@ -736,6 +704,9 @@ class Agent:
                 try:
                     result = await connection.call_tool(c.name, args, conversation_id, max_result_rows)
                     content = "".join(b.text for b in result.content if isinstance(b, TextContent))
+                    # Straight after the call returns, before any other await, so a turn stopped here
+                    # still has its table registered (and so listed and swept).
+                    self._register_result_table(conversation_id, turn_id, content, args, request)
                     if result.isError:
                         content = _fail(content[:500] or "The tool call was rejected.")
                 except Exception as e:  # a broken tool call must not corrupt or abort the turn
@@ -774,6 +745,19 @@ class Agent:
         for item in items:
             trace.add("flag", **item)
         await queue.put(FlagEvent([i["token"] for i in items], items))
+
+    def _register_result_table(self, conversation_id: str, turn_id: int, content: str, args: dict, request: str) -> None:
+        """Record the Result Table a successful query tool call made, with the turn that made it."""
+        try:
+            payload = json.loads(content)
+        except ValueError:
+            return
+        if isinstance(payload, dict) and payload.get("success") and payload.get("result_table") and "display" not in payload:
+            title = args.get("title", "")
+            self.tables.register(
+                payload["result_table"], conversation_id, turn_id, title if isinstance(title, str) else "",
+                payload.get("columns", []), request, payload.get("truncated_to"),
+            )
 
     @staticmethod
     def _strip_executed_sql(content: str) -> tuple[str, str | None]:
@@ -820,9 +804,9 @@ class Agent:
 
     async def _prepare_displays(
         self, conversation: Conversation, tool_content: str, args: dict, queue: asyncio.Queue,
-        request: str, trace: TraceBuilder,
+        trace: TraceBuilder,
     ) -> list[tuple]:
-        """Register a new Result Table, emit any Display to the user, and return the Display
+        """Emit any Display to the user, and return the Display
         definitions [(kind, result_table, definition)] to persist with the tool message."""
         assert conversation.id is not None  # run_turn persists the Conversation first
         try:
@@ -831,19 +815,13 @@ class Agent:
             return []
         if not isinstance(payload, dict):
             return []
-        if payload.get("success") and payload.get("result_table") and "display" not in payload:
-            title = args.get("title", "")
-            self.store.add_result_table(
-                conversation.id, payload["result_table"], title if isinstance(title, str) else "",
-                payload.get("columns", []), request, payload.get("truncated_to"),
-            )
         display = payload.get("display")
         if not display:
             return []
         table = display["result_table"]
         # Any live Result Table may be shown (ADR 0003); the Display is saved with this
         # Conversation, but the table stays owned by the one that created it.
-        live = self._is_live_result_table(table)
+        live = table in self.tables
         if display["kind"] == "chart":
             source = display["spec"]
             resolved = resolve_chart_data(source, table)

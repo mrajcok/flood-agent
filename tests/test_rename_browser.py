@@ -11,7 +11,7 @@ def ask_for_a_table(build_agent, live_page, days=None):
     page.get_by_placeholder("Write a prompt").fill("show me flows")
     page.get_by_role("button", name="Send message (Enter)").click()
     expect(page.locator(".reply", has_text="Here you go.")).to_be_visible()
-    (table,) = agent.store.all_live_result_table_names()
+    (table,) = agent.tables.names()
     if days is not None:
         agent.update_result_table(table, retention_days=days)
         page.reload()
@@ -25,7 +25,7 @@ def edit(page, table):
 
 
 def retention_of(agent, name):
-    return agent.result_table_settings(name)["retention_days"]
+    return agent.tables[name].retention_days
 
 
 def test_renaming_a_result_table_switches_its_retention_to_30_days(build_agent, live_page):

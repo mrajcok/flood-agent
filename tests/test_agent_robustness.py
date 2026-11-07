@@ -315,7 +315,7 @@ async def first_conversation_table(agent, llm):
     conv = Conversation()
     llm.steps = [[tool_call("run_query", "c1", sql=SQL, title="t")], [TextChunk("ok")]]
     await collect(agent, "first", conv)
-    return agent.store.result_tables(conv.id)[0]
+    return agent.tables.tables_of(conv.id)[0].name
 
 
 def show_args(tool, name):

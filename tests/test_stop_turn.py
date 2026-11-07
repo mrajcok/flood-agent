@@ -92,3 +92,17 @@ async def test_a_turn_announces_each_llm_call_and_each_trace_entry_as_it_happens
     assert live[:2] == ["llm_step", "tool_call"] and live.count("llm_step") == 2
     order = [type(e).__name__ for e in events if isinstance(e, (LlmCallStarted, TraceLive))]
     assert order[0] == "LlmCallStarted"
+
+
+async def test_a_stopped_turn_keeps_the_table_its_query_registered_with_that_turn(make_agent):
+    agent = await make_agent(HangingLLM([tool_call("run_query", sql=SQL, title="Ports")]))
+    conversation = Conversation()
+    events = []
+    async for ev in agent.run_turn(conversation, "ports please", 1000, turn_key="t1"):
+        events.append(ev)
+        if isinstance(ev, TextDelta) and "Partial" in ev.text:
+            assert agent.stop_turn("t1")
+
+    (table,) = agent.tables.tables_of(conversation.id)
+    turn_id = next(e.turn_id for e in events if isinstance(e, TraceReady))
+    assert (table.turn_id, table.title, table.request) == (turn_id, "Ports", "ports please")

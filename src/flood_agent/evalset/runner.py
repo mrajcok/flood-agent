@@ -140,15 +140,22 @@ async def run_eval(models, questions, telemetry_db, semantic_layer, client_facto
     if checkpoint and checkpoint.exists():  # PROTOTYPE resume: skip (model, question) pairs already done
         out = [QuestionResult(**json.loads(line)) for line in checkpoint.read_text().splitlines() if line.strip()]
     done = {(r.model, r.question_id) for r in out}
+    total, finished = len(models) * len(questions), 0
+
+    def pct() -> str:
+        return f"[{finished}/{total} {finished / total:4.0%}]"
+
     for model in models:
         for q in questions:
             if (model, q.id) in done:
-                print(f"[skip] {model} {q.id} (already in checkpoint)", file=sys.stderr, flush=True)
+                finished += 1
+                print(f"{pct()} [skip] {model} {q.id} (already in checkpoint)", file=sys.stderr, flush=True)
                 continue
-            print(f"[run ] {model} {q.id} ...", file=sys.stderr, flush=True)
+            print(f"{pct()} [run ] {model} {q.id} ...", file=sys.stderr, flush=True)
             r = await _run_question(model, q, refs[q.id], telemetry_db, semantic_layer, client_factory, workdir)
             out.append(r)
-            print(f"[done] {model} {q.id}: {'pass' if r.correct else 'FAIL'} retries={r.retries} "
+            finished += 1
+            print(f"{pct()} [done] {model} {q.id}: {'pass' if r.correct else 'FAIL'} retries={r.retries} "
                   f"{r.latency_s:.0f}s cost={_money(r.cost)}{' ERROR ' + r.error if r.error else ''}",
                   file=sys.stderr, flush=True)
             if checkpoint:

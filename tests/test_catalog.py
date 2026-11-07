@@ -1,5 +1,8 @@
 """The Table Catalog's interface: liveness from the clock, Retention fixed at registration, the reads."""
 
+import sqlite3
+from datetime import datetime
+
 import pytest
 
 from flood_agent.catalog import Catalog, TableExpired
@@ -112,3 +115,64 @@ def test_a_conversations_tables_are_its_own_live_ones_in_creation_order(world, c
     assert [t.name for t in catalog.tables_of(cid)] == ["rt_b", "rt_a"]
     assert [t.turn_id for t in catalog.tables_of(cid)] == [1, 2]
     assert catalog.names() == ["rt_a", "rt_b", "rt_x"]
+
+
+# --- the sweep ---
+
+def _results_db(tmp_path, *names):
+    path = tmp_path / "results.db"
+    con = sqlite3.connect(path)
+    for n in names:
+        con.execute(f'CREATE TABLE "{n}" (x INTEGER)')
+    con.commit()
+    con.close()
+    return path
+
+
+def _physical(path):
+    con = sqlite3.connect(path)
+    try:
+        return {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    finally:
+        con.close()
+
+
+def _swept_world(tmp_path, clock, *physical):
+    results = _results_db(tmp_path, *physical)
+    app_db = tmp_path / "app.db"
+    catalog = Catalog(app_db, clock, default_retention_ms=HOUR, results_db=results)
+    return catalog, ConversationStore(app_db, clock).create_conversation(), results
+
+
+def test_sweep_drops_an_expired_table_and_keeps_it_registered_as_dropped(tmp_path, clock):
+    catalog, cid, results = _swept_world(tmp_path, clock, "rt_a", "rt_b")
+    catalog.register("rt_a", cid, 1)
+    clock.now += HOUR - 1
+    catalog.register("rt_b", cid, 1)
+    clock.now += 1  # rt_a is due, rt_b is not
+
+    catalog.sweep()
+
+    assert _physical(results) == {"rt_b"}
+    with pytest.raises(TableExpired):
+        catalog["rt_a"]  # still registered, now dropped
+    assert "rt_b" in catalog
+
+
+def test_sweep_drops_only_old_unregistered_rt_tables(tmp_path, clock):
+    clock.now = int(datetime(2026, 5, 1, 12, 0, 0).timestamp() * 1000)  # local time, like the name generator
+    catalog, cid, results = _swept_world(
+        tmp_path, clock, "rt_20260501_105959", "rt_20260501_110001", "rt_20260501_105900_2", "lookup_x", "mine", "rt_live")
+    catalog.register("rt_live", cid, 1)
+    catalog.register("mine", cid, 1)
+
+    catalog.sweep()
+
+    assert _physical(results) == {"rt_20260501_110001", "lookup_x", "mine", "rt_live"}
+
+
+def test_sweep_without_a_results_database_is_harmless(world):
+    catalog, cid = world
+    catalog.register("rt_a", cid, 1)
+    catalog.sweep()
+    assert "rt_a" in catalog

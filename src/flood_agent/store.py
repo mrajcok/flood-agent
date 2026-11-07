@@ -19,7 +19,7 @@ import time
 import uuid
 from contextlib import closing
 from pathlib import Path
-from typing import Literal, NamedTuple
+from typing import Literal
 
 from flood_agent import table_names
 
@@ -75,11 +75,6 @@ def _follow_rename(node, old: str, new: str):
 def _now() -> int:
     return int(time.time() * 1000)
 
-
-
-class Lifetime(NamedTuple):
-    retention_ms: int
-    expires_in_ms: int  # from now
 
 class ConversationStore:
     def __init__(self, path: Path, clock=_now):
@@ -243,21 +238,6 @@ class ConversationStore:
                     )
             con.execute("UPDATE conversations SET last_activity_at=? WHERE id=?", (self._now(), conversation_id))
         return ids
-
-    def live_result_table_lifetimes(self) -> dict[str, "Lifetime"]:
-        """Live Result Tables (and Saved Tables) across all Conversations, sorted by name, each with
-        its retention and time left until it expires."""
-        now = self._now()
-        with closing(self._connect()) as con:
-            return {r[0]: Lifetime(r[1], r[2] + r[1] - now) for r in con.execute(
-                "SELECT name, retention_ms, created_at FROM result_tables WHERE expired=0 ORDER BY name")}
-
-    def due_for_expiry(self) -> list[str]:
-        """Registered tables not yet dropped whose Retention has run out."""
-        now = self._now()
-        with closing(self._connect()) as con:
-            return [r[0] for r in con.execute(
-                "SELECT name FROM result_tables WHERE expired=0 AND created_at + retention_ms <= ?", (now,))]
 
     def rename_result_table(self, old: str, new: str) -> None:
         """Make `new` the table's one name, in the registry and in the Displays that show it."""

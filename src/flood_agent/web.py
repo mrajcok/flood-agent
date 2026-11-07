@@ -317,7 +317,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
         turn_id = uuid.uuid4().hex
         pending[turn_id] = (conversation, message, max_result_rows, chosen_model, chosen_effort)
         if conversation.id is None:  # persist now so the sidebar and form can reference it
-            conversation.id = agent.store.create_conversation()
+            conversation.id = agent.create_conversation()
         return TEMPLATES.TemplateResponse(
             request, "turn.html",
             {"turn_id": turn_id, "message": message, **sidebar(conversation.id)},

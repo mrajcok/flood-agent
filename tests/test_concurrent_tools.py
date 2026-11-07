@@ -21,7 +21,7 @@ class RoutedLLM(ScriptedLLM):
         self.scripts = scripts
         self.served: dict[str, asyncio.Event] = {name: asyncio.Event() for name in scripts}
 
-    async def stream_chat(self, messages, tools):
+    async def stream_chat(self, messages, tools, **extra):
         user = next(m["content"] for m in messages if m["role"] == "user")
         has_result = any(m["role"] == "tool" for m in messages)
         chunks = [TextChunk("done")] if has_result else self.scripts[user]

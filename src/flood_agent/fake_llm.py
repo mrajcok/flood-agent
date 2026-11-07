@@ -109,7 +109,7 @@ class FakeClient:
         """`telemetry_db` is only named in the reply that suggests generating the data."""
         self.canned_prompts, self.chunk_delay_s, self.telemetry_db = canned_prompts, chunk_delay_s, telemetry_db
 
-    async def stream_chat(self, messages: list[dict], tools: list[dict]) -> AsyncIterator[Chunk]:
+    async def stream_chat(self, messages: list[dict], tools: list[dict], **extra) -> AsyncIterator[Chunk]:
         last_user = max(i for i, m in enumerate(messages) if m["role"] == "user")
         canned = next((c for c in self.canned_prompts if _same_prompt(c.prompt, messages[last_user]["content"])), None)
         step_index = sum(1 for m in messages[last_user:] if m["role"] == "assistant")

@@ -61,11 +61,14 @@ class LLMError(Exception):
     The message is safe to show the user."""
 
 
-def caching_fields(model: str) -> dict:
+def caching_fields(model: str, session_id: str | None = None) -> dict:
     """Extra request-body fields a model needs for prompt caching, keyed on model-ID prefix.
-    DeepSeek and GLM cache automatically; Claude only caches when the request carries cache_control."""
+    DeepSeek caches automatically; Claude only caches when the request carries cache_control;
+    GLM caches automatically but hits more often when OpenRouter can route a conversation by `session_id`."""
     if model.startswith("anthropic/"):
         return {"cache_control": {"type": "ephemeral"}}
+    if model.startswith("z-ai/") and session_id:
+        return {"session_id": session_id}
     return {}
 
 
@@ -76,10 +79,11 @@ class OpenRouterClient:
                  transport: httpx.AsyncBaseTransport | None = None):
         self.api_key, self.model, self.url, self.transport = api_key, model, url, transport
 
-    async def stream_chat(self, messages, tools, reasoning: dict | None = None):
+    async def stream_chat(self, messages, tools, reasoning: dict | None = None,
+                          session_id: str | None = None):
         body = {"model": self.model, "messages": messages, "tools": tools, "stream": True,
             "stream_options": {"include_usage": True}, "usage": {"include": True}}
-        body.update(caching_fields(self.model))
+        body.update(caching_fields(self.model, session_id))
         if reasoning:
             body["reasoning"] = reasoning
         headers = {"Authorization": f"Bearer {self.api_key}"}

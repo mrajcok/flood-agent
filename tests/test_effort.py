@@ -70,3 +70,22 @@ def test_a_supported_or_empty_effort_is_accepted(build_agent, web_client):
 
     assert post_chat(client, model=SONNET, effort="max").status_code == 200
     assert post_chat(client, model=GLM, effort="").status_code == 200  # empty means the model's default
+
+
+async def test_glm_requests_share_a_session_id_within_a_conversation_and_differ_between_conversations(build_agent):
+    agent, seen = provider_bodies(build_agent)
+    async with agent:
+        first, second = Conversation(), Conversation()
+        for conversation in (first, second, first):
+            [e async for e in agent.run_turn(conversation, "q", 1000, GLM, None)]
+
+    ids = [body["session_id"] for body in seen]
+    assert len(ids) == 3 and ids[0] == ids[2] and ids[0] != ids[1]
+
+
+async def test_claude_requests_carry_no_session_id(build_agent):
+    agent, seen = provider_bodies(build_agent)
+    async with agent:
+        await turn(agent, SONNET, None)
+
+    assert seen and all("session_id" not in body for body in seen)

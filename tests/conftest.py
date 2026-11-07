@@ -126,7 +126,7 @@ class ScriptedLLM:
         self.cached_tokens = 0
         self.cache_write_tokens = 0
 
-    async def stream_chat(self, messages, tools):
+    async def stream_chat(self, messages, tools, **extra):
         self.calls.append(copy.deepcopy(messages))
         self.tools_seen_names = [t["function"]["name"] for t in tools]
         step = self.steps.pop(0)

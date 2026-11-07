@@ -211,3 +211,17 @@ async def test_a_rejected_count_query_is_not_an_answer(telemetry_db, semantic_la
 async def test_a_count_does_not_answer_a_question_that_wants_a_table(telemetry_db, semantic_layer_path, tmp_path):
     r, _ = await run_one([count("SELECT COUNT(*) FROM flows"), DONE], telemetry_db, semantic_layer_path, tmp_path)
     assert not r.correct and r.count_queries == 1
+
+
+async def test_an_unregistered_rt_table_is_never_counted_as_a_result(telemetry_db, semantic_layer_path, tmp_path):
+    import sqlite3
+
+    def factory(model, question_id):
+        db = tmp_path / "work" / "fake_model" / Q.id / "results.db"
+        with sqlite3.connect(db) as con:  # the right answer, but no registry row: an orphan
+            con.execute("CREATE TABLE rt_20200101_000000 AS SELECT 0 AS dport, 0 AS total")
+        return ScriptedLLM(query("SELECT 1 AS dport, 1 AS total", "a"), DONE)
+
+    [r] = await runner.run_eval(["fake/model"], [Q], telemetry_db, semantic_layer_path, factory, tmp_path / "work")
+    assert r.result_tables == 1
+    assert r.matched_table is None or "rt_2020" not in r.matched_table

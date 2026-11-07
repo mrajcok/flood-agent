@@ -283,7 +283,7 @@ def test_trace_summary_shows_total_time_in_secs():
 def test_trace_summary_names_the_turn_and_its_llm_call_count():
     totals = {"llm_steps": 3, "prompt_tokens": 9, "completion_tokens": 1, "cost": None, "duration_ms": 1000}
     html = render_trace(totals, None)
-    assert "3 LLM calls &middot;" in html and "This turn only" in html
+    assert "3 LLM calls &middot;" in html and "Billed tokens for this turn" in html
     assert "1 LLM call &middot;" in render_trace({**totals, "llm_steps": 1}, None)
 
 

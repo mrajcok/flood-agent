@@ -2,7 +2,7 @@
 {% from "trace_macros.html" import cache_parts %}
 <details class="trace">
   <summary>Trace
-    <span class="trace-totals" title="This turn only. Each LLM call re-sends the conversation, so the token counts here are summed over the turn's calls and can far exceed the context size.">{{ "No model" if trace.model == "no-model" else trace.model|short_model }} &middot;
+    <span class="trace-totals" title="Billed tokens for this turn. Each LLM call receives the entire conversation so far.">{{ "No model" if trace.model == "no-model" else trace.model|short_model }} &middot;
       {% if trace.totals.llm_steps %}{{ trace.totals.llm_steps }} LLM call{{ "" if trace.totals.llm_steps == 1 else "s" }} &middot;
       {% endif %}      {{ trace.totals.prompt_tokens }} tokens in / {{ trace.totals.completion_tokens }} out{{ cache_parts(trace.totals) }} &middot;
       {% if trace.totals.cost is not none %}${{ "%.3f"|format(trace.totals.cost) }}{% else %}cost n/a{% endif %} &middot;

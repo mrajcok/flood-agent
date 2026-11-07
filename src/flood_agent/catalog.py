@@ -79,40 +79,77 @@ def _now() -> int:
     return int(time.time() * 1000)
 
 
-class Catalog:
-    def __init__(self, app_db: Path, clock: Callable[[], int] = _now, default_retention_ms: int = DAY_MS,
-                 results_db: Path | None = None, telemetry: Iterable[str] = ()):
-        """`clock` returns epoch ms; `default_retention_ms` is the Retention a new Result Table is given;
-        `results_db` is where the tables' rows are kept (needed only by operations that touch them);
-        `telemetry` names the Telemetry Database tables, which can be classified and listed, never deleted."""
-        self.telemetry = sorted(telemetry)
+class CatalogView:
+    """The read-only Table Catalog: every read, no write. It has no write operations and opens the app
+    database in SQLite read-only mode, so the guarantee holds at runtime as well as in the types. The MCP
+    server uses this (the app database must already exist)."""
+
+    def __init__(
+        self, app_db: Path, clock: Callable[[], int] = _now, telemetry_tables: Iterable[str] = (),
+        results_db: Path | None = None, _read_only: bool = True,
+    ):
+        """`clock` returns epoch ms; `telemetry_tables` are the Telemetry Database table names;
+        `results_db` is where Lookup Tables' rows are kept (needed only by the Lookup Table operations)."""
         self.path = Path(app_db)
         self.results_db = Path(results_db) if results_db is not None else None
         self._now = clock
-        self.default_retention_ms = default_retention_ms
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with closing(self._connect()) as con, con:
-            con.executescript(SCHEMA)
+        self._read_only = _read_only
+        self.telemetry_tables = frozenset(t.lower() for t in telemetry_tables)
 
     def _connect(self) -> sqlite3.Connection:
-        con = sqlite3.connect(self.path)
+        if self._read_only:
+            con = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, timeout=5)
+        else:
+            con = sqlite3.connect(self.path)
         con.row_factory = sqlite3.Row
         return con
 
-    def register(
-        self, name: str, conversation_id: str, turn_id: int, title: str = "", columns: list[dict] | None = None,
-        request: str = "", truncated_to: int | None = None,
-    ) -> None:
-        """Record a new Result Table made by `turn_id`, with the current default Retention."""
-        now = self._now()
-        with closing(self._connect()) as con, con:
-            con.execute(
-                "INSERT OR IGNORE INTO result_tables(name, conversation_id, turn_id, created_at, title, columns,"
-                " request, truncated_to, retention_ms) VALUES (?,?,?,?,?,?,?,?,?)",
-                (name, conversation_id, turn_id, now, title, json.dumps(columns or []), request, truncated_to,
-                 self.default_retention_ms),
-            )
-            con.execute("UPDATE conversations SET last_activity_at=? WHERE id=?", (now, conversation_id))
+    def lookup_names(self) -> set[str]:
+        """Every registered Lookup Table (the registry, not the `lookup_` prefix, decides: ADR 0003)."""
+        with closing(self._connect()) as con:
+            return {r[0] for r in con.execute("SELECT name FROM lookup_tables")}
+
+    def kind_of(self, name: str) -> Literal["telemetry", "result", "saved", "lookup"] | None:
+        """The kind of `name` (any case), or None if it is not a table here or no longer live."""
+        wanted = name.lower()
+        if wanted in self.telemetry_tables:
+            return "telemetry"
+        if wanted in {n.lower() for n in self.lookup_names()}:
+            return "lookup"
+        try:
+            return self[wanted].kind
+        except (KeyError, TableExpired):
+            return None
+
+    def lookups(self) -> list[dict]:
+        """The Lookup Tables registry: name, created time, columns and row count, sorted by name."""
+        with closing(self._connect()) as con:
+            return [{**dict(r), "columns": json.loads(r["columns"])} for r in con.execute(
+                "SELECT name, created_at, columns, row_count FROM lookup_tables ORDER BY name")]
+
+    def listing(self) -> dict:
+        """The Tables dialog data: names by kind (each sorted), and each live Result or Saved Table's
+        Retention in days and time left in ms."""
+        live = [self[n] for n in self.names()]
+        return {
+            "telemetry": sorted(self.telemetry_tables),
+            "lookup": sorted(self.lookup_names()),
+            "saved": [t.name for t in live if t.kind == "saved"],
+            "result": [t.name for t in live if t.kind == "result"],
+            "retention_days": {t.name: t.retention_days for t in live},
+            "expires_in_ms": {t.name: t.expires_in_ms for t in live},
+        }
+
+    def owned(self, conversation_id: str, turn_id: int | None = None) -> Owned:
+        """The live tables a Conversation (or just its turn `turn_id`) made, by the turn recorded when
+        each was registered."""
+        tables = [t for t in self.tables_of(conversation_id) if turn_id is None or t.turn_id == turn_id]
+        return Owned([t for t in tables if t.kind == "result"], [t for t in tables if t.kind == "saved"])
+
+    def readable(self) -> set[str]:
+        """Every table a query may read (ADR 0003): all live Result and Saved Tables, from any Conversation,
+        and every Lookup Table."""
+        return set(self.names()) | self.lookup_names()
 
     def _table(self, row: sqlite3.Row) -> Table:
         return Table(
@@ -128,10 +165,10 @@ class Catalog:
         return not row["expired"] and row["created_at"] + row["retention_ms"] > now
 
     def __getitem__(self, name: str) -> Table:
-        """The live Result or Saved Table `name`. KeyError if no such table is registered; `TableExpired`
-        if it is registered but no longer live."""
+        """The live Result or Saved Table `name` (any case). KeyError if no such table is registered;
+        `TableExpired` if it is registered but no longer live."""
         with closing(self._connect()) as con:
-            row = con.execute("SELECT * FROM result_tables WHERE name=?", (name,)).fetchone()
+            row = con.execute("SELECT * FROM result_tables WHERE name=? COLLATE NOCASE", (name,)).fetchone()
         if row is None:
             raise KeyError(name)
         if not self._is_live(row, self._now()):
@@ -142,18 +179,18 @@ class Catalog:
         if not isinstance(name, str):
             return False
         with closing(self._connect()) as con:
-            row = con.execute("SELECT * FROM result_tables WHERE name=?", (name,)).fetchone()
+            row = con.execute("SELECT * FROM result_tables WHERE name=? COLLATE NOCASE", (name,)).fetchone()
         return row is not None and self._is_live(row, self._now())
 
     def live_among(self, names: Iterable[str]) -> set[str]:
         """The subset of `names` that are live Result or Saved Tables (one query per 500 names)."""
-        names, now, out = list(set(names)), self._now(), set()
+        names, now, out = list({n.lower() for n in names}), self._now(), set()
         with closing(self._connect()) as con:
             for i in range(0, len(names), 500):
                 chunk = names[i:i + 500]
                 marks = ",".join("?" * len(chunk))
                 out.update(r["name"] for r in con.execute(
-                    f"SELECT * FROM result_tables WHERE name IN ({marks})", chunk) if self._is_live(r, now))
+                    f"SELECT * FROM result_tables WHERE lower(name) IN ({marks})", chunk) if self._is_live(r, now))
         return out
 
     def tables_of(self, conversation_id: str) -> list[Table]:
@@ -170,37 +207,54 @@ class Catalog:
         with closing(self._connect()) as con:
             return [r["name"] for r in con.execute("SELECT * FROM result_tables ORDER BY name") if self._is_live(r, now)]
 
-    def kind_of(self, name: str) -> Literal["telemetry", "result", "saved", "lookup"] | None:
-        """What `name` (any case) is: a Telemetry table, a live Result or Saved Table, a Lookup Table, or
-        None for an unknown or expired name."""
-        name = name.lower()
-        if name in {t.lower() for t in self.telemetry}:
-            return "telemetry"
-        if self._is_lookup(name):
-            return "lookup"
-        return self[name].kind if name in self else None
+    # --- Lookup Tables: the registry, not the `lookup_` prefix, makes a table one (ADR 0003) ----------
 
-    def listing(self) -> dict:
-        """The Tables dialog data: names by kind (each sorted), and each live Result or Saved Table's
-        Retention in days and time left in ms."""
-        now = self._now()
+    def _is_lookup(self, name: str) -> bool:
         with closing(self._connect()) as con:
-            live = [self._table(r) for r in con.execute("SELECT * FROM result_tables ORDER BY name")
-                    if self._is_live(r, now)]
-        return {
-            "telemetry": list(self.telemetry),
-            "lookup": self.lookup_names(),
-            "saved": [t.name for t in live if t.kind == "saved"],
-            "result": [t.name for t in live if t.kind == "result"],
-            "retention_days": {t.name: t.retention_days for t in live},
-            "expires_in_ms": {t.name: t.expires_in_ms for t in live},
-        }
+            return con.execute("SELECT 1 FROM lookup_tables WHERE name=?", (name.lower(),)).fetchone() is not None
 
-    def owned(self, conversation_id: str, turn_id: int | None = None) -> Owned:
-        """The live tables a Conversation (or just its turn `turn_id`) made, by the turn recorded when
-        each was registered."""
-        tables = [t for t in self.tables_of(conversation_id) if turn_id is None or t.turn_id == turn_id]
-        return Owned([t for t in tables if t.kind == "result"], [t for t in tables if t.kind == "saved"])
+    def _results_db(self) -> Path:
+        if self.results_db is None:
+            raise RuntimeError("This Catalog was built without a results database.")
+        return self.results_db
+
+    def lookup_text(self, name: str, sep: str) -> dict:
+        """A Lookup Table's rows as text for the edit dialog, header line first, separated by `sep` (a key
+        of `lookup_tables.SEPARATORS`). KeyError if `name` is not a Lookup Table."""
+        if not self._is_lookup(name):
+            raise KeyError(name)
+        name = name.lower()
+        return {"name": name, "text": lookup_tables.format_rows(lookup_tables.read_table(self._results_db(), name), sep)}
+
+
+class Catalog(CatalogView):
+    """The writer: the view's reads plus registration. Creates the registry tables if they are missing."""
+
+    def __init__(
+        self, app_db: Path, clock: Callable[[], int] = _now, default_retention_ms: int = DAY_MS,
+        telemetry_tables: Iterable[str] = (), results_db: Path | None = None,
+    ):
+        """`default_retention_ms` is the Retention a new Result Table is given."""
+        super().__init__(app_db, clock, telemetry_tables, results_db, _read_only=False)
+        self.default_retention_ms = default_retention_ms
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(self._connect()) as con, con:
+            con.executescript(SCHEMA)
+
+    def register(
+        self, name: str, conversation_id: str, turn_id: int, title: str = "", columns: list[dict] | None = None,
+        request: str = "", truncated_to: int | None = None,
+    ) -> None:
+        """Record a new Result Table made by `turn_id`, with the current default Retention."""
+        now = self._now()
+        with closing(self._connect()) as con, con:
+            con.execute(
+                "INSERT OR IGNORE INTO result_tables(name, conversation_id, turn_id, created_at, title, columns,"
+                " request, truncated_to, retention_ms) VALUES (?,?,?,?,?,?,?,?,?)",
+                (name, conversation_id, turn_id, now, title, json.dumps(columns or []), request, truncated_to,
+                 self.default_retention_ms),
+            )
+            con.execute("UPDATE conversations SET last_activity_at=? WHERE id=?", (now, conversation_id))
 
     def _drop_physical(self, names: Iterable[str]) -> None:
         names = list(names)
@@ -249,21 +303,6 @@ class Catalog:
         self._drop_physical(due)
         self._mark_expired(due)
 
-    # --- Lookup Tables: the registry, not the `lookup_` prefix, makes a table one (ADR 0003) ----------
-
-    def _is_lookup(self, name: str) -> bool:
-        with closing(self._connect()) as con:
-            return con.execute("SELECT 1 FROM lookup_tables WHERE name=?", (name.lower(),)).fetchone() is not None
-
-    def lookups(self) -> list[dict]:
-        """The Lookup Tables registry: name, created time, columns and row count, sorted by name."""
-        with closing(self._connect()) as con:
-            return [{**dict(r), "columns": json.loads(r["columns"])} for r in con.execute(
-                "SELECT name, created_at, columns, row_count FROM lookup_tables ORDER BY name")]
-
-    def lookup_names(self) -> list[str]:
-        return [t["name"] for t in self.lookups()]
-
     def _register_lookup(self, name: str, parsed: lookup_tables.ParsedRows) -> dict:
         # The registry is in the app database, a separate file, so it cannot join the results-database
         # transaction. A crash between the two leaves a table the registry does not describe (its row
@@ -274,11 +313,6 @@ class Catalog:
                 "ON CONFLICT(name) DO UPDATE SET columns=excluded.columns, row_count=excluded.row_count",
                 (name, self._now(), json.dumps(parsed.columns), len(parsed.rows)))
         return {"name": name, "row_count": len(parsed.rows), "columns": parsed.columns}
-
-    def _results_db(self) -> Path:
-        if self.results_db is None:
-            raise RuntimeError("This Catalog was built without a results database.")
-        return self.results_db
 
     def add_lookup(self, suffix: str, text: str, overwrite: bool = False) -> dict:
         """Create `lookup_<suffix>` (lower-cased) from pasted rows. A name another table already uses is
@@ -304,11 +338,3 @@ class Catalog:
         parsed = lookup_tables.parse_rows(text)
         lookup_tables.write_table(self._results_db(), name, parsed, replace=True)
         return self._register_lookup(name, parsed)
-
-    def lookup_text(self, name: str, sep: str) -> dict:
-        """A Lookup Table's rows as text for the edit dialog, header line first, separated by `sep` (a key
-        of `lookup_tables.SEPARATORS`). KeyError if `name` is not a Lookup Table."""
-        if not self._is_lookup(name):
-            raise KeyError(name)
-        name = name.lower()
-        return {"name": name, "text": lookup_tables.format_rows(lookup_tables.read_table(self._results_db(), name), sep)}

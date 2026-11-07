@@ -19,8 +19,8 @@ read and show any live Result Table, and read any Lookup Table.
 import functools
 import json
 import os
-import sqlite3
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,6 +28,7 @@ import anyio.to_thread
 from mcp.server.fastmcp import Context, FastMCP
 
 from flood_agent import logs, queries
+from flood_agent.catalog import CatalogView
 from flood_agent.mcp_protocol import META_MAX_RESULT_ROWS
 
 
@@ -40,6 +41,7 @@ class ServerSettings:
     app_db: Path | None
     query_timeout_s: float
     chart_row_cap: int
+    telemetry_tables: tuple[str, ...] = ()  # Telemetry Database table names, static, from the Semantic Layer
 
     def to_env(self) -> dict[str, str]:
         env = {
@@ -47,6 +49,7 @@ class ServerSettings:
             "RESULTS_DB": str(self.results_db),
             "QUERY_TIMEOUT_S": str(self.query_timeout_s),
             "CHART_ROW_CAP": str(self.chart_row_cap),
+            "TELEMETRY_TABLES": json.dumps(list(self.telemetry_tables)),
         }
         if self.app_db is not None:
             env["APP_DB"] = str(self.app_db)
@@ -60,7 +63,12 @@ class ServerSettings:
             app_db=Path(env["APP_DB"]) if env.get("APP_DB") else None,
             query_timeout_s=float(env["QUERY_TIMEOUT_S"]),
             chart_row_cap=int(env["CHART_ROW_CAP"]),
+            telemetry_tables=tuple(json.loads(env.get("TELEMETRY_TABLES", "[]"))),
         )
+
+
+def _wall_clock() -> int:
+    return int(time.time() * 1000)
 
 
 def _in_worker_thread(fn):
@@ -83,54 +91,16 @@ def _max_result_rows(ctx: Context) -> int:
     return value
 
 
-def _live_result_tables(app_db: Path | None) -> set[str]:
-    """Every Conversation's live Result Tables, read from the app database with a read-only query
-    (no DDL, no write lock)."""
-    if not app_db:
-        return set()
-    sql, args = "SELECT name FROM result_tables WHERE expired=0", ()
-    con = sqlite3.connect(f"file:{app_db}?mode=ro", uri=True, timeout=5)
-    try:
-        return {r[0] for r in con.execute(sql, args)}
-    finally:
-        con.close()
-
-
-def _lookup_tables(app_db: Path | None) -> set[str]:
-    """Registered Lookup Tables (registration, not the `lookup_` prefix, decides), read-only."""
-    if not app_db:
-        return set()
-    con = sqlite3.connect(f"file:{app_db}?mode=ro", uri=True, timeout=5)
-    try:
-        return {r[0] for r in con.execute("SELECT name FROM lookup_tables")}
-    finally:
-        con.close()
-
-
-def _readable_tables(app_db: Path | None) -> set[str]:
-    """Every table a query may read (ADR 0003): all live Result Tables, from any Conversation,
-    and every Lookup Table."""
-    return _live_result_tables(app_db) | _lookup_tables(app_db)
-
-
-def _table_kind(app_db: Path | None, name: str) -> str | None:
-    """The kind of a readable table (`lookup` or `result`), or None if there is no such readable table."""
-    wanted = name.lower()  # SQL table names ignore case
-    if wanted in {t.lower() for t in _lookup_tables(app_db)}:
-        return "lookup"
-    return "result" if wanted in {t.lower() for t in _live_result_tables(app_db)} else None
-
-
 LOOKUP_NOT_SHOWABLE = (
     "That is a Lookup Table, which cannot be shown directly. Query it with run_query to make a "
     "Result Table, then show that."
 )
 
 
-def _not_showable(app_db: Path | None, name: str) -> str:
+def _not_showable(catalog: CatalogView | None, name: str) -> str:
     """The error for a table show_table/show_chart cannot show. A Lookup Table gets guidance to
     query it; an expired table is reported exactly like one that does not exist."""
-    if name.lower() in {t.lower() for t in _lookup_tables(app_db)}:
+    if catalog is not None and catalog.kind_of(name) == "lookup":
         return LOOKUP_NOT_SHOWABLE
     return "Unknown Result Table."
 
@@ -236,9 +206,13 @@ def _spec_problem(node, fields: set[str], top: bool = True) -> str | None:
     return None
 
 
-def create_server(settings: ServerSettings) -> FastMCP:
-    """The MCP server with its tools bound to these static settings."""
+def create_server(settings: ServerSettings, clock: Callable[[], int] | None = None) -> FastMCP:
+    """The MCP server with its tools bound to these static settings. Tables are read through a read-only
+    Catalog view, whose liveness is worked out on every call from `clock` (epoch ms; the wall clock by default)."""
     mcp = FastMCP("flood-agent")
+    catalog = (
+        CatalogView(settings.app_db, clock or _wall_clock, settings.telemetry_tables) if settings.app_db else None
+    )
 
     @mcp.tool()
     @_in_worker_thread
@@ -246,7 +220,7 @@ def create_server(settings: ServerSettings) -> FastMCP:
         """Run a single read-only SELECT over the Telemetry Database. The output is stored in
         a new Result Table (named by the tool). Returns only Query Metadata, never rows."""
         # The SELECT may reference any live Result Table (ADR 0003).
-        allowed = _readable_tables(settings.app_db)
+        allowed = catalog.readable() if catalog else set()
         # A failed result may carry `raw_error`; the Agent strips it (keeping it for the Trace)
         # before anything is sent to the LLM.
         return json.dumps(
@@ -261,7 +235,7 @@ def create_server(settings: ServerSettings) -> FastMCP:
     def run_count_query(sql: str, ctx: Context) -> str:
         """Run a single read-only SELECT that returns one number, e.g. SELECT COUNT(*) FROM ...
         No Result Table is created; the count itself is returned to you and you may state it."""
-        allowed = _readable_tables(settings.app_db)
+        allowed = catalog.readable() if catalog else set()
         return json.dumps(
             queries.run_count_query(settings.telemetry_db, settings.results_db, sql, settings.query_timeout_s, allowed)
         )
@@ -272,7 +246,8 @@ def create_server(settings: ServerSettings) -> FastMCP:
         """Describe a table the user names: its kind, column names and types, and row count. Works
         for any live table from any chat, not only those listed in your prompt. Never returns
         rows. Query it by name with run_query."""
-        kind = _table_kind(settings.app_db, name)
+        kind = catalog.kind_of(name) if catalog else None
+        kind = kind if kind in ("lookup", "result", "saved") else None
         described = queries.describe_results_table(settings.results_db, name) if kind else None
         if described is None:
             return json.dumps({"success": False, "error": "No such table."})
@@ -284,10 +259,10 @@ def create_server(settings: ServerSettings) -> FastMCP:
         """Show a live Result Table, from any chat, to the user as a table Display. You
         will not see the rows."""
         # Any live Result Table may be shown (ADR 0003).
-        live = result_table in _live_result_tables(settings.app_db)
+        live = catalog is not None and result_table in catalog
         available = queries.result_table_columns(settings.results_db, result_table) if live else None
         if available is None:
-            return json.dumps({"success": False, "error": _not_showable(settings.app_db, result_table)})
+            return json.dumps({"success": False, "error": _not_showable(catalog, result_table)})
         if columns is not None and not set(columns) <= set(available):
             return json.dumps({"success": False, "error": "Unknown column requested."})
         display = {"kind": "table", "result_table": result_table, "columns": columns or available}
@@ -305,10 +280,10 @@ def create_server(settings: ServerSettings) -> FastMCP:
         table = data.get("name") if isinstance(data, dict) else None
         if not isinstance(table, str):
             return json.dumps({"success": False, "error": "Missing data source. " + CHART_GUIDANCE})
-        live = table in _live_result_tables(settings.app_db)
+        live = catalog is not None and table in catalog
         count = queries.result_table_row_count(settings.results_db, table) if live else None
         if count is None:
-            return json.dumps({"success": False, "error": f"{_not_showable(settings.app_db, table)} {CHART_GUIDANCE}"})
+            return json.dumps({"success": False, "error": f"{_not_showable(catalog, table)} {CHART_GUIDANCE}"})
         violation = _find_violation(vega_lite_spec, table)
         if violation:
             return json.dumps({"success": False, "error": violation})

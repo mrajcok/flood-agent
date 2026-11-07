@@ -87,3 +87,44 @@ async def test_incomplete_tool_call_arguments_raise():
 async def test_malformed_chunk_raises():
     with pytest.raises(LLMError):
         await chunks(client_for(sse("{not json", done=False)))
+
+
+# --- prompt caching: extra body fields chosen by model-ID prefix ---
+
+OK = sse({"choices": [{"delta": {"content": "hi"}, "finish_reason": "stop"}]})
+
+
+def test_claude_models_need_a_top_level_ephemeral_cache_control():
+    from flood_agent.llm import caching_fields
+
+    assert caching_fields("anthropic/claude-sonnet-5.5") == {"cache_control": {"type": "ephemeral"}}
+
+
+def test_models_that_cache_automatically_need_no_extra_fields():
+    from flood_agent.llm import caching_fields
+
+    assert caching_fields("deepseek/deepseek-v4") == {}
+
+
+async def request_body(model, reasoning=None):
+    seen: list = []
+
+    def handler(request: httpx.Request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, text=OK, headers={"content-type": "text/event-stream"})
+
+    c = OpenRouterClient("k", model, transport=httpx.MockTransport(handler))
+    [x async for x in c.stream_chat([{"role": "user", "content": "hi"}], [], reasoning=reasoning)]
+    return seen[0]
+
+
+async def test_a_claude_request_body_carries_cache_control_and_keeps_reasoning():
+    body = await request_body("anthropic/claude-sonnet-5.5", {"effort": "low"})
+
+    assert body["cache_control"] == {"type": "ephemeral"}
+    assert body["reasoning"] == {"effort": "low"}
+
+
+@pytest.mark.parametrize("model", ["deepseek/deepseek-v4", "z-ai/glm-5.3", "qwen/qwen3-max"])
+async def test_other_models_send_no_cache_control(model):
+    assert "cache_control" not in await request_body(model)

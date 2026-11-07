@@ -486,7 +486,8 @@ class Agent:
         return queries.fetch_records(self.config.results_db, result_table, self.config.chart_row_cap)
 
     async def run_turn(
-        self, conversation: Conversation, user_message: str, max_result_rows: int, model: str | None = None
+        self, conversation: Conversation, user_message: str, max_result_rows: int, model: str | None = None,
+        effort: str | None = None,
     ) -> AsyncIterator[Event]:
         """Run one turn on the Agent's MCP connection (`start()` first).
 
@@ -494,11 +495,12 @@ class Agent:
         producer is cancelled and awaited; the MCP server keeps running.
 
         `max_result_rows` is the row cap for this turn's queries; the user chooses it in the UI.
-        `model` is the Model Choice for this turn (an id the client factory knows); the default model when None."""
+        `model` is the Model Choice for this turn (an id the client factory knows); the default model when None.
+        `effort` is the Effort level the user picked; it reaches the provider only when it is not the model's default."""
         if self._connection is None:
             raise RuntimeError("Agent not started: call `await agent.start()` or use `async with agent`")
         queue = _TurnQueue()
-        task = asyncio.create_task(self._produce(conversation, user_message, queue, max_result_rows, model or self.config.model))
+        task = asyncio.create_task(self._produce(conversation, user_message, queue, max_result_rows, model or self.config.model, effort))
         self._turn_tasks.add(task)
         task.add_done_callback(self._turn_tasks.discard)
         finished = False
@@ -518,10 +520,11 @@ class Agent:
             await asyncio.gather(task, return_exceptions=True)
 
     async def _produce(
-        self, conversation: Conversation, user_message: str, queue: _TurnQueue, max_result_rows: int, model: str
+        self, conversation: Conversation, user_message: str, queue: _TurnQueue, max_result_rows: int, model: str,
+        effort: str | None = None,
     ):
         try:
-            await self._run(conversation, user_message, queue, max_result_rows, model)
+            await self._run(conversation, user_message, queue, max_result_rows, model, effort)
             await queue.put(TurnEnd())
         except asyncio.CancelledError:
             raise
@@ -529,7 +532,8 @@ class Agent:
             await queue.put(e)
 
     async def _run(
-        self, conversation: Conversation, user_message: str, queue: _TurnQueue, max_result_rows: int, model: str
+        self, conversation: Conversation, user_message: str, queue: _TurnQueue, max_result_rows: int, model: str,
+        effort: str | None = None,
     ):
         self.sweep_expired()
         if conversation.id is None:
@@ -538,7 +542,7 @@ class Agent:
         self._record(conversation, turn_id, {"role": "user", "content": user_message})
         trace = TraceBuilder(model)
         try:
-            await self._converse(conversation, turn_id, user_message, trace, queue, max_result_rows, model)
+            await self._converse(conversation, turn_id, user_message, trace, queue, max_result_rows, model, effort)
         except asyncio.CancelledError:
             self.store.save_trace(turn_id, trace.finish())
             raise
@@ -563,9 +567,12 @@ class Agent:
 
     async def _converse(
         self, conversation, turn_id, user_message, trace: TraceBuilder, queue: _TurnQueue, max_result_rows: int,
-        model: str,
+        model: str, effort: str | None = None,
     ):
         llm = self.client_for(model)
+        spec = next((m for m in self.config.models if m.id == model), None)
+        # Only a non-default Effort is sent; the default sends nothing extra.
+        extra = {"reasoning": {"effort": effort}} if effort and spec and effort != spec.default_effort else {}
         connection = await self._ensure_connection()
         tools = connection.tools
         failed_attempts = 0
@@ -575,7 +582,7 @@ class Agent:
             messages += conversation.messages
             text, calls, usage = "", [], None
             step_started = time.monotonic()
-            async for chunk in llm.stream_chat(messages, tools):
+            async for chunk in llm.stream_chat(messages, tools, **extra):
                 if isinstance(chunk, TextChunk):
                     # Each step's text is a new paragraph on the page, as it is when the turn is reloaded.
                     shown = chunk.text if text or not chunk.text else queue.paragraph_break() + chunk.text

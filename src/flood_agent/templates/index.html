@@ -199,9 +199,15 @@
     .live-trace pre { white-space: pre-wrap; word-break: break-word; background: #f6f6f6; padding: .4rem; margin: .2rem 0; }
     .live-trace h4 { margin: .6rem 0 .2rem; }
     form { display: flex; gap: .5rem; margin-top: 1rem; }
-    .canned { display: none; gap: .5rem; margin-top: .5rem; font-size: .9rem; }
-    .canned select { flex: 1; min-width: 0; padding: .35rem; font: inherit; }
-    body[data-model={{ no_model }}] .canned { display: flex; }  /* Canned Prompts show only under "No model" */
+    .canned { display: none; position: relative; margin-top: .5rem; font-size: .9rem; }
+    body[data-model={{ no_model }}] .canned { display: block; }  /* Canned Prompts show only under "No model" */
+    .canned input { width: 100%; box-sizing: border-box; font: inherit; padding: .45rem .6rem; border: 1px solid #cfd5e2; border-radius: .6rem; }
+    .canned ul { position: absolute; left: 0; right: 0; bottom: calc(100% + .3rem); margin: 0; padding: .3rem; list-style: none; max-height: 50vh; overflow: auto;
+                 background: #fff; border: 1px solid #cfd5e2; border-radius: .8rem; box-shadow: 0 8px 24px rgba(30,40,80,.18); z-index: 10; }
+    .canned li { padding: .35rem .6rem; border-radius: .5rem; cursor: pointer; }
+    .canned li.on { background: #e9eefb; }
+    .canned li.follow { padding-left: 1.6rem; }
+    .canned .fails { color: #a40; font-size: .8em; }
     .refusal { margin: .4rem 0; padding: .4rem .6rem; border-left: 4px solid #b00; background: #fdecec; font-size: .9rem; }
     .chat-box { flex: 1; position: relative; display: flex; }
     textarea[name=message] { flex: 1; box-sizing: border-box; padding: .5rem 2.4rem .5rem .5rem; font: inherit; line-height: 1.4;
@@ -241,9 +247,6 @@
   {% set prompt_hint = "Write a prompt to analyze Flood data (Shift-Enter for newline, Esc-Esc to clear)" %}
   {% set canned_hint = "No model is selected: choose one of the canned prompts below" %}
   {% set starts_canned = picker and default_model == no_model %}
-  {% macro entry(c, indent="") %}
-  <option value="{{ c.prompt }}">{{ indent }}{{ c.prompt }}{% if c.fails_on_purpose %} (fails on purpose){% endif %}</option>
-  {% endmacro %}
   <div class="topbar">
     <h1>Flood Agent</h1>
     <div class="controls">
@@ -308,18 +311,26 @@
     </div>
   </form>
   {% if picker %}
-  <div class="canned">
-    <select id="canned-select" name="message" aria-label="Canned prompts">
-      <option value="" selected>Canned prompts (no model is called)</option>
-      {% for c in picker %}
-      {{ entry(c) }}
-      {% for f in c.follow_ups %}{{ entry(f, "   ↳ ") }}{% endfor %}
-      {% endfor %}
-    </select>
-    <button type="button" hx-post="/chat" hx-include="#conversation_id, #max_rows, #canned-select" hx-vals='{{ {"model": no_model} | tojson }}'
-            hx-target="#chat" hx-swap="beforeend"
-            hx-on::before-request="if (!document.getElementById('canned-select').value) event.preventDefault()"
-            hx-on::after-request="document.getElementById('canned-select').selectedIndex = 0">Send</button>
+  {% set canned_items = [] %}
+  {% for c in picker %}{% set _ = canned_items.append({"prompt": c.prompt, "fails": c.fails_on_purpose, "follow": false}) %}{% for f in c.follow_ups %}{% set _ = canned_items.append({"prompt": f.prompt, "fails": f.fails_on_purpose, "follow": true}) %}{% endfor %}{% endfor %}
+  <div class="canned" @click.outside="$data.open = false"
+       x-data="{ items: {{ canned_items | tojson | forceescape }}, open: false, query: '', active: 0,
+                 get shown() { const q = this.query.trim().toLowerCase(); return this.items.filter(c => c.prompt.toLowerCase().includes(q)); },
+                 send(prompt) {
+                   /* Always a No model prompt, whichever model is selected. */
+                   this.open = false; this.query = '';
+                   htmx.ajax('POST', '/chat', { target: '#chat', swap: 'beforeend', values: {
+                     message: prompt, model: {{ no_model | tojson | forceescape }},
+                     conversation_id: document.getElementById('conversation_id').value, max_rows: document.getElementById('max_rows').value } });
+                 } }">
+    <ul x-show="open && shown.length" x-cloak role="listbox" aria-label="Canned prompts">
+      <template x-for="(c, i) in shown" :key="c.prompt"><li role="option" :class="{ on: i === active, follow: c.follow }" @mouseenter="active = i" @click="send(c.prompt)">
+        <span x-text="c.prompt"></span> <small class="fails" x-show="c.fails">fails on purpose</small></li></template>
+    </ul>
+    <input type="text" x-model="query" placeholder="Click to see a list or type to find a canned prompt and Enter to send" aria-label="Find a canned prompt" autocomplete="off"
+           @focus="open = true; active = 0" @click="open = true" @input="open = true; active = 0"
+           @keydown.arrow-down.prevent="open = true; active = Math.min(active + 1, shown.length - 1)" @keydown.arrow-up.prevent="active = Math.max(active - 1, 0)"
+           @keydown.enter.prevent="shown[active] && send(shown[active].prompt)" @keydown.escape="open = false">
   </div>
   {% endif %}
   <div class="strip" x-data="{ choice: '10000', custom: '', open: false, options: ['10', '100', '1000', '10000', '100000', '1000000'],

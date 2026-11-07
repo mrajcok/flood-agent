@@ -3,6 +3,7 @@
 import json
 import re
 import sqlite3
+from html import unescape
 
 import pytest
 from conftest import all_telemetry_values, collect, text_of
@@ -148,8 +149,8 @@ def test_page_lists_canned_prompts_that_always_send_a_no_model_prompt_and_has_no
 
     assert "Fake Mode" not in html and 'class="badge"' not in html
     assert CANNED[0].prompt in html
-    assert html.count("<option value=") == len(CANNED) + 1  # every Canned Prompt, plus the placeholder
-    assert html.count('"model": "no-model"') == 1  # the drop-down sends them all as No model
+    assert html.count("&#34;prompt&#34;:") == len(CANNED)  # every Canned Prompt is in the list
+    assert html.count("&#34;no-model&#34;") >= 1  # the list sends them all as No model
 
 
 def test_page_without_canned_prompts_has_no_list(build_agent, web_client):
@@ -271,31 +272,33 @@ def test_a_dangling_after_is_a_load_error(tmp_path):
         load_canned_prompts(path)
 
 
-def test_picker_indents_follow_ups_under_their_parent(build_agent, web_client):
+def picker_items(html):
+    """The Canned Prompts list the page hands its picker, in order."""
+    raw = re.search(r"x-data=\"\{ items: (\[.*?\]), open", html, re.S).group(1)
+    return json.loads(unescape(raw))
+
+
+def test_picker_lists_follow_ups_right_after_their_parent(build_agent, web_client):
     follow_up = next(c for c in CANNED if c.after)
     parent = parent_of(follow_up, CANNED)
     assert parent
     client = web_client(build_agent(fake_client()), picker=PICKER)
 
-    html = client.get("/").text
+    items = picker_items(client.get("/").text)
 
-    assert html.count("↳") == sum(1 for c in CANNED if c.after)  # each follow-up is marked with an arrow
-    parent_at = html.index(f'<option value="{parent.prompt}"')
-    assert parent_at < html.index("↳")
+    assert sum(i["follow"] for i in items) == sum(1 for c in CANNED if c.after)
+    prompts = [i["prompt"] for i in items]
+    assert prompts.index(follow_up.prompt) > prompts.index(parent.prompt)
+    assert next(i for i in items if i["prompt"] == follow_up.prompt)["follow"]
 
 
 def test_picker_marks_prompts_that_fail_on_purpose(build_agent, web_client):
-    html = web_client(build_agent(fake_client()), picker=PICKER).get("/").text
+    client = web_client(build_agent(fake_client()), picker=PICKER)
 
-    marked = [c for c in CANNED if c.fails_on_purpose]
+    marked = {i["prompt"] for i in picker_items(client.get("/").text) if i["fails"]}
+
+    assert marked == {c.prompt for c in CANNED if c.fails_on_purpose}
     assert marked and len(marked) < len(CANNED)
-    assert html.count("fails on purpose") == len(marked)
-
-    def row(c):
-        return html.split(c.prompt, 1)[1].split("</option>", 1)[0]
-
-    assert all("fails on purpose" in row(c) for c in marked)
-    assert not any("fails on purpose" in row(c) for c in CANNED if not c.fails_on_purpose)
 
 
 async def test_the_total_flow_count_prompt_uses_run_count_query_and_makes_no_result_table(make_agent):

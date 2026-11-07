@@ -13,7 +13,8 @@ from flood_agent.llm import TextChunk
 CANNED = load_canned_prompts()
 FIRST = CANNED[0].prompt
 TRIGGER = "button[title='Model for the next prompt']"
-PICKER = "select[aria-label='Canned prompts']"
+PICKER = "input[aria-label='Find a canned prompt']"
+LIST = "[role=listbox][aria-label='Canned prompts']"
 
 
 def choose(page, label):
@@ -53,15 +54,38 @@ def test_canned_prompts_show_only_while_no_model_is_selected(live_page):
     expect(box).to_have_attribute("placeholder", re.compile("^Write a prompt"))
 
 
+def test_the_canned_prompt_list_opens_on_click_filters_as_you_type_and_sends_on_enter(live_page):
+    page = live_page(has_api_key=False, picker=picker_entries(CANNED))
+    find = page.locator(PICKER)
+    expect(find).to_have_attribute("placeholder", "Click to see a list or type to find a canned prompt and Enter to send")
+    expect(page.locator(LIST)).to_be_hidden()
+
+    find.click()
+    expect(page.get_by_role("option")).to_have_count(len(CANNED))
+
+    find.fill(FIRST[:12].upper())  # matching ignores case
+    options = page.get_by_role("option")
+    assert 1 <= options.count() < len(CANNED)
+    expect(options.first).to_contain_text(FIRST)
+
+    find.press("Enter")  # sends the highlighted prompt
+    expect(page.locator("#chat")).to_contain_text(FIRST)
+    expect(page.locator(LIST)).to_be_hidden()
+
+    find.click()
+    page.locator("h1").click()  # clicking elsewhere closes the list
+    expect(page.locator(LIST)).to_be_hidden()
+
+
 def test_a_canned_prompt_sends_a_fake_prompt_even_with_a_real_model_selected(build_agent, live_page):
     real = ScriptedLLM()
     page = live_page(agent=agent_with_fake_and_real(build_agent, real), picker=picker_entries(CANNED))
     choose(page, "No model")
-    page.locator(PICKER).select_option(FIRST)  # visible only under No model
-    expect(page.locator("#chat")).not_to_contain_text("No model")  # choosing does not send; Send does
-    page.get_by_role("button", name="Send", exact=True).click()
+    page.locator(PICKER).click()  # visible only under No model
+    page.get_by_role("option", name=FIRST).click()  # choosing one sends it
     expect(page.locator("#chat")).to_contain_text("No model")
-    expect(page.locator(PICKER)).to_have_value("")  # back to its placeholder, ready for the next one
+    expect(page.locator(PICKER)).to_have_value("")  # ready for the next one
+    expect(page.locator(LIST)).to_be_hidden()
     choose(page, "Claude Opus 5.5")
     expect(page.locator(PICKER)).to_be_hidden()
     assert real.calls == []

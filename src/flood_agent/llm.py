@@ -52,8 +52,9 @@ Chunk = TextChunk | ToolCallChunk | UsageChunk
 
 
 class LLMClient(Protocol):
-    def stream_chat(self, messages: list[dict], tools: list[dict]) -> AsyncIterator[Chunk]: ...
-    # A client that takes `reasoning=` (OpenRouterClient) gets it only when the user picked a non-default Effort.
+    def stream_chat(self, messages: list[dict], tools: list[dict], reasoning: dict | None = None,
+                    session_id: str | None = None) -> AsyncIterator[Chunk]: ...
+    # `reasoning` is set only when the user picked a non-default Effort; `session_id` names the conversation.
 
 
 class LLMError(Exception):

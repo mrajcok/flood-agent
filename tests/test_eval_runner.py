@@ -122,7 +122,7 @@ async def test_usage_meter_totals_cached_tokens():
     from flood_agent.llm import UsageChunk
 
     class Inner:
-        async def stream_chat(self, messages, tools):
+        async def stream_chat(self, messages, tools, reasoning=None, session_id=None):
             yield UsageChunk(100, 20, 0.001, cached_tokens=80)
             yield UsageChunk(100, 20, 0.001, cache_write_tokens=30)
 

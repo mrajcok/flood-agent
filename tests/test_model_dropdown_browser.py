@@ -91,7 +91,7 @@ class GatedLLM:
     def __init__(self, gate: threading.Event):
         self.gate = gate
 
-    async def stream_chat(self, messages, tools, **extra):
+    async def stream_chat(self, messages, tools, reasoning: dict | None = None, session_id: str | None = None):
         while not self.gate.is_set():
             await asyncio.sleep(0.02)
         yield TextChunk("hi")

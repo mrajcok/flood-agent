@@ -69,10 +69,16 @@ def caching_fields(model: str, session_id: str | None = None) -> dict:
     """Extra request-body fields a model needs for prompt caching, keyed on model-ID prefix.
     Claude only caches when the request carries cache_control. Claude, GPT-5.6, Qwen and GLM hit
     more often when OpenRouter can route a conversation to one endpoint by `session_id`;
-    DeepSeek caches on every endpoint, so it is harmless there."""
+    DeepSeek caches on every endpoint, so it is harmless there.
+
+    Claude also prefers Anthropic's own endpoint. Measured on OpenRouter (#65): Google Vertex cannot
+    read a cache entry written a few seconds earlier, so every step of a tool-call turn re-pays the whole
+    prompt; Anthropic's endpoint reads it at once, about 13 times cheaper. It is a preference, not a pin:
+    fallbacks stay on, so an account that does not allow Anthropic gets an uncached answer, not an error."""
     fields: dict = {}
     if model.startswith("anthropic/"):
         fields["cache_control"] = {"type": "ephemeral"}
+        fields["provider"] = {"order": ["anthropic"]}
     if session_id and model.startswith(SESSION_ID_PREFIXES):
         fields["session_id"] = session_id
     return fields

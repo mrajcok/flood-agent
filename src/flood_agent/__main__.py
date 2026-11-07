@@ -27,8 +27,7 @@ def build_app(settings: Settings | None = None):
     config = settings.agent_config()
     config.results_db.parent.mkdir(parents=True, exist_ok=True)
     picker = picker_entries(load_canned_prompts())
-    # llm_backend="fake" (removed in #60) still means: no real model can be chosen.
-    has_api_key = settings.openrouter_api_key is not None and settings.llm_backend != "fake"
+    has_api_key = settings.openrouter_api_key is not None
     return create_app(Agent(config, settings.client_factory()), picker=picker, has_api_key=has_api_key)
 
 

@@ -75,7 +75,7 @@ def test_one_conversation_mixes_fake_and_real_turns_each_trace_showing_its_model
     choose(page, "No model")
     box.fill("anything")
     box.press("Enter")
-    expect(page.locator("#chat")).to_contain_text("no LLM is running")
+    expect(page.locator("#chat")).to_contain_text("no language model is involved")
     expect(meter).to_contain_text("no context used")
 
     choose(page, "Claude Opus 5.5")

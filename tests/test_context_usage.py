@@ -64,19 +64,19 @@ def meter(html):
 
 def test_a_new_page_shows_zero_used(build_agent, web_client):
     page = web_client(build_agent(ScriptedLLM())).get("/").text
-    assert "0 of 1M" in meter(page).group(1)
+    assert "0 of 1.05M" in meter(page).group(1)
 
 
 def test_a_reopened_conversation_shows_its_latest_calls_prompt_tokens(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM([tool_call("run_query", sql="SELECT 1 AS x", title="t")], [TextChunk("ok")])))
     cid, _ = ask(client, "hello")
-    assert "100 of 1M" in meter(client.get(f"/c/{cid}").text).group(1)  # ScriptedLLM reports 100 prompt tokens
+    assert "100 of 1.05M" in meter(client.get(f"/c/{cid}").text).group(1)  # ScriptedLLM reports 100 prompt tokens
 
 
 def test_the_stream_refreshes_the_meter_in_place_when_the_turn_ends(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
     _, body = ask(client, "hello")
-    assert 'id="context-meter"' in body and 'hx-swap-oob="true"' in body and "100 of 1M" in body
+    assert 'id="context-meter"' in body and 'hx-swap-oob="true"' in body and "100 of 1.05M" in body
 
 
 def test_fake_mode_has_no_context_window(build_agent, web_client):

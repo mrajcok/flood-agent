@@ -41,7 +41,7 @@ async def test_success_turn_trace_has_every_item(make_agent):
     )
     agent, trace = await run(make_agent, llm)
 
-    assert trace["model"] == "test/model"
+    assert trace["model"] == "z-ai/glm-5.3"
     assert trace["system_prompt"] == llm.calls[0][0]["content"]
     assert "# Semantic Layer" in trace["system_prompt"]
 
@@ -114,7 +114,7 @@ async def test_trace_never_reaches_the_llm(make_agent):
     executed = of_kind(trace, "tool_call")[1]["executed_sql"]
 
     follow = ScriptedLLM([TextChunk("fine")])
-    agent.llm = follow
+    agent.client_for = lambda model: follow
     await collect(agent, "second", agent.open_conversation(conv.id))
     sent = llm.all_sent_text() + follow.all_sent_text()
     for secret in [raw, executed, "executed_sql", "raw_error", "prompt_tokens", "duration_ms", "query_metadata"]:
@@ -140,7 +140,7 @@ def test_trace_is_collapsed_details_in_stream_and_after_restart(build_agent, web
     assert page.count('class="trace"') == 1
     assert page.count('class="trace-part"') >= 3
     assert '<details class="trace-part" open><summary>Result Tables' in page
-    assert "CREATE TABLE results." in page and "test/model" in page
+    assert "CREATE TABLE results." in page and "z-ai/glm-5.3" in page
 
 
 def test_trace_content_is_html_escaped(build_agent, web_client):

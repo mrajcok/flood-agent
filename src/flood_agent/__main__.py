@@ -28,7 +28,8 @@ def build_app(settings: Settings | None = None):
     config = settings.agent_config(backend.model)
     config.results_db.parent.mkdir(parents=True, exist_ok=True)
     picker = picker_entries(backend.canned_prompts or [])
-    return create_app(Agent(config, backend.client), picker=picker, fake_mode=backend.fake_mode)
+    has_api_key = settings.openrouter_api_key is not None
+    return create_app(Agent(config, backend.client_for), picker=picker, fake_mode=backend.fake_mode, has_api_key=has_api_key)
 
 
 if __name__ == "__main__":

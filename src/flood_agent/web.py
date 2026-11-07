@@ -70,8 +70,14 @@ def _table_display_urls(result_table: str) -> dict:
     return {"rows_url": f"{base}/rows", "psv_url": f"{base}/psv", "settings_url": f"{base}/settings"}
 
 
-def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode: bool = False) -> FastAPI:
-    """In Fake Mode the page shows a badge and the `picker` list of prompts."""
+NEEDS_KEY = "needs OPENROUTER_API_KEY"
+
+
+def create_app(
+    agent: Agent, picker: list[PickerEntry] | None = None, fake_mode: bool = False, has_api_key: bool = True
+) -> FastAPI:
+    """In Fake Mode the page shows a badge and the `picker` list of prompts and has no Model dropdown.
+    Otherwise the Model dropdown lists the curated models, disabled when `has_api_key` is False."""
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # One long-lived MCP server for the app; a server that can't start fails app startup.
@@ -86,7 +92,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
         return JSONResponse({"detail": "This result has expired and been deleted. Ask again to regenerate it."}, 410)
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-    pending: dict[str, tuple[Conversation, str, int]] = {}
+    pending: dict[str, tuple[Conversation, str, int, str]] = {}
 
     def sidebar(current: str | None) -> dict:
         return {
@@ -94,10 +100,30 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
             "fake_mode": fake_mode, "picker": picker or [],
         }
 
-    context_window = 0 if fake_mode else agent.config.context_window  # Fake Mode has no model, so no window
+    models = [{"id": m.id, "label": m.label, "disabled": not has_api_key} for m in agent.config.models]
+    default_model = agent.config.model
 
-    def meter(tokens: int | None) -> dict:
-        return {"context": context_usage(tokens, context_window), "model": "No model (Fake Mode)" if fake_mode else agent.config.model}
+    def meter(tokens: int | None, model: str | None = None) -> dict:
+        """The Context Usage meter for `model` (the default when None); Fake Mode has no model, so no window."""
+        window = 0 if fake_mode else agent.config.window_of(model or default_model)
+        return {"context": context_usage(tokens, window), "model": "No model (Fake Mode)" if fake_mode else None}
+
+    def latest_tokens(conversation_id: str | None) -> int | None:
+        if not conversation_id or not agent.store.exists(conversation_id):
+            return None
+        traces = [i["trace"] for i in agent.store.transcript(conversation_id) if i["type"] == "trace"]
+        return context_tokens(traces[-1]) if traces else None
+
+    def model_choice(raw: str | None) -> str:
+        """The model a prompt asked for, checked against the curated list and the API key (422 otherwise)."""
+        if fake_mode:
+            return default_model  # the Fake Mode backend answers every prompt
+        choice = default_model if raw is None else raw
+        if choice not in {m["id"] for m in models}:
+            raise HTTPException(422, f"unknown model {choice!r}")
+        if not has_api_key:
+            raise HTTPException(422, f"{choice} {NEEDS_KEY}: set it in .env and restart the app")
+        return choice
 
     def history(conversation_id: str) -> list[dict]:
         items = []
@@ -126,9 +152,19 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
                     items.append({"type": m["role"], "text": m["content"], "turn_id": item["turn_id"]})
         return items
 
+    def model_picker() -> dict:
+        return {"models": models, "default_model": default_model, "needs_key": NEEDS_KEY}
+
+    @app.get("/context-meter", response_class=HTMLResponse)
+    def context_meter(model: str, conversation_id: str = ""):
+        """The meter for the model selected for the next prompt (the Conversation's tokens, that model's window)."""
+        if not fake_mode and model not in {m["id"] for m in models}:
+            raise HTTPException(422, f"unknown model {model!r}")
+        return TEMPLATES.get_template("context_meter.html").render(**meter(latest_tokens(conversation_id), model))
+
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request):
-        return TEMPLATES.TemplateResponse(request, "index.html", {**sidebar(None), **meter(None), "items": []})
+        return TEMPLATES.TemplateResponse(request, "index.html", {**sidebar(None), **meter(None), **model_picker(), "items": []})
 
     @app.get("/c/{conversation_id}", response_class=HTMLResponse)
     def open_conversation(request: Request, conversation_id: str):
@@ -139,7 +175,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
         return TEMPLATES.TemplateResponse(
             request, "index.html",
             {**sidebar(conversation_id), **meter(context_tokens(traces[-1]) if traces else None),
-             "items": items, "current_id": conversation_id},
+             **model_picker(), "items": items, "current_id": conversation_id},
         )
 
     @app.get("/c/{conversation_id}/delete-preview")
@@ -239,8 +275,10 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
         return agent.list_tables()
 
     @app.post("/chat", response_class=HTMLResponse)
-    def chat(request: Request, message: str = Form(...), conversation_id: str = Form(""), max_rows: str = Form(...)):
+    def chat(request: Request, message: str = Form(...), conversation_id: str = Form(""), max_rows: str = Form(...),
+             model: str | None = Form(None)):
         max_result_rows = _parse_max_rows(max_rows)
+        chosen_model = model_choice(model)
         if conversation_id:
             try:
                 conversation = agent.open_conversation(conversation_id)
@@ -249,7 +287,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
         else:
             conversation = Conversation()
         turn_id = uuid.uuid4().hex
-        pending[turn_id] = (conversation, message, max_result_rows)
+        pending[turn_id] = (conversation, message, max_result_rows, chosen_model)
         if conversation.id is None:  # persist now so the sidebar and form can reference it
             conversation.id = agent.store.create_conversation()
         return TEMPLATES.TemplateResponse(
@@ -262,11 +300,11 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
         entry = pending.pop(turn_id, None)
         if entry is None:
             raise HTTPException(404)
-        conversation, message, max_result_rows = entry
+        conversation, message, max_result_rows, chosen_model = entry
 
         async def events():
             try:
-                async for ev in agent.run_turn(conversation, message, max_result_rows):
+                async for ev in agent.run_turn(conversation, message, max_result_rows, chosen_model):
                     if isinstance(ev, TextDelta):
                         yield _sse("text", f'<span class="md-delta">{escape(ev.text)}</span>')  # markdown.js renders it
                     elif isinstance(ev, DisplayEvent) and ev.kind == "chart":
@@ -290,7 +328,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, fake_mode:
                         trace_html = TEMPLATES.get_template("trace.html").render(trace=ev.trace)
                         # The meter under the prompt box refreshes in place (hx-swap-oob).
                         meter_html = TEMPLATES.get_template("context_meter.html").render(
-                            oob=True, **meter(context_tokens(ev.trace)))
+                            oob=True, **meter(context_tokens(ev.trace), ev.trace["model"]))
                         yield _sse("trace", trace_html + meter_html)
                     elif isinstance(ev, TurnEnd):
                         break

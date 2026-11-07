@@ -29,9 +29,9 @@ class Recorder:
     def __init__(self, inner):
         self.inner, self.calls = inner, []
 
-    def stream_chat(self, messages, tools):
+    def stream_chat(self, messages, tools, reasoning: dict | None = None, session_id: str | None = None):
         self.calls.append(json.dumps(messages))
-        return self.inner.stream_chat(messages, tools)
+        return self.inner.stream_chat(messages, tools, reasoning=reasoning, session_id=session_id)
 
 
 async def test_the_too_many_rows_prompt_shows_a_table_truncated_to_the_row_cap(make_agent):

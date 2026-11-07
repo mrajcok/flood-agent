@@ -117,6 +117,22 @@ async def test_cost_and_tokens_come_from_client_usage(telemetry_db, semantic_lay
     assert r.cost == pytest.approx(0.0024) and r.prompt_tokens == 200 and r.completion_tokens == 40
 
 
+async def test_usage_meter_totals_cached_tokens():
+    from flood_agent.evalset.client import UsageMeter
+    from flood_agent.llm import UsageChunk
+
+    class Inner:
+        async def stream_chat(self, messages, tools, reasoning=None, session_id=None):
+            yield UsageChunk(100, 20, 0.001, cached_tokens=80)
+            yield UsageChunk(100, 20, 0.001, cache_write_tokens=30)
+
+    meter = UsageMeter(Inner())
+    async for _ in meter.stream_chat([], []):
+        pass
+    assert meter.usage["cached_tokens"] == 80
+    assert meter.usage["cache_write_tokens"] == 30
+
+
 async def test_client_exception_is_recorded_not_raised(telemetry_db, semantic_layer_path, tmp_path):
     def boom(messages):
         raise RuntimeError("HTTP 500")

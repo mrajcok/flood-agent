@@ -44,19 +44,38 @@ class UsageChunk:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cost: float | None = None
+    cached_tokens: int = 0
+    cache_write_tokens: int = 0
 
 
 Chunk = TextChunk | ToolCallChunk | UsageChunk
 
 
 class LLMClient(Protocol):
-    def stream_chat(self, messages: list[dict], tools: list[dict]) -> AsyncIterator[Chunk]: ...
-    # A client that takes `reasoning=` (OpenRouterClient) gets it only when the user picked a non-default Effort.
+    def stream_chat(self, messages: list[dict], tools: list[dict], reasoning: dict | None = None,
+                    session_id: str | None = None) -> AsyncIterator[Chunk]: ...
+    # `reasoning` is set only when the user picked a non-default Effort; `session_id` names the conversation.
 
 
 class LLMError(Exception):
     """The provider reported an error, or the response stream was cut short or malformed.
     The message is safe to show the user."""
+
+
+SESSION_ID_PREFIXES = ("anthropic/", "openai/", "qwen/", "deepseek/", "z-ai/")
+
+
+def caching_fields(model: str, session_id: str | None = None) -> dict:
+    """Extra request-body fields a model needs for prompt caching, keyed on model-ID prefix.
+    Claude only caches when the request carries cache_control. Claude, GPT-5.6, Qwen and GLM hit
+    more often when OpenRouter can route a conversation to one endpoint by `session_id`;
+    DeepSeek caches on every endpoint, so it is harmless there."""
+    fields: dict = {}
+    if model.startswith("anthropic/"):
+        fields["cache_control"] = {"type": "ephemeral"}
+    if session_id and model.startswith(SESSION_ID_PREFIXES):
+        fields["session_id"] = session_id
+    return fields
 
 
 class OpenRouterClient:
@@ -66,9 +85,11 @@ class OpenRouterClient:
                  transport: httpx.AsyncBaseTransport | None = None):
         self.api_key, self.model, self.url, self.transport = api_key, model, url, transport
 
-    async def stream_chat(self, messages, tools, reasoning: dict | None = None):
+    async def stream_chat(self, messages, tools, reasoning: dict | None = None,
+                          session_id: str | None = None):
         body = {"model": self.model, "messages": messages, "tools": tools, "stream": True,
             "stream_options": {"include_usage": True}, "usage": {"include": True}}
+        body.update(caching_fields(self.model, session_id))
         if reasoning:
             body["reasoning"] = reasoning
         headers = {"Authorization": f"Bearer {self.api_key}"}
@@ -93,7 +114,9 @@ class OpenRouterClient:
                         raise LLMError(_describe_error(obj["error"]))
                     if obj.get("usage"):
                         u = obj["usage"]
-                        usage = UsageChunk(u.get("prompt_tokens", 0), u.get("completion_tokens", 0), u.get("cost"))
+                        details = u.get("prompt_tokens_details") or {}
+                        usage = UsageChunk(u.get("prompt_tokens", 0), u.get("completion_tokens", 0), u.get("cost"),
+                                           details.get("cached_tokens") or 0, details.get("cache_write_tokens") or 0)
                     choices = obj.get("choices") or []
                     if not choices:
                         continue

@@ -11,10 +11,11 @@ from flood_agent.llm import UsageChunk
 class UsageMeter:
     def __init__(self, inner):
         self.inner = inner
-        self.usage: dict = {"cost": None, "prompt_tokens": 0, "completion_tokens": 0}
+        self.usage: dict = {"cost": None, "prompt_tokens": 0, "completion_tokens": 0,
+                            "cached_tokens": 0, "cache_write_tokens": 0}
 
-    async def stream_chat(self, messages, tools):
-        async for chunk in self.inner.stream_chat(messages, tools):
+    async def stream_chat(self, messages, tools, reasoning=None, session_id=None):
+        async for chunk in self.inner.stream_chat(messages, tools, reasoning=reasoning, session_id=session_id):
             if isinstance(chunk, UsageChunk):
                 self._add(chunk)
             yield chunk
@@ -22,5 +23,7 @@ class UsageMeter:
     def _add(self, u: UsageChunk) -> None:
         self.usage["prompt_tokens"] += u.prompt_tokens or 0
         self.usage["completion_tokens"] += u.completion_tokens or 0
+        self.usage["cached_tokens"] += u.cached_tokens or 0
+        self.usage["cache_write_tokens"] += u.cache_write_tokens or 0
         if u.cost is not None:
             self.usage["cost"] = (self.usage["cost"] or 0.0) + float(u.cost)

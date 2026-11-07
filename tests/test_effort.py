@@ -70,3 +70,26 @@ def test_a_supported_or_empty_effort_is_accepted(build_agent, web_client):
 
     assert post_chat(client, model=SONNET, effort="max").status_code == 200
     assert post_chat(client, model=GLM, effort="").status_code == 200  # empty means the model's default
+
+
+SESSION_MODELS = [SONNET, "openai/gpt-5.6-terra", "qwen/qwen3.8-27b", "deepseek/deepseek-v4", GLM]
+
+
+@pytest.mark.parametrize("model", SESSION_MODELS)
+async def test_requests_share_a_session_id_within_a_conversation_and_differ_between_conversations(build_agent, model):
+    agent, seen = provider_bodies(build_agent)
+    async with agent:
+        first, second = Conversation(), Conversation()
+        for conversation in (first, second, first):
+            [e async for e in agent.run_turn(conversation, "q", 1000, model, None)]
+
+    ids = [body["session_id"] for body in seen]
+    assert len(ids) == 3 and ids[0] == ids[2] and ids[0] != ids[1]
+
+
+async def test_an_unlisted_model_gets_no_session_id(build_agent):
+    agent, seen = provider_bodies(build_agent)
+    async with agent:
+        await turn(agent, "meta-llama/llama-4", None)
+
+    assert seen and all("session_id" not in body for body in seen)

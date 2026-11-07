@@ -31,7 +31,7 @@ async def test_no_tool_schema_mentions_a_conversation_id(make_agent):
     seen = {}
 
     class Spy(ScriptedLLM):
-        async def stream_chat(self, messages, tools):
+        async def stream_chat(self, messages, tools, reasoning: dict | None = None, session_id: str | None = None):
             seen["tools"] = json.dumps(tools).lower()
             async for c in super().stream_chat(messages, tools):
                 yield c

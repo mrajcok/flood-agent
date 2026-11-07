@@ -114,24 +114,36 @@ def test_renaming_to_another_result_tables_name_is_rejected_ignoring_case(build_
     assert client.get(f"/api/results/{b}/rows").status_code == 200
 
 
-def test_a_failure_saving_the_rename_in_the_app_database_undoes_the_sql_rename(build_agent, web_client, monkeypatch):
-    agent, client, (a, _) = two_tables(build_agent, web_client)
-
-    def fail(old, new):
-        raise RuntimeError("app database unavailable")
-
-    monkeypatch.setattr(agent.store, "rename_result_table", fail)
-    with pytest.raises(RuntimeError):
-        rename(client, a, "mine")
-    assert client.get(f"/api/results/{a}/rows").status_code == 200
-    assert client.get("/api/results/mine/rows").status_code == 404
-
-
-def test_retention_survives_a_rename(build_agent, web_client):
+def test_a_longer_retention_survives_a_rename(build_agent, web_client):
     client, _, old = make(build_agent, web_client)
-    client.post(f"/api/results/{old}/settings", data={"retention_days": "7"})
-    assert rename(client, old, "kept").json()["retention_days"] == 7
-    assert client.get("/api/results/kept/rows").json()["retention_days"] == 7
+    client.post(f"/api/results/{old}/settings", data={"retention_days": "90"})
+    assert rename(client, old, "kept").json()["retention_days"] == 90
+    assert client.get("/api/results/kept/rows").json()["retention_days"] == 90
+
+
+def test_renaming_without_a_retention_keeps_the_table_30_days(build_agent, web_client):
+    client, _, old = make(build_agent, web_client)
+    assert rename(client, old, "kept").json()["retention_days"] == 30
+
+
+def test_a_retention_given_with_the_rename_wins(build_agent, web_client):
+    client, _, old = make(build_agent, web_client)
+    resp = client.post(f"/api/results/{old}/settings", data={"name": "kept", "retention_days": "2"})
+    assert resp.json()["retention_days"] == 2
+
+
+@pytest.mark.parametrize("days", ["0", "-3", "3651", "nan", "soon"])
+def test_a_bad_retention_is_refused_with_nothing_changed(build_agent, web_client, days):
+    client, _, old = make(build_agent, web_client)
+    resp = client.post(f"/api/results/{old}/settings", data={"name": "kept", "retention_days": days})
+    assert resp.status_code == 422
+    assert client.get(f"/api/results/{old}/rows").json()["retention_days"] == 1
+
+
+def test_a_name_typed_with_capitals_is_stored_in_lower_case(build_agent, web_client):
+    client, _, old = make(build_agent, web_client)
+    assert rename(client, old, "MyTable").json()["name"] == "mytable"
+    assert client.get("/api/results/MyTable/rows").json()["name"] == "mytable"
 
 
 def test_deleting_the_conversation_with_its_result_tables_keeps_the_saved_table(build_agent, web_client):

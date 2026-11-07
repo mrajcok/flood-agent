@@ -259,18 +259,13 @@ class ConversationStore:
             return [r[0] for r in con.execute(
                 "SELECT name FROM result_tables WHERE expired=0 AND created_at + retention_ms <= ?", (now,))]
 
-    def rename_result_table(self, old: str, new: str) -> None:
-        """Make `new` the table's one name, in the registry and in the Displays that show it."""
-        with closing(self._connect()) as con, con:
-            con.execute("UPDATE result_tables SET name=? WHERE name=?", (new, old))
-            for row in con.execute("SELECT id, definition FROM displays WHERE result_table=?", (old,)).fetchall():
-                definition = json.dumps(_follow_rename(json.loads(row["definition"]), old, new))
-                con.execute("UPDATE displays SET result_table=?, definition=? WHERE id=?", (new, definition, row["id"]))
-
-    def update_result_table(self, name: str, retention_ms: int | None = None) -> None:
-        with closing(self._connect()) as con, con:
-            if retention_ms is not None:
-                con.execute("UPDATE result_tables SET retention_ms=? WHERE name=?", (retention_ms, name))
+    @staticmethod
+    def follow_rename(con: sqlite3.Connection, old: str, new: str) -> None:
+        """The Catalog's rename hook: point every Display (and Chart Spec data reference) at `new`, on the
+        Catalog's connection so it commits or rolls back with the registry rename."""
+        for row in con.execute("SELECT id, definition FROM displays WHERE result_table=?", (old,)).fetchall():
+            definition = json.dumps(_follow_rename(json.loads(row[1]), old, new))
+            con.execute("UPDATE displays SET result_table=?, definition=? WHERE id=?", (new, definition, row[0]))
 
     def lookup_tables(self) -> list[dict]:
         """The Lookup Tables registry: name, created time, columns and row count."""

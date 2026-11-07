@@ -71,7 +71,7 @@ def test_saved_and_result_tables_show_when_they_expire_and_the_others_nothing(li
     (6 + 23.6 / 24, "expires in 7d"), (7 + 11.6 / 24, "expires in 7d"), (10.6, "expires in 11d"), (0.01, "expires in under 1h")])
 def test_time_left_is_rounded_to_hours_and_whole_days_from_a_week(live_page, tables, days, shown):
     agent, rt_name = tables
-    agent.update_result_table(rt_name, retention_days=days)
+    agent.tables.update(rt_name, retention_days=days)
     dialog = open_tables(live_page(agent=agent))
     expect(row_in(dialog, rt_name).locator(".expires")).to_have_text(shown)
 
@@ -79,7 +79,7 @@ def test_time_left_is_rounded_to_hours_and_whole_days_from_a_week(live_page, tab
 @pytest.mark.parametrize("days, shown", [(0.5, "12 hours"), (1.5, "1.5 days"), (0.01, "14 minutes")])
 def test_the_tooltip_gives_the_retention_in_hours_or_minutes_under_a_day(live_page, tables, days, shown):
     agent, rt_name = tables
-    agent.update_result_table(rt_name, retention_days=days)
+    agent.tables.update(rt_name, retention_days=days)
     dialog = open_tables(live_page(agent=agent))
     expect(row_in(dialog, rt_name).locator(".expires")).to_have_attribute("title", "Retention: " + shown)
 

@@ -78,7 +78,7 @@ async def test_describe_table_reports_saved_result_and_lookup_kinds(make_agent):
     agent.tables.add_lookup("hosts", "ip\n10.0.0.1")
     assert (await describe_from_other_conversation(agent, llm, name))["kind"] == "result"
     assert (await describe_from_other_conversation(agent, llm, "lookup_hosts"))["kind"] == "lookup"
-    agent.update_result_table(name, "busy_ports")
+    agent.tables.update(name, "busy_ports")
     assert (await describe_from_other_conversation(agent, llm, "BUSY_ports"))["kind"] == "saved"
 
 
@@ -114,3 +114,21 @@ async def test_a_table_whose_retention_ends_mid_turn_is_refused_by_the_next_quer
     results = [json.loads(m["content"]) for m in llm.calls[-1] if m["role"] == "tool"]
     assert [r["success"] for r in results] == [True, False, False]
     assert all(name not in json.dumps(r) for r in results[1:])
+
+
+async def test_a_renamed_table_is_shown_charted_and_described_as_lower_case_whatever_the_typed_case(make_agent):
+    agent, llm, _, name = await run_first(make_agent)
+    assert agent.tables.update(name, "MyTable").name == "mytable"
+    chart = {"data": {"name": "MyTable"}, "mark": "bar", "encoding": {
+        "x": {"field": "dport", "type": "nominal"}, "y": {"field": "total_bytes", "type": "quantitative"}}}
+    llm.steps = [
+        [tool_call("show_table", "c1", result_table="MyTable"), tool_call("show_chart", "c2", vega_lite_spec=chart),
+         ToolCallChunk(id="c3", name="describe_table", arguments=json.dumps({"name": "MYTABLE"}))],
+        [TextChunk("ok")],
+    ]
+    await collect(agent, "show it", Conversation())
+    results = [json.loads(m["content"]) for m in llm.calls[-1] if m["role"] == "tool"]
+    assert all(r["success"] for r in results)
+    assert results[0]["display"]["result_table"] == "mytable" == results[1]["display"]["result_table"]
+    assert results[1]["display"]["spec"]["data"] == {"name": "mytable"}
+    assert results[2]["name"] == "mytable"

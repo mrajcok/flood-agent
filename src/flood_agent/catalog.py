@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Literal
 
-from flood_agent import lookup_tables, table_names
+from flood_agent import lookup_tables, queries, table_names
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS result_tables (
@@ -38,6 +38,16 @@ CREATE TABLE IF NOT EXISTS lookup_tables (
 """
 
 DAY_MS = 86_400_000
+
+
+@dataclass(frozen=True)
+class RetentionPolicy:
+    """The Retention rules, in days: what a new Result Table gets (the configured default), what a
+    renamed Result Table is raised to (ADR 0004), and the longest Retention a user may pick."""
+
+    result_days: float
+    saved_days: float = 30
+    max_days: float = 3650
 
 
 class TableExpired(Exception):
@@ -136,7 +146,7 @@ class CatalogView:
         """The live Result or Saved Table `name` (any case). KeyError if no such table is registered;
         `TableExpired` if it is registered but no longer live."""
         with closing(self._connect()) as con:
-            row = con.execute("SELECT * FROM result_tables WHERE name=? COLLATE NOCASE", (name,)).fetchone()
+            row = con.execute("SELECT * FROM result_tables WHERE name=?", (name.lower(),)).fetchone()
         if row is None:
             raise KeyError(name)
         if not self._is_live(row, self._now()):
@@ -147,7 +157,7 @@ class CatalogView:
         if not isinstance(name, str):
             return False
         with closing(self._connect()) as con:
-            row = con.execute("SELECT * FROM result_tables WHERE name=? COLLATE NOCASE", (name,)).fetchone()
+            row = con.execute("SELECT * FROM result_tables WHERE name=?", (name.lower(),)).fetchone()
         return row is not None and self._is_live(row, self._now())
 
     def live_among(self, names: Iterable[str]) -> set[str]:
@@ -158,7 +168,7 @@ class CatalogView:
                 chunk = names[i:i + 500]
                 marks = ",".join("?" * len(chunk))
                 out.update(r["name"] for r in con.execute(
-                    f"SELECT * FROM result_tables WHERE lower(name) IN ({marks})", chunk) if self._is_live(r, now))
+                    f"SELECT * FROM result_tables WHERE name IN ({marks})", chunk) if self._is_live(r, now))
         return out
 
     def tables_of(self, conversation_id: str) -> list[Table]:
@@ -196,15 +206,20 @@ class CatalogView:
 
 
 class Catalog(CatalogView):
-    """The writer: the view's reads plus registration. Creates the registry tables if they are missing."""
+    """The writer: the view's reads plus registration and renaming. Creates the registry tables if missing."""
 
     def __init__(
         self, app_db: Path, clock: Callable[[], int] = _now, default_retention_ms: int = DAY_MS,
         telemetry_tables: Iterable[str] = (), results_db: Path | None = None,
+        on_rename: Callable[[sqlite3.Connection, str, str], None] | None = None,
     ):
-        """`default_retention_ms` is the Retention a new Result Table is given."""
+        """`default_retention_ms` is the Retention a new Result Table is given. `on_rename(con, old, new)` is
+        the store's hook: it runs in the same app-database transaction as the registry rename, to update
+        whatever else shows the old name (Displays and Chart Specs), so the Catalog never knows their schema."""
         super().__init__(app_db, clock, telemetry_tables, results_db, _read_only=False)
         self.default_retention_ms = default_retention_ms
+        self.policy = RetentionPolicy(result_days=default_retention_ms / DAY_MS)
+        self._on_rename = on_rename
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as con, con:
             con.executescript(SCHEMA)
@@ -219,10 +234,65 @@ class Catalog(CatalogView):
             con.execute(
                 "INSERT OR IGNORE INTO result_tables(name, conversation_id, turn_id, created_at, title, columns,"
                 " request, truncated_to, retention_ms) VALUES (?,?,?,?,?,?,?,?,?)",
-                (name, conversation_id, turn_id, now, title, json.dumps(columns or []), request, truncated_to,
+                (name.lower(), conversation_id, turn_id, now, title, json.dumps(columns or []), request, truncated_to,
                  self.default_retention_ms),
             )
             con.execute("UPDATE conversations SET last_activity_at=? WHERE id=?", (now, conversation_id))
+
+    def update(self, name: str, new_name: str | None = None, retention_days: float | None = None) -> Table:
+        """Rename and/or set the Retention of a live Result or Saved Table; returns the new record.
+
+        The new name is lower-cased (ADR 0005); one equal to the current name changes nothing. A rename
+        of an `rt_*` table raises its Retention to at least the Saved Table default (ADR 0004), unless a
+        Retention is given. ValueError, changing nothing, for a name that is taken (even by a dropped
+        table), reserved, not an identifier or a Telemetry table's, or a Retention outside (0, cap].
+        KeyError if unknown, `TableExpired` if no longer live."""
+        table = self[name]
+        retention_ms = None
+        if retention_days is not None:
+            if not 0 < retention_days <= self.policy.max_days:  # also rejects nan
+                raise ValueError(f"Retention must be more than 0 and at most {self.policy.max_days:g} days.")
+            retention_ms = max(1, round(retention_days * DAY_MS))
+        new = new_name.lower() if new_name is not None else None
+        if new is not None and new != table.name:
+            if retention_ms is None and table.kind == "result":
+                retention_ms = max(table.retention_ms, round(self.policy.saved_days * DAY_MS))
+            self._rename(table.name, new, retention_ms)
+        elif retention_ms is not None:
+            with closing(self._connect()) as con, con:
+                con.execute("UPDATE result_tables SET retention_ms=? WHERE name=?", (retention_ms, table.name))
+        return self[new or table.name]
+
+    def _check_new_name(self, new: str) -> None:
+        if not table_names.is_identifier(new):
+            raise ValueError(f"A table name must {table_names.RULE}.")
+        if table_names.is_reserved(new):
+            raise ValueError("A table name cannot start with rt_ or lookup_; those are reserved.")
+        if new in self.telemetry_tables:
+            raise ValueError(f"{new} is the name of a Telemetry Database table.")
+        with closing(self._connect()) as con:
+            taken = con.execute("SELECT 1 FROM result_tables WHERE name=?", (new,)).fetchone()
+        if taken:  # includes a dropped table: it stays registered so its Displays still render as expired
+            raise ValueError(f"A table named {new} already exists.")
+
+    def _rename(self, old: str, new: str, retention_ms: int | None) -> None:
+        """Rename in the results database, then in the app database. These are two files, so if the
+        second step fails the first is undone."""
+        self._check_new_name(new)
+        queries.rename_table(self._results_db(), old, new)  # ValueError if `new` is taken there
+        try:
+            with closing(self._connect()) as con, con:
+                con.execute("UPDATE result_tables SET name=? WHERE name=?", (new, old))
+                if retention_ms is not None:
+                    con.execute("UPDATE result_tables SET retention_ms=? WHERE name=?", (retention_ms, new))
+                if self._on_rename:
+                    self._on_rename(con, old, new)
+        except sqlite3.IntegrityError:
+            queries.rename_table(self._results_db(), new, old)
+            raise ValueError(f"A table named {new} already exists.")
+        except BaseException:
+            queries.rename_table(self._results_db(), new, old)
+            raise
 
     def _register_lookup(self, name: str, parsed: lookup_tables.ParsedRows) -> dict:
         # The registry is in the app database, a separate file, so it cannot join the results-database

@@ -249,11 +249,11 @@ class Agent:
         self.config = config
         self.client_for = client_for
         self.semantic_layer = SemanticLayer(config.semantic_layer)
+        self.store = ConversationStore(config.app_db, config.clock)
         self.tables = Catalog(
             config.app_db, config.clock, config.result_ttl_ms, telemetry_tables=self.semantic_layer.table_names(),
-            results_db=config.results_db,
+            results_db=config.results_db, on_rename=self.store.follow_rename,
         )
-        self.store = ConversationStore(config.app_db, config.clock)
         self._connection: McpConnection | None = None
         self._restart_lock = asyncio.Lock()
         self._turn_tasks: set[asyncio.Task] = set()
@@ -401,38 +401,6 @@ class Agent:
         else:
             raise KeyError(name)
 
-    def update_result_table(
-        self, result_table: str, name: str | None = None, retention_days: float | None = None
-    ) -> dict:
-        """Rename (a real SQL rename) and/or change retention of a live Result Table.
-
-        A `name` equal to the current one changes nothing. Returns the new settings. ValueError,
-        changing nothing, if the new name is not allowed. Retention is unchanged by a rename: the
-        rename form, not the server, offers a Saved Table's 30-day default (ADR 0004)."""
-        self.tables[result_table]  # KeyError if unknown, TableExpired if expired
-        if name is not None and name != result_table:
-            self._rename(result_table, name)
-            result_table = name
-        if retention_days is not None:
-            self.store.update_result_table(result_table, max(1, round(retention_days * DAY_MS)))
-        return self.tables[result_table].to_json()
-
-    def _rename(self, old: str, new: str) -> None:
-        """Rename in the results database, then in the app database. These are two files, so if the
-        second step fails the first is undone."""
-        problem = queries.check_new_table_name(new)
-        if problem:
-            raise ValueError(problem)
-        queries.rename_table(self.config.results_db, old, new)  # ValueError if `new` is taken
-        try:
-            self.store.rename_result_table(old, new)
-        except sqlite3.IntegrityError:  # `new` is the name of an expired table still in the registry
-            queries.rename_table(self.config.results_db, new, old)
-            raise ValueError(f"A table named {new} already exists.")
-        except BaseException:
-            queries.rename_table(self.config.results_db, new, old)
-            raise
-
     def fetch_rows(self, result_table: str, columns: list[str] | None = None, **page_args) -> dict:
         """Internal data path used by the row-JSON endpoint. Not an LLM tool.
 
@@ -446,13 +414,11 @@ class Agent:
 
     def iter_all_rows(self, result_table: str):
         """Internal data path for PSV export of the full Result Table. Not an LLM tool."""
-        self.tables[result_table]
-        return queries.iter_all_rows(self.config.results_db, result_table)
+        return queries.iter_all_rows(self.config.results_db, self.tables[result_table].name)
 
     def fetch_chart_rows(self, result_table: str) -> list[dict]:
         """Internal data path for the chart-rows endpoint (chart cap). Not an LLM tool."""
-        self.tables[result_table]
-        return queries.fetch_records(self.config.results_db, result_table, self.config.chart_row_cap)
+        return queries.fetch_records(self.config.results_db, self.tables[result_table].name, self.config.chart_row_cap)
 
     async def run_turn(
         self, conversation: Conversation, user_message: str, max_result_rows: int, model: str | None = None,

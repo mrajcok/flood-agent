@@ -15,7 +15,7 @@ from typing import AsyncIterator, Callable
 from mcp import StdioServerParameters
 from mcp.types import TextContent
 
-from flood_agent import flagging, lookup_tables, queries, table_names
+from flood_agent import flagging, queries, table_names
 from flood_agent.catalog import Catalog
 from flood_agent.llm import LLMClient, LLMError, ModelSpec, TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
@@ -249,7 +249,7 @@ class Agent:
         self.config = config
         self.client_for = client_for
         self.semantic_layer = SemanticLayer(config.semantic_layer)
-        self.tables = Catalog(config.app_db, config.clock, config.result_ttl_ms)
+        self.tables = Catalog(config.app_db, config.clock, config.result_ttl_ms, config.results_db)
         self.store = ConversationStore(config.app_db, config.clock)
         self._connection: McpConnection | None = None
         self._restart_lock = asyncio.Lock()
@@ -360,46 +360,6 @@ class Agent:
             return
         self._drop_tables(names)
         self.store.mark_expired(names)
-
-    def add_lookup_table(self, suffix: str, text: str, overwrite: bool = False) -> dict:
-        """Create `lookup_<suffix>` from pasted rows and register it. Touches no Conversation, message
-        or Trace, and the LLM is told nothing. Raises `InvalidLookupTable` for a bad name or paste."""
-        name = lookup_tables.table_name(suffix)
-        parsed = lookup_tables.parse_rows(text)
-        registered = self.store.is_lookup_table(name)
-        try:
-            lookup_tables.write_table(self.config.results_db, name, parsed, replace=registered and overwrite)
-        except lookup_tables.TableExists:
-            raise lookup_tables.InvalidLookupTable(
-                f"A table named {name} already exists. Tick Overwrite existing table to replace it."
-                if registered else f"A table named {name} already exists and is not a Lookup Table."
-            )
-        # The registry is in the app database, a separate file, so it cannot join the results-database
-        # transaction. A crash between the two leaves a table the registry does not describe (its row
-        # count or columns stale, or a new table unregistered and so unreadable) until it is added again.
-        self.store.register_lookup_table(name, parsed.columns, len(parsed.rows))
-        return {"name": name, "row_count": len(parsed.rows), "columns": parsed.columns}
-
-    def update_lookup_table(self, name: str, text: str) -> dict:
-        """Replace an existing Lookup Table's rows (and columns) with edited text; its name stays.
-        KeyError if `name` is not a Lookup Table; `InvalidLookupTable`, changing nothing, for a bad paste."""
-        if not self.store.is_lookup_table(name):
-            raise KeyError(name)
-        name = name.lower()
-        parsed = lookup_tables.parse_rows(text)
-        lookup_tables.write_table(self.config.results_db, name, parsed, replace=True)
-        self.store.register_lookup_table(name, parsed.columns, len(parsed.rows))  # same crash window as add
-        return {"name": name, "row_count": len(parsed.rows), "columns": parsed.columns}
-
-    def lookup_table_text(self, name: str, sep: str) -> dict:
-        """A Lookup Table's rows as text for the edit dialog, header line first, separated by `sep`
-        (a key of `lookup_tables.SEPARATORS`). KeyError if `name` is not a Lookup Table;
-        `InvalidLookupTable` for an unknown separator."""
-        if not self.store.is_lookup_table(name):
-            raise KeyError(name)
-        name = name.lower()  # registered names are lower-cased by `table_name`
-        parsed = lookup_tables.read_table(self.config.results_db, name)
-        return {"name": name, "text": lookup_tables.format_rows(parsed, sep)}
 
     def list_tables(self) -> dict:
         """Names of every table the user can query, by kind, each sorted: Telemetry Database tables

@@ -44,7 +44,7 @@ def test_the_choice_is_what_gets_sent_and_survives_a_reload(build_agent, live_pa
     page.locator("textarea[name=message]").fill("hello")
     page.locator("textarea[name=message]").press("Enter")
 
-    expect(page.locator("#chat")).to_contain_text("anthropic/claude-opus-5.5")  # the Trace shows the model that ran
+    expect(page.locator("#chat")).to_contain_text("Opus-5.5")  # the Trace shows the model that ran
     page.reload()
     expect(trigger(page)).to_have_text("Claude Opus 5.5")
 
@@ -107,5 +107,5 @@ def test_after_a_turn_the_meter_shows_the_window_of_the_model_selected_for_the_n
     open_model_panel(page).get_by_role("button", name="Qwen3.8 27B").click()  # 1.02M window, mid-turn
     gate.set()
 
-    expect(page.locator("#chat")).to_contain_text("anthropic/claude-sonnet-5.5")  # the Trace: Sonnet ran
+    expect(page.locator("#chat")).to_contain_text("Sonnet-5.5")  # the Trace: Sonnet ran
     expect(page.locator("#context-meter")).to_contain_text("100 of 1.02M")

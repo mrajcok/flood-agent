@@ -87,7 +87,7 @@ def test_one_conversation_mixes_fake_and_real_turns_each_trace_showing_its_model
     traces = page.locator(".trace-totals")
     expect(traces).to_have_count(2)
     expect(traces.nth(0)).to_contain_text("No model")
-    expect(traces.nth(1)).to_contain_text("anthropic/claude-opus-5.5")
+    expect(traces.nth(1)).to_contain_text("Opus-5.5")
     assert page.locator("input#conversation_id").input_value() != ""
 
     choose(page, "No model")  # the meter ignores the fake turn and shows no model's usage
@@ -112,7 +112,7 @@ def test_trace_shows_cached_tokens_only_when_some_were_cached(build_agent, live_
     plain.locator("textarea[name=message]").fill("hello")
     choose(plain, "Claude Opus 5.5")
     plain.locator("textarea[name=message]").press("Enter")
-    expect(plain.locator(".trace-totals")).to_contain_text("anthropic/claude-opus-5.5")
+    expect(plain.locator(".trace-totals")).to_contain_text("Opus-5.5")
     expect(plain.locator(".trace-totals")).not_to_contain_text("cached")
 
 
@@ -132,5 +132,5 @@ def test_trace_shows_cache_write_tokens_only_when_some_were_written(build_agent,
     plain.locator("textarea[name=message]").fill("hello")
     choose(plain, "Claude Opus 5.5")
     plain.locator("textarea[name=message]").press("Enter")
-    expect(plain.locator(".trace-totals")).to_contain_text("anthropic/claude-opus-5.5")
+    expect(plain.locator(".trace-totals")).to_contain_text("Opus-5.5")
     expect(plain.locator(".trace-totals")).not_to_contain_text("cache write")

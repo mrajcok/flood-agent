@@ -63,13 +63,13 @@ async def test_a_turn_without_a_model_choice_runs_the_default_model(make_agent):
 def test_the_chosen_model_is_what_the_stream_runs_and_the_trace_shows(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
 
-    assert SONNET in finish_turn(client, post_chat(client, model=SONNET))
+    assert "Sonnet-5.5" in finish_turn(client, post_chat(client, model=SONNET))
 
 
 def test_a_missing_model_field_means_the_default_model(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
 
-    assert GLM in finish_turn(client, post_chat(client))
+    assert "glm-5.3" in finish_turn(client, post_chat(client))
 
 
 @pytest.mark.parametrize("bad", ["nobody/nothing", "No model"])

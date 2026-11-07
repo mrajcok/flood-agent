@@ -10,6 +10,7 @@ Entry kinds: llm_step, tool_call, query_error, result_table, chart_spec, flag
 
 import time
 
+from flood_agent.llm import UsageChunk
 from flood_agent.mcp_protocol import QUERY_TOOLS
 
 
@@ -36,9 +37,7 @@ class TraceBuilder:
             },
             usage=None
             if usage is None
-            else {"prompt_tokens": usage.prompt_tokens, "completion_tokens": usage.completion_tokens,
-                  "cost": usage.cost, "cached_tokens": usage.cached_tokens,
-                  "cache_write_tokens": usage.cache_write_tokens},
+            else usage.to_dict(),
             duration_ms=elapsed_ms(started),
             request_bytes=request_bytes,
             **extra,
@@ -59,14 +58,11 @@ class TraceBuilder:
     def finish(self) -> dict:
         steps = [e for e in self.trace["entries"] if e["kind"] == "llm_step"]
         usages = [e["usage"] for e in steps if e["usage"]]
-        costs = [u["cost"] for u in usages if u["cost"] is not None]
+        total = UsageChunk.total(usages)
         self.trace["totals"] = {
             "llm_steps": len(steps),
-            "prompt_tokens": sum(u["prompt_tokens"] for u in usages),
-            "completion_tokens": sum(u["completion_tokens"] for u in usages),
-            "cached_tokens": sum(u.get("cached_tokens", 0) for u in usages),
-            "cache_write_tokens": sum(u.get("cache_write_tokens", 0) for u in usages),
-            "cost": round(sum(costs), 10) if costs else None,
+            **{k: v for k, v in total.to_dict().items() if k != "cost"},
+            "cost": None if total.cost is None else round(total.cost, 10),
             "duration_ms": sum(e["duration_ms"] for e in self.trace["entries"] if "duration_ms" in e),
         }
         return self.trace
@@ -92,6 +88,14 @@ def context_tokens(trace: dict) -> int | None:
         if e["kind"] == "llm_step" and e["usage"]:
             return e["usage"]["prompt_tokens"]
     return None
+
+
+def short_model(model: str) -> str:
+    """A model id without its vendor prefix, for display: "anthropic/claude-haiku-5.5" -> "Haiku-5.5"."""
+    name = model.rpartition("/")[2]
+    if name.startswith("claude-"):
+        return name[len("claude-"):].capitalize()
+    return name
 
 
 def elapsed_ms(started: float) -> int:

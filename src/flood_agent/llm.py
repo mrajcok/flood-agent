@@ -4,8 +4,8 @@ The Agent depends only on the `LLMClient` protocol, so tests inject a scripted f
 """
 
 import json
-from dataclasses import dataclass
-from typing import AsyncIterator, Protocol
+from dataclasses import asdict, dataclass, fields
+from typing import AsyncIterator, Iterable, Mapping, Protocol
 
 import httpx
 from pydantic import BaseModel, Field
@@ -46,6 +46,25 @@ class UsageChunk:
     cost: float | None = None
     cached_tokens: int = 0
     cache_write_tokens: int = 0
+
+    def to_dict(self) -> dict:
+        """The stored shape (a Trace step's `usage`)."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: Mapping) -> "UsageChunk":
+        """Read a stored usage dict; a field missing from an older stored trace counts as 0 (cost: None)."""
+        return cls(prompt_tokens=d.get("prompt_tokens") or 0, completion_tokens=d.get("completion_tokens") or 0,
+                   cost=d.get("cost"), cached_tokens=d.get("cached_tokens") or 0,
+                   cache_write_tokens=d.get("cache_write_tokens") or 0)
+
+    @classmethod
+    def total(cls, usages: "Iterable[UsageChunk | Mapping]") -> "UsageChunk":
+        """Sum usages (chunks or stored dicts). Cost is None only when no usage reports one."""
+        us = [u if isinstance(u, UsageChunk) else cls.from_dict(u) for u in usages]
+        costs = [float(u.cost) for u in us if u.cost is not None]
+        return cls(**{f.name: sum(getattr(u, f.name) or 0 for u in us)  # type: ignore[arg-type]
+                      for f in fields(cls) if f.name != "cost"}, cost=sum(costs) if costs else None)
 
 
 Chunk = TextChunk | ToolCallChunk | UsageChunk

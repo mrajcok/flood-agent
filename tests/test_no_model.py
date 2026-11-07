@@ -53,7 +53,7 @@ def test_no_model_answers_with_the_scripted_stand_in_and_the_trace_names_it(buil
 def test_a_blank_model_field_means_the_default_model(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
 
-    assert GLM in finish_turn(client, post_chat(client, model=""))
+    assert "glm-5.3" in finish_turn(client, post_chat(client, model=""))
 
 
 def test_the_meter_ignores_fake_turns(build_agent, web_client):

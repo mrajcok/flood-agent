@@ -57,6 +57,37 @@ async def test_missing_cost_is_none():
     assert (await chunks(client_for(body)))[-1] == UsageChunk(1, 2, None)
 
 
+async def test_cached_prompt_tokens_are_read_from_the_usage_details():
+    usage = {"prompt_tokens": 100, "completion_tokens": 2, "prompt_tokens_details": {"cached_tokens": 80}}
+    body = sse(delta(content="a"), finish(), {"choices": [], "usage": usage})
+    assert (await chunks(client_for(body)))[-1] == UsageChunk(100, 2, None, cached_tokens=80)
+
+
+async def test_usage_without_cached_tokens_counts_zero():
+    body = sse(delta(content="a"), finish(), {"choices": [], "usage": {"prompt_tokens": 1, "completion_tokens": 2}})
+    assert (await chunks(client_for(body)))[-1].cached_tokens == 0
+    usage = {"prompt_tokens": 1, "completion_tokens": 2, "prompt_tokens_details": None}
+    body = sse(delta(content="a"), finish(), {"choices": [], "usage": usage})
+    assert (await chunks(client_for(body)))[-1].cached_tokens == 0
+
+
+async def test_cache_write_tokens_are_read_from_the_usage_details():
+    details = {"cached_tokens": 10, "cache_write_tokens": 70}
+    usage = {"prompt_tokens": 100, "completion_tokens": 2, "prompt_tokens_details": details}
+    body = sse(delta(content="a"), finish(), {"choices": [], "usage": usage})
+    last = (await chunks(client_for(body)))[-1]
+    assert last.cache_write_tokens == 70 and last.cached_tokens == 10
+
+
+async def test_usage_without_cache_write_tokens_counts_zero():
+    body = sse(delta(content="a"), finish(), {"choices": [], "usage": {"prompt_tokens": 1, "completion_tokens": 2}})
+    assert (await chunks(client_for(body)))[-1].cache_write_tokens == 0
+    details = {"cached_tokens": 5, "cache_write_tokens": None}
+    usage = {"prompt_tokens": 1, "completion_tokens": 2, "prompt_tokens_details": details}
+    body = sse(delta(content="a"), finish(), {"choices": [], "usage": usage})
+    assert (await chunks(client_for(body)))[-1].cache_write_tokens == 0
+
+
 async def test_mid_stream_error_chunk_raises():
     body = sse(delta(content="par"), {"error": {"code": 502, "message": "upstream exploded"}}, done=False)
     with pytest.raises(LLMError, match="upstream exploded"):

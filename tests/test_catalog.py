@@ -1,8 +1,11 @@
 """The Table Catalog's interface: liveness from the clock, Retention fixed at registration, the reads."""
 
+import sqlite3
+from contextlib import closing
+
 import pytest
 
-from flood_agent.catalog import Catalog, TableExpired
+from flood_agent.catalog import Catalog, CatalogView, TableExpired
 from flood_agent.store import ConversationStore
 
 HOUR = 3_600_000
@@ -112,3 +115,37 @@ def test_a_conversations_tables_are_its_own_live_ones_in_creation_order(world, c
     assert [t.name for t in catalog.tables_of(cid)] == ["rt_b", "rt_a"]
     assert [t.turn_id for t in catalog.tables_of(cid)] == [1, 2]
     assert catalog.names() == ["rt_a", "rt_b", "rt_x"]
+
+
+def test_read_only_view_reads_but_has_no_write_operations_and_cannot_write(world, clock):
+    catalog, cid = world
+    catalog.register("rt_20260101_000000", cid, 1)
+    view = CatalogView(catalog.path, clock)
+
+    assert "rt_20260101_000000" in view
+    assert not hasattr(view, "register")
+    with closing(view._connect()) as con, pytest.raises(sqlite3.OperationalError):
+        con.execute("DELETE FROM result_tables")
+    with closing(view._connect()) as con, pytest.raises(sqlite3.OperationalError):
+        con.execute("INSERT INTO lookup_tables(name, created_at) VALUES ('lookup_x', 1)")
+    assert "rt_20260101_000000" in catalog
+
+
+def test_kind_of_any_case_covers_telemetry_result_saved_lookup_and_unknown(tmp_path, clock):
+    app_db = tmp_path / "app.db"
+    catalog = Catalog(app_db, clock, default_retention_ms=HOUR, telemetry_tables=["flows"])
+    cid = ConversationStore(app_db, clock).create_conversation()
+    catalog.register("rt_20260101_000000", cid, 1)
+    catalog.register("busy_ports", cid, 1)
+    with closing(sqlite3.connect(app_db)) as con, con:
+        con.execute("INSERT INTO lookup_tables(name, created_at) VALUES ('lookup_ips', 1)")
+    view = CatalogView(app_db, clock, ["flows"])
+
+    kinds = {n: view.kind_of(n) for n in ("FLOWS", "rt_20260101_000000", "Busy_Ports", "lookup_IPS", "nope")}
+
+    assert kinds == {"FLOWS": "telemetry", "rt_20260101_000000": "result", "Busy_Ports": "saved",
+                     "lookup_IPS": "lookup", "nope": None}
+    assert view.readable() == {"rt_20260101_000000", "busy_ports", "lookup_ips"}
+    clock.now += HOUR
+    assert view.kind_of("busy_ports") is None
+    assert view.readable() == {"lookup_ips"}

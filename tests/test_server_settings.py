@@ -12,7 +12,8 @@ def test_settings_round_trip_through_the_launch_environment():
         app_db=Path("/data/app.db"),
         query_timeout_s=2.5,
         chart_row_cap=99,
+        telemetry_tables=("flows", "hosts"),
     )
     env = settings.to_env()
-    assert set(env) == {"TELEMETRY_DB", "RESULTS_DB", "APP_DB", "QUERY_TIMEOUT_S", "CHART_ROW_CAP"}
+    assert set(env) == {"TELEMETRY_DB", "RESULTS_DB", "APP_DB", "QUERY_TIMEOUT_S", "CHART_ROW_CAP", "TELEMETRY_TABLES"}
     assert ServerSettings.from_env(env) == settings

@@ -157,23 +157,25 @@ def test_page_without_canned_prompts_has_no_list(build_agent, web_client):
     assert CANNED[0].prompt not in html and 'class="canned"' not in html
 
 
-def test_fake_backend_builds_without_an_api_key(tmp_path, telemetry_db, semantic_layer_path):
+def test_no_model_works_without_an_api_key(tmp_path, telemetry_db, semantic_layer_path):
     settings = Settings(  # pyright: ignore[reportCallIssue]
-        llm_backend="fake",
+        openrouter_api_key=None,
         telemetry_db=telemetry_db,
         results_db=tmp_path / "results.db",
         app_db=tmp_path / "app.db",
         semantic_layer=semantic_layer_path,
     )
 
-    assert build_app(settings) is not None
+    with TestClient(build_app(settings)) as client:
+        reply = client.post("/chat", data={"message": "hi", "max_rows": "10", "model": "no-model"})
+    assert reply.status_code == 200
 
 
-def test_openrouter_backend_builds_without_a_key_and_refuses_real_models_until_one_is_set(
+def test_real_models_are_refused_without_a_key_and_refuses_real_models_until_one_is_set(
     tmp_path, telemetry_db, semantic_layer_path
 ):
     settings = Settings(  # pyright: ignore[reportCallIssue]
-        llm_backend="openrouter", telemetry_db=telemetry_db, results_db=tmp_path / "results.db",
+        telemetry_db=telemetry_db, results_db=tmp_path / "results.db",
         app_db=tmp_path / "app.db", semantic_layer=semantic_layer_path,
     )
 

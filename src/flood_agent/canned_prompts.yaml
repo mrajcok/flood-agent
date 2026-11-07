@@ -1,4 +1,4 @@
-# Canned Prompts for Fake Mode (LLM_BACKEND=fake). Hand-edited.
+# Canned Prompts for Fake Mode ("No model"). Hand-edited.
 #
 # Each entry is a fixed user message plus the scripted LLM replies that answer it.
 #   id      stable slug

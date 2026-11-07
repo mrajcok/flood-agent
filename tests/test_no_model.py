@@ -46,7 +46,7 @@ def test_no_model_answers_with_the_scripted_stand_in_and_the_trace_names_it(buil
 
     body = finish_turn(client, post_chat(client, model=NO_MODEL))
 
-    assert "no LLM is running" in body and "No model" in body
+    assert "no language model is involved" in body and "No model" in body
     assert real.calls == []
 
 
@@ -133,5 +133,5 @@ def test_the_app_starts_without_a_key_and_answers_no_model_prompts(tmp_path, tel
         body = finish_turn(client, post_chat(client, model=NO_MODEL))
         refused = post_chat(client, model=SONNET)
 
-    assert "no LLM is running" in body
+    assert "no language model is involved" in body
     assert refused.status_code == 422 and "OPENROUTER_API_KEY" in refused.json()["detail"]

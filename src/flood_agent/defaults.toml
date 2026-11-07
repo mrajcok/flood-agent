@@ -4,7 +4,6 @@
 # upper case (QUERY_TIMEOUT_S, ...). The real environment wins over .env.
 # openrouter_api_key has no default; it is a secret and belongs in .env.
 
-llm_backend = "openrouter"  # or "fake" (Fake Mode: no LLM, no key)
 default_model = "z-ai/glm-5.3"  # an id from the [[models]] list at the end of this file
 
 telemetry_db = "data/telemetry.db"

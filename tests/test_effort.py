@@ -10,7 +10,7 @@ from conftest import ScriptedLLM
 from flood_agent.agent import Conversation
 from flood_agent.llm import OpenRouterClient
 
-SONNET, HAIKU, GLM = "anthropic/claude-sonnet-5.5", "anthropic/claude-haiku-5.5", "z-ai/glm-5.3"  # defaults: high, medium, none
+SONNET, HAIKU, GLM = "anthropic/claude-sonnet-5.5", "anthropic/claude-haiku-5.5", "z-ai/glm-5.3"  # defaults: high, medium, maxne
 
 
 def post_chat(client, **data):
@@ -44,7 +44,7 @@ async def test_a_non_default_effort_reaches_the_provider_as_a_reasoning_setting(
     assert seen and all(body["reasoning"] == {"effort": effort} for body in seen)
 
 
-@pytest.mark.parametrize("model, effort", [(SONNET, "high"), (HAIKU, "medium"), (GLM, None), (SONNET, None)])
+@pytest.mark.parametrize("model, effort", [(SONNET, "high"), (HAIKU, "medium"), (GLM, "max"), (GLM, None), (SONNET, None)])
 async def test_the_default_effort_sends_no_reasoning_setting(build_agent, model, effort):
     agent, seen = provider_bodies(build_agent)
     async with agent:
@@ -58,7 +58,7 @@ def test_an_effort_the_model_does_not_offer_is_rejected_before_any_turn_starts(b
     agent = build_agent(llm)
     client = web_client(agent)
 
-    for model, effort in [(SONNET, "none"), (SONNET, "bogus"), (GLM, "low")]:
+    for model, effort in [(SONNET, "none"), (SONNET, "bogus"), (GLM, "none")]:
         response = post_chat(client, model=model, effort=effort)
         assert response.status_code == 422 and "does not offer reasoning effort" in response.json()["detail"]
 
@@ -69,4 +69,4 @@ def test_a_supported_or_empty_effort_is_accepted(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM()))
 
     assert post_chat(client, model=SONNET, effort="max").status_code == 200
-    assert post_chat(client, model=GLM, effort="").status_code == 200  # GLM's control is disabled: it sends none
+    assert post_chat(client, model=GLM, effort="").status_code == 200  # empty means the model's default

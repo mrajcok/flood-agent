@@ -58,7 +58,8 @@ default_effort = "high"
 id = "z-ai/glm-5.3"
 label = "GLM 5.3"
 context_window = 1_048_576
-efforts = []
+efforts = ["max", "high", "low"]
+default_effort = "max"
 
 [[models]]
 id = "qwen/qwen3.8-27b"

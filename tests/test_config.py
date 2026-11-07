@@ -127,7 +127,7 @@ def test_the_curated_model_list_parses_in_the_specs_order():
     assert (sonnet.label, sonnet.context_window, sonnet.default_effort) == ("Claude Sonnet 5.5", 1_000_000, "high")
     assert opus.default_effort == "medium"
     assert (deepseek.efforts, deepseek.context_window) == (["max", "high", "low", "none"], 1_048_576)
-    assert glm.efforts == [] and glm.default_effort is None  # no Effort control
+    assert (glm.efforts, glm.default_effort) == (["max", "high", "low"], "max")
     assert (qwen.efforts[0], qwen.context_window) == ("xhigh", 1_024_000)
 
 

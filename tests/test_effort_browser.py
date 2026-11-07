@@ -34,10 +34,20 @@ def test_the_dropdown_lists_the_selected_models_levels_with_its_default_selected
     expect(panel.locator(".item > span:nth-child(2)")).to_have_text(["max", "high", "low", "none"])
 
 
-def test_glm_shows_a_disabled_no_effort_control_that_sends_nothing(live_page):
+def test_glm_offers_max_high_and_low_with_max_selected(live_page):
     page = live_page()
 
     expect(model_button(page)).to_have_text("GLM 5.3")
+    expect(effort_button(page)).to_have_text("max")
+    effort_button(page).click()
+    panel = page.get_by_role("dialog", name="Reasoning effort")
+    expect(panel.locator(".item > span:nth-child(2)")).to_have_text(["max", "high", "low"])
+
+
+def test_no_model_shows_a_disabled_no_effort_control_that_sends_nothing(live_page):
+    page = live_page()
+    pick_model(page, "No model")
+
     expect(effort_button(page)).to_have_text("no effort")
     expect(effort_button(page)).to_be_disabled()
     expect(page.locator("#effort")).to_have_value("")
@@ -68,7 +78,8 @@ def test_switching_away_and_back_restores_the_choice_made_for_that_model(live_pa
     pick_effort(page, "max")
 
     pick_model(page, "GLM 5.3")
-    expect(effort_button(page)).to_have_text("no effort")
+    expect(effort_button(page)).to_have_text("max")  # GLM's own default, not Sonnet's choice
+    pick_effort(page, "low")
     pick_model(page, "Claude Sonnet 5.5")
 
     expect(effort_button(page)).to_have_text("max")

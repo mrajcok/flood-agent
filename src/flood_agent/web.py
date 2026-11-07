@@ -104,9 +104,9 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
     models.append({"id": NO_MODEL, "label": "No model", "disabled": False, "efforts": [], "default_effort": None})
     default_model = agent.config.model if has_api_key else NO_MODEL
 
-    def meter(tokens: int | None, model: str | None = None) -> dict:
-        """The Context Usage meter for `model` (the default when None); No model has no window."""
-        return {"context": context_usage(tokens, agent.config.window_of(model or default_model))}
+    def usage(tokens: int | None, model: str | None = None) -> dict:
+        """The Context Usage for `model` (the default when None); No model has no window."""
+        return context_usage(tokens, agent.config.window_of(model or default_model))
 
     def last_real_tokens(traces: list[dict]) -> int | None:
         """The latest real LLM call's prompt tokens: fake (No model) turns do not count."""
@@ -118,11 +118,15 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
             return None
         return last_real_tokens([i["trace"] for i in agent.store.transcript(conversation_id) if i["type"] == "trace"])
 
-    def model_choice(raw: str | None) -> str:
-        """The model a prompt asked for, checked against the curated list and the API key (422 otherwise)."""
-        choice = raw or default_model
+    def known_model(choice: str) -> str:
+        """`choice` if it is in the curated list or NO_MODEL (422 otherwise)."""
         if choice not in {m["id"] for m in models}:
             raise HTTPException(422, f"unknown model {choice!r}")
+        return choice
+
+    def model_choice(raw: str | None) -> str:
+        """The model a prompt asked for, checked against the curated list and the API key (422 otherwise)."""
+        choice = known_model(raw or default_model)
         if choice != NO_MODEL and not has_api_key:
             raise HTTPException(422, f"{choice} {NEEDS_KEY}: set it in .env and restart the app")
         return choice
@@ -131,7 +135,8 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
         """The Effort a prompt asked for (None: the model's default), checked against the model's levels (422 otherwise)."""
         if model == NO_MODEL or not raw:
             return None
-        spec = next(m for m in agent.config.models if m.id == model)
+        spec = agent.config.spec_of(model)
+        assert spec is not None  # model_choice has already vetted it
         if raw not in spec.efforts:
             raise HTTPException(422, f"{spec.label} does not offer effort {raw!r}")
         return raw
@@ -164,18 +169,17 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
         return items
 
     def model_picker() -> dict:
-        return {"models": models, "default_model": default_model, "needs_key": NEEDS_KEY}
+        return {"models": models, "default_model": default_model, "needs_key": NEEDS_KEY, "no_model": NO_MODEL}
 
     @app.get("/context-meter", response_class=HTMLResponse)
     def context_meter(model: str, conversation_id: str = ""):
         """The meter for the model selected for the next prompt (the Conversation's tokens, that model's window)."""
-        if model not in {m["id"] for m in models}:
-            raise HTTPException(422, f"unknown model {model!r}")
-        return TEMPLATES.get_template("context_meter.html").render(**meter(latest_tokens(conversation_id), model))
+        known_model(model)
+        return TEMPLATES.get_template("context_meter.html").render(context=usage(latest_tokens(conversation_id), model))
 
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request):
-        return TEMPLATES.TemplateResponse(request, "index.html", {**sidebar(None), **meter(None), **model_picker(), "items": []})
+        return TEMPLATES.TemplateResponse(request, "index.html", {**sidebar(None), "context": usage(None), **model_picker(), "items": []})
 
     @app.get("/c/{conversation_id}", response_class=HTMLResponse)
     def open_conversation(request: Request, conversation_id: str):
@@ -185,7 +189,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
         traces = [i["trace"] for i in items if i["type"] == "trace"]
         return TEMPLATES.TemplateResponse(
             request, "index.html",
-            {**sidebar(conversation_id), **meter(last_real_tokens(traces)),
+            {**sidebar(conversation_id), "context": usage(last_real_tokens(traces)),
              **model_picker(), "items": items, "current_id": conversation_id},
         )
 
@@ -338,10 +342,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
                             yield _sse("turn", TEMPLATES.get_template("turn_delete.html").render(
                                 conversation_id=conversation.id, turn_id=ev.turn_id))
                         trace_html = TEMPLATES.get_template("trace.html").render(trace=ev.trace)
-                        # The meter under the prompt box refreshes in place (hx-swap-oob); a fake turn leaves it alone.
-                        meter_html = "" if ev.trace["model"] == NO_MODEL else TEMPLATES.get_template(
-                            "context_meter.html").render(oob=True, **meter(context_tokens(ev.trace), ev.trace["model"]))
-                        yield _sse("trace", trace_html + meter_html)
+                        yield _sse("trace", trace_html)
                     elif isinstance(ev, TurnEnd):
                         break
             except Exception as e:  # keep the stream well-formed for the browser

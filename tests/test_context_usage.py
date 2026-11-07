@@ -73,10 +73,11 @@ def test_a_reopened_conversation_shows_its_latest_calls_prompt_tokens(build_agen
     assert "100 of 1.05M" in meter(client.get(f"/c/{cid}").text).group(1)  # ScriptedLLM reports 100 prompt tokens
 
 
-def test_the_stream_refreshes_the_meter_in_place_when_the_turn_ends(build_agent, web_client):
+def test_after_a_turn_the_context_meter_endpoint_reports_its_tokens_against_the_requested_models_window(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
-    _, body = ask(client, "hello")
-    assert 'id="context-meter"' in body and 'hx-swap-oob="true"' in body and "100 of 1.05M" in body
+    cid, _ = ask(client, "hello")
+    page = client.get("/context-meter", params={"model": "anthropic/claude-sonnet-5.5", "conversation_id": cid}).text
+    assert "100 of 1M" in meter(page).group(1)
 
 
 def test_no_model_has_no_context_window(build_agent, web_client):

@@ -125,12 +125,6 @@ def test_the_meter_uses_the_window_of_the_model_selected_for_the_next_prompt(bui
     assert client.get("/context-meter", params={"model": "nobody/nothing"}).status_code == 422
 
 
-def test_the_turn_end_meter_uses_the_window_of_the_model_that_ran(build_agent, web_client):
-    client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
-
-    assert "100 of 1M" in finish_turn(client, post_chat(client, model=SONNET))
-
-
 def test_the_real_client_factory_makes_one_client_per_model_only_when_asked_and_needs_a_key():
     keyless = Settings().client_factory()  # pyright: ignore[reportCallIssue]
     with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):

@@ -39,7 +39,7 @@ A list of Canned Prompts appears above the message box while "No model" is selec
 to send it. Follow-ups are indented under the prompt they build on (run the parent first in the
 same Conversation), and entries marked "fails on purpose" exercise error paths (bad SQL, row and
 chart caps, malformed tool calls, an LLM stream error). Any other message gets a short reply
-pointing to the Canned Prompts. Traces show the model as `fake` and $0.00. Canned Prompts live
+pointing to the Canned Prompts. Traces show "No model" and $0.00. Canned Prompts live
 in `src/flood_agent/canned_prompts.yaml` (format in its header); `pytest` runs every one and
 checks its declared outcome.
 

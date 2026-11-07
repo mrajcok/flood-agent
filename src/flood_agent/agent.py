@@ -249,7 +249,9 @@ class Agent:
         self.config = config
         self.client_for = client_for
         self.semantic_layer = SemanticLayer(config.semantic_layer)
-        self.tables = Catalog(config.app_db, config.clock, config.result_ttl_ms)
+        self.tables = Catalog(
+            config.app_db, config.clock, config.result_ttl_ms, telemetry_tables=self.semantic_layer.table_names()
+        )
         self.store = ConversationStore(config.app_db, config.clock)
         self._connection: McpConnection | None = None
         self._restart_lock = asyncio.Lock()
@@ -310,6 +312,7 @@ class Agent:
             app_db=self.store.path,
             query_timeout_s=self.config.query_timeout_s,
             chart_row_cap=self.config.chart_row_cap,
+            telemetry_tables=tuple(self.semantic_layer.table_names()),
         )
 
     def _server_params(self) -> StdioServerParameters:

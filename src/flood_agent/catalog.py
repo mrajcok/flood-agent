@@ -72,35 +72,50 @@ def _now() -> int:
     return int(time.time() * 1000)
 
 
-class Catalog:
-    def __init__(self, app_db: Path, clock: Callable[[], int] = _now, default_retention_ms: int = DAY_MS):
-        """`clock` returns epoch ms; `default_retention_ms` is the Retention a new Result Table is given."""
+class CatalogView:
+    """The read-only Table Catalog: every read, no write. It has no write operations and opens the app
+    database in SQLite read-only mode, so the guarantee holds at runtime as well as in the types. The MCP
+    server uses this (the app database must already exist)."""
+
+    def __init__(
+        self, app_db: Path, clock: Callable[[], int] = _now, telemetry_tables: Iterable[str] = (),
+        _read_only: bool = True,
+    ):
+        """`clock` returns epoch ms; `telemetry_tables` are the Telemetry Database table names."""
         self.path = Path(app_db)
         self._now = clock
-        self.default_retention_ms = default_retention_ms
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with closing(self._connect()) as con, con:
-            con.executescript(SCHEMA)
+        self._read_only = _read_only
+        self.telemetry_tables = frozenset(t.lower() for t in telemetry_tables)
 
     def _connect(self) -> sqlite3.Connection:
-        con = sqlite3.connect(self.path)
+        if self._read_only:
+            con = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, timeout=5)
+        else:
+            con = sqlite3.connect(self.path)
         con.row_factory = sqlite3.Row
         return con
 
-    def register(
-        self, name: str, conversation_id: str, turn_id: int, title: str = "", columns: list[dict] | None = None,
-        request: str = "", truncated_to: int | None = None,
-    ) -> None:
-        """Record a new Result Table made by `turn_id`, with the current default Retention."""
-        now = self._now()
-        with closing(self._connect()) as con, con:
-            con.execute(
-                "INSERT OR IGNORE INTO result_tables(name, conversation_id, turn_id, created_at, title, columns,"
-                " request, truncated_to, retention_ms) VALUES (?,?,?,?,?,?,?,?,?)",
-                (name, conversation_id, turn_id, now, title, json.dumps(columns or []), request, truncated_to,
-                 self.default_retention_ms),
-            )
-            con.execute("UPDATE conversations SET last_activity_at=? WHERE id=?", (now, conversation_id))
+    def lookup_names(self) -> set[str]:
+        """Every registered Lookup Table (the registry, not the `lookup_` prefix, decides: ADR 0003)."""
+        with closing(self._connect()) as con:
+            return {r[0] for r in con.execute("SELECT name FROM lookup_tables")}
+
+    def kind_of(self, name: str) -> Literal["telemetry", "result", "saved", "lookup"] | None:
+        """The kind of `name` (any case), or None if it is not a table here or no longer live."""
+        wanted = name.lower()
+        if wanted in self.telemetry_tables:
+            return "telemetry"
+        if wanted in {n.lower() for n in self.lookup_names()}:
+            return "lookup"
+        try:
+            return self[wanted].kind
+        except (KeyError, TableExpired):
+            return None
+
+    def readable(self) -> set[str]:
+        """Every table a query may read (ADR 0003): all live Result and Saved Tables, from any Conversation,
+        and every Lookup Table."""
+        return set(self.names()) | self.lookup_names()
 
     def _table(self, row: sqlite3.Row) -> Table:
         return Table(
@@ -116,10 +131,10 @@ class Catalog:
         return not row["expired"] and row["created_at"] + row["retention_ms"] > now
 
     def __getitem__(self, name: str) -> Table:
-        """The live Result or Saved Table `name`. KeyError if no such table is registered; `TableExpired`
-        if it is registered but no longer live."""
+        """The live Result or Saved Table `name` (any case). KeyError if no such table is registered;
+        `TableExpired` if it is registered but no longer live."""
         with closing(self._connect()) as con:
-            row = con.execute("SELECT * FROM result_tables WHERE name=?", (name,)).fetchone()
+            row = con.execute("SELECT * FROM result_tables WHERE name=? COLLATE NOCASE", (name,)).fetchone()
         if row is None:
             raise KeyError(name)
         if not self._is_live(row, self._now()):
@@ -130,18 +145,18 @@ class Catalog:
         if not isinstance(name, str):
             return False
         with closing(self._connect()) as con:
-            row = con.execute("SELECT * FROM result_tables WHERE name=?", (name,)).fetchone()
+            row = con.execute("SELECT * FROM result_tables WHERE name=? COLLATE NOCASE", (name,)).fetchone()
         return row is not None and self._is_live(row, self._now())
 
     def live_among(self, names: Iterable[str]) -> set[str]:
         """The subset of `names` that are live Result or Saved Tables (one query per 500 names)."""
-        names, now, out = list(set(names)), self._now(), set()
+        names, now, out = list({n.lower() for n in names}), self._now(), set()
         with closing(self._connect()) as con:
             for i in range(0, len(names), 500):
                 chunk = names[i:i + 500]
                 marks = ",".join("?" * len(chunk))
                 out.update(r["name"] for r in con.execute(
-                    f"SELECT * FROM result_tables WHERE name IN ({marks})", chunk) if self._is_live(r, now))
+                    f"SELECT * FROM result_tables WHERE lower(name) IN ({marks})", chunk) if self._is_live(r, now))
         return out
 
     def tables_of(self, conversation_id: str) -> list[Table]:
@@ -157,3 +172,33 @@ class Catalog:
         now = self._now()
         with closing(self._connect()) as con:
             return [r["name"] for r in con.execute("SELECT * FROM result_tables ORDER BY name") if self._is_live(r, now)]
+
+
+class Catalog(CatalogView):
+    """The writer: the view's reads plus registration. Creates the registry tables if they are missing."""
+
+    def __init__(
+        self, app_db: Path, clock: Callable[[], int] = _now, default_retention_ms: int = DAY_MS,
+        telemetry_tables: Iterable[str] = (),
+    ):
+        """`default_retention_ms` is the Retention a new Result Table is given."""
+        super().__init__(app_db, clock, telemetry_tables, _read_only=False)
+        self.default_retention_ms = default_retention_ms
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(self._connect()) as con, con:
+            con.executescript(SCHEMA)
+
+    def register(
+        self, name: str, conversation_id: str, turn_id: int, title: str = "", columns: list[dict] | None = None,
+        request: str = "", truncated_to: int | None = None,
+    ) -> None:
+        """Record a new Result Table made by `turn_id`, with the current default Retention."""
+        now = self._now()
+        with closing(self._connect()) as con, con:
+            con.execute(
+                "INSERT OR IGNORE INTO result_tables(name, conversation_id, turn_id, created_at, title, columns,"
+                " request, truncated_to, retention_ms) VALUES (?,?,?,?,?,?,?,?,?)",
+                (name, conversation_id, turn_id, now, title, json.dumps(columns or []), request, truncated_to,
+                 self.default_retention_ms),
+            )
+            con.execute("UPDATE conversations SET last_activity_at=? WHERE id=?", (now, conversation_id))

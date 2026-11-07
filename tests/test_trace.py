@@ -255,3 +255,21 @@ def test_cache_write_tokens_show_in_totals_and_steps():
     new = {"prompt_tokens": 10, "completion_tokens": 2, "cost": None, "duration_ms": 5, "cache_write_tokens": 7}
     html = render_trace(new, {"prompt_tokens": 10, "completion_tokens": 2, "cost": None, "cache_write_tokens": 7})
     assert html.count("7 cache write") == 2
+
+
+def test_a_stored_trace_lacking_both_cache_fields_renders_with_zero_totals():
+    from flood_agent.llm import UsageChunk
+    old_step = {"prompt_tokens": 10, "completion_tokens": 2, "cost": 0.001}
+    assert UsageChunk.from_dict(old_step).cached_tokens == 0
+    assert UsageChunk.total([old_step, old_step]).cache_write_tokens == 0
+    html = render_trace({"prompt_tokens": 20, "completion_tokens": 4, "cost": 0.002, "duration_ms": 5}, old_step)
+    assert "10 in / 2 out" in html and "cached" not in html and "cache write" not in html
+
+
+def test_usage_total_sums_across_values_and_keeps_cost_none_when_unreported():
+    from flood_agent.llm import UsageChunk
+    a = {"prompt_tokens": 10, "completion_tokens": 2, "cost": None, "cached_tokens": 4}
+    b = {"prompt_tokens": 5, "completion_tokens": 1, "cost": None, "cache_write_tokens": 3}
+    assert UsageChunk.total([a, b]) == UsageChunk(15, 3, None, 4, 3)
+    assert UsageChunk.total([a, {**b, "cost": 0.5}]).cost == 0.5
+    assert UsageChunk.total([]) == UsageChunk()

@@ -35,6 +35,7 @@
     .strip .dd { position: relative; }
     .strip .trig { font: inherit; color: inherit; background: transparent; border: 0; border-radius: .4rem; padding: .1rem .3rem; margin: 0 -.3rem; cursor: pointer; line-height: 1.5; }
     .strip .trig:hover, .strip .trig.open { background: #e3e8f4; }
+    .strip .trig:disabled { cursor: default; color: #8a91a3; background: transparent; }
     .strip .trig:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
     .strip .meter { display: inline-block; width: 4.5rem; height: .4rem; background: #e3e7ef; border-radius: 999px; overflow: hidden; vertical-align: middle; }
     .strip .meter i { display: block; height: 100%; background: #4a6fd3; }
@@ -214,7 +215,7 @@
 </head>
 <body>
   {% macro entry(c, css_class="") %}
-  <li{% if css_class %} class="{{ css_class }}"{% endif %}><button type="button" hx-post="/chat" hx-include="#conversation_id, #max_rows, #model" hx-vals='{{ {"message": c.prompt} | tojson }}'
+  <li{% if css_class %} class="{{ css_class }}"{% endif %}><button type="button" hx-post="/chat" hx-include="#conversation_id, #max_rows, #model, #effort" hx-vals='{{ {"message": c.prompt} | tojson }}'
     hx-target="#chat" hx-swap="beforeend">{{ c.prompt }}</button>{% if c.fails_on_purpose %} <small class="fails">fails on purpose</small>{% endif %}</li>
   {% endmacro %}
   <div class="topbar">
@@ -259,7 +260,7 @@
   </div>
   {% endif %}
   </div>
-  <form hx-post="/chat" hx-include="#max_rows, #model" hx-target="#chat" hx-swap="beforeend" hx-on::after-request="this.reset()"
+  <form hx-post="/chat" hx-include="#max_rows, #model, #effort" hx-target="#chat" hx-swap="beforeend" hx-on::after-request="this.reset()"
         hx-on::before-request="if (!this.elements.message.value.trim()) event.preventDefault()"
         x-data="{ lastEscape: 0,
           escape() {
@@ -282,9 +283,28 @@
     </div>
   </form>
   <div class="strip" x-data="{ choice: '10000', custom: '', open: false, options: ['10', '100', '1000', '10000', '100000', '1000000'],
-                                modelOpen: false, models: {{ models | tojson | forceescape }}, model: {{ default_model | tojson | forceescape }},
+                                modelOpen: false, effortOpen: false, effort: '', models: {{ models | tojson | forceescape }}, model: {{ default_model | tojson | forceescape }},
                                 defaultModel: {{ default_model | tojson | forceescape }},
                                 get shown() { return this.choice === 'custom' ? (this.custom || '?') : Number(this.choice).toLocaleString() },
+                                get current() { return this.models.find(m => m.id === this.model) || {} },
+                                get efforts() { return this.current.efforts || [] },
+                                get effortLabel() { return this.effort || 'no effort' },
+                                savedEfforts() {
+                                  try { return JSON.parse(localStorage.getItem('flood-agent.efforts')) || {}; } catch (e) { return {}; }
+                                },
+                                setEffort(level) {
+                                  /* Remember it for the selected model, in the browser. */
+                                  this.effort = level; this.effortOpen = false;
+                                  if (!level) return;
+                                  try { localStorage.setItem('flood-agent.efforts', JSON.stringify({ ...this.savedEfforts(), [this.model]: level })); } catch (e) {}
+                                },
+                                settleEffort(carried) {
+                                  /* After a model change: keep the Effort if the model offers it, else that model's remembered choice, else its default. */
+                                  const offered = this.efforts;
+                                  if (!offered.length) { this.effort = ''; return; }
+                                  const saved = this.savedEfforts()[this.model];
+                                  this.effort = offered.includes(carried) ? carried : offered.includes(saved) ? saved : this.current.default_effort;
+                                },
                                 get modelLabel() { return (this.models.find(m => m.id === this.model) || {}).label || this.model },
                                 load() {
                                   /* The remembered Model Choice, unless it is gone or disabled: then the default model. */
@@ -292,10 +312,13 @@
                                   try { saved = localStorage.getItem('flood-agent.model'); } catch (e) {}
                                   const ok = id => this.models.some(m => m.id === id && !m.disabled);
                                   this.model = ok(saved) ? saved : this.defaultModel;
+                                  this.settleEffort(null);
                                   this.refreshMeter();
                                 },
                                 pick(id) {
+                                  const carried = this.effort;
                                   this.model = id; this.modelOpen = false;
+                                  this.settleEffort(carried);
                                   try { localStorage.setItem('flood-agent.model', id); } catch (e) {}
                                   this.refreshMeter();
                                 },
@@ -305,26 +328,37 @@
                                   htmx.ajax('GET', '/context-meter?model=' + encodeURIComponent(this.model) + '&conversation_id=' + encodeURIComponent(cid),
                                             { target: '#context-meter', swap: 'outerHTML' });
                                 } }"
-       {% if not fake_mode %}x-init="load()" {% endif %}@click.outside="open = false; modelOpen = false" @keydown.escape.window="open = false; modelOpen = false">
+       {% if not fake_mode %}x-init="load()" {% endif %}@click.outside="open = false; modelOpen = false; effortOpen = false" @keydown.escape.window="open = false; modelOpen = false; effortOpen = false">
     <input type="hidden" id="max_rows" name="max_rows" :value="choice === 'custom' ? custom : choice" value="10000">
+    {% if not fake_mode %}<input type="hidden" id="effort" name="effort" :value="effort" value="">{% endif %}
     {% if not fake_mode %}<input type="hidden" id="model" name="model" :value="model" value="{{ default_model }}">{% endif %}
     <div class="row">
       {% if fake_mode %}<span title="Model">{{ model }}</span>{% else %}
       <span class="dd">
         <button type="button" class="trig" :class="{ open: modelOpen }" aria-haspopup="true" :aria-expanded="modelOpen" title="Model for the next prompt"
-                @click="modelOpen = !modelOpen; open = false" x-text="modelLabel">{{ (models | selectattr("id", "equalto", default_model) | first).label }}</button>
+                @click="modelOpen = !modelOpen; open = false; effortOpen = false" x-text="modelLabel">{{ (models | selectattr("id", "equalto", default_model) | first).label }}</button>
         <div class="panel left" role="dialog" aria-label="Model" x-show="modelOpen" x-cloak>
           <h6>Model</h6>
           <template x-for="m in models" :key="m.id"><button type="button" class="item" :disabled="m.disabled" @click="pick(m.id)">
             <span class="tick" x-text="m.id === model ? '\u2713' : ''"></span><span x-text="m.label"></span>
             <small x-show="m.disabled">{{ needs_key }}</small></button></template>
         </div>
+      </span>
+      <span class="sep">&middot;</span>
+      <span class="dd">
+        <button type="button" class="trig" :class="{ open: effortOpen }" :disabled="!efforts.length" aria-haspopup="true" :aria-expanded="effortOpen"
+                title="Effort for the next prompt" @click="effortOpen = !effortOpen; modelOpen = false; open = false" x-text="effortLabel">no effort</button>
+        <div class="panel left" role="dialog" aria-label="Effort" x-show="effortOpen" x-cloak>
+          <h6>Effort</h6>
+          <template x-for="level in efforts" :key="level"><button type="button" class="item" @click="setEffort(level)">
+            <span class="tick" x-text="level === effort ? '\u2713' : ''"></span><span x-text="level"></span></button></template>
+        </div>
       </span>{% endif %}
       <span class="sep">&middot;</span>
       {% include "context_meter.html" %}
       <span class="spacer"></span>
       <span class="dd">
-        <button type="button" class="trig" :class="{ open }" aria-haspopup="true" :aria-expanded="open" @click="open = !open; modelOpen = false"
+        <button type="button" class="trig" :class="{ open }" aria-haspopup="true" :aria-expanded="open" @click="open = !open; modelOpen = false; effortOpen = false"
                 title="Rows kept from each query run by this prompt">&le; <span x-text="shown">10,000</span> rows per query</button>
         <div class="panel" role="dialog" aria-label="Max rows kept per query" x-show="open" x-cloak>
           <h6 class="sentence">Max rows kept per query</h6>

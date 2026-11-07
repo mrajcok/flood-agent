@@ -29,7 +29,7 @@ class Recorder:
     def __init__(self, inner):
         self.inner, self.calls = inner, []
 
-    def stream_chat(self, messages, tools):
+    def stream_chat(self, messages, tools, **extra):
         self.calls.append(json.dumps(messages))
         return self.inner.stream_chat(messages, tools)
 

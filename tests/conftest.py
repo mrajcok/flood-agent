@@ -124,7 +124,7 @@ class ScriptedLLM:
         self.calls: list[list[dict]] = []
         self.tools_seen_names: list[str] = []
 
-    async def stream_chat(self, messages, tools):
+    async def stream_chat(self, messages, tools, **extra):
         self.calls.append(copy.deepcopy(messages))
         self.tools_seen_names = [t["function"]["name"] for t in tools]
         step = self.steps.pop(0)

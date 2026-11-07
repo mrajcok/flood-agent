@@ -579,7 +579,9 @@ class Agent:
         llm = self.client_for(model)
         spec = self.config.spec_of(model)
         # Only a non-default Effort is sent; the default sends nothing extra.
-        extra = {"reasoning": {"effort": effort}} if effort and spec and effort != spec.default_effort else {}
+        extra: dict = {"reasoning": {"effort": effort}} if effort and spec and effort != spec.default_effort else {}
+        if model.startswith("z-ai/"):  # lets OpenRouter route every step of this conversation to one cache
+            extra["session_id"] = f"conversation-{conversation.id}"
         connection = await self._ensure_connection()
         tools = connection.tools
         failed_attempts = 0

@@ -106,7 +106,20 @@ def test_models_that_cache_automatically_need_no_extra_fields():
     assert caching_fields("deepseek/deepseek-v4") == {}
 
 
-async def request_body(model, reasoning=None):
+def test_glm_models_get_the_conversation_id_as_session_id():
+    from flood_agent.llm import caching_fields
+
+    assert caching_fields("z-ai/glm-5.3", session_id="c7") == {"session_id": "c7"}
+
+
+def test_other_models_never_get_a_session_id():
+    from flood_agent.llm import caching_fields
+
+    for m in ("anthropic/claude-sonnet-5.5", "deepseek/deepseek-v4", "qwen/qwen3-max"):
+        assert "session_id" not in caching_fields(m, session_id="c7")
+
+
+async def request_body(model, reasoning=None, **kw):
     seen: list = []
 
     def handler(request: httpx.Request):
@@ -114,7 +127,7 @@ async def request_body(model, reasoning=None):
         return httpx.Response(200, text=OK, headers={"content-type": "text/event-stream"})
 
     c = OpenRouterClient("k", model, transport=httpx.MockTransport(handler))
-    [x async for x in c.stream_chat([{"role": "user", "content": "hi"}], [], reasoning=reasoning)]
+    [x async for x in c.stream_chat([{"role": "user", "content": "hi"}], [], reasoning=reasoning, **kw)]
     return seen[0]
 
 
@@ -128,3 +141,13 @@ async def test_a_claude_request_body_carries_cache_control_and_keeps_reasoning()
 @pytest.mark.parametrize("model", ["deepseek/deepseek-v4", "z-ai/glm-5.3", "qwen/qwen3-max"])
 async def test_other_models_send_no_cache_control(model):
     assert "cache_control" not in await request_body(model)
+
+
+async def test_a_glm_request_body_carries_the_session_id():
+    body = await request_body("z-ai/glm-5.3", session_id="c7")
+
+    assert body["session_id"] == "c7"
+
+
+async def test_a_deepseek_request_body_has_no_session_id():
+    assert "session_id" not in await request_body("deepseek/deepseek-v4", session_id="c7")

@@ -9,7 +9,8 @@ correctness, retries, latency and cost. On demand only; never part of CI or defa
 The runner is Agent-side harness code: it may read Result Tables (like the UI does). The
 LLM only ever sees what the Agent normally sends (Semantic Layer prompt, the question,
 Query Metadata). A question is correct if ANY successful Result Table the LLM created in
-the turn matches the reference under the rules in `compare.py`. `retries` counts failed
+the turn matches the reference under the rules in `compare.py`, or ANY successful
+`run_count_query` number matches a one-cell reference (a count makes no Result Table). `retries` counts failed
 run_query attempts (the Agent's failed-attempt counter).
 """
 
@@ -26,7 +27,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from flood_agent import queries, table_names
-from flood_agent.agent import Agent, Conversation, TraceEntry, TurnError
+from flood_agent.agent import Agent, Conversation, TraceEntry, TraceReady, TurnError
 from flood_agent.config import Settings
 from flood_agent.evalset.client import UsageMeter
 from flood_agent.evalset.compare import DEFAULT_TOLERANCE, Comparison, compare
@@ -59,6 +60,7 @@ class QuestionResult:
     error: str | None = None
     matched_table: str | None = None
     result_tables: int = 0
+    count_queries: int = 0  # successful run_count_query answers (they create no Result Table)
 
 
 def _result_tables(results_db: Path) -> list[str]:
@@ -72,10 +74,25 @@ def _result_tables(results_db: Path) -> list[str]:
     return [n for n in names if table_names.GENERATED_RE.fullmatch(n)]
 
 
-def _judge(q: Question, ref, results_db: Path) -> tuple[bool, str, int, str | None, int]:
+def _count_answers(trace: dict | None) -> list[int]:
+    """The numbers of the successful run_count_query calls in the turn: the LLM was told these
+    directly and no Result Table exists for them, so they are judged as one-cell answers."""
+    counts = []
+    for e in (trace or {}).get("entries", []):
+        if e["kind"] == "tool_call" and e["name"] == "run_count_query":
+            try:
+                result = json.loads(e["query_metadata"])
+            except ValueError:
+                continue
+            if result.get("success"):
+                counts.append(result["count"])
+    return counts
+
+
+def _judge(q: Question, ref, results_db: Path, counts: list[int]) -> tuple[bool, str, int, str | None, int]:
     names = _result_tables(results_db)
-    if not names:
-        return False, "no Result Table was created", 0, None, 0
+    if not names and not counts:
+        return False, "no Result Table or count answer was produced", 0, None, 0
     ref_cols, ref_rows = ref
     tol = q.tolerance if q.tolerance is not None else DEFAULT_TOLERANCE
     last: Comparison | None = None
@@ -85,7 +102,12 @@ def _judge(q: Question, ref, results_db: Path) -> tuple[bool, str, int, str | No
         if c.ok:
             return True, "", c.extra_columns, name, len(names)
         last = c
-    assert last is not None  # names is non-empty, so the loop ran
+    for n in counts:
+        c = compare(ref_cols, ref_rows, ["count"], [(n,)], q.ordered, tol)
+        if c.ok:
+            return True, "", 0, "run_count_query", len(names)
+        last = c
+    assert last is not None  # a table or a count was compared
     return False, last.reason, 0, None, len(names)
 
 
@@ -107,26 +129,29 @@ async def _run_question(model, q, ref, telemetry_db, semantic_layer, client_fact
                 semantic_layer=semantic_layer, model=model, app_db=app_db),
         lambda _model: llm,
     )
-    retries, error = 0, None
+    retries, error, trace = 0, None, None
     start = time.perf_counter()
     try:
         async with agent:
             async for event in agent.run_turn(Conversation(), q.question, EVAL_MAX_RESULT_ROWS):
                 if isinstance(event, TraceEntry) and event.kind == "query_error":
                     retries += 1
+                elif isinstance(event, TraceReady):
+                    trace = event.trace
                 elif isinstance(event, TurnError):
                     error = event.detail
     except Exception as e:  # a failed model call is a result, not a crash of the whole run
         error = _describe(e)
     latency = time.perf_counter() - start
     usage = llm.usage
+    counts = [] if error else _count_answers(trace)
     if error:
         ok, reason, extra, matched, n = False, "turn failed", 0, None, 0
     else:
-        ok, reason, extra, matched, n = _judge(q, ref, results_db)
+        ok, reason, extra, matched, n = _judge(q, ref, results_db, counts)
     return QuestionResult(
         q.id, model, ok, reason, retries, latency, usage.get("cost"), usage.get("prompt_tokens"),
-        usage.get("completion_tokens"), extra, error, matched, n,
+        usage.get("completion_tokens"), extra, error, matched, n, len(counts),
     )
 
 

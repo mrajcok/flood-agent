@@ -161,3 +161,37 @@ def test_main_reports_invalid_settings_instead_of_a_traceback(monkeypatch, capsy
     monkeypatch.setenv("PORT", "abc")  # irrelevant to the runner, but still an invalid setting
     assert runner.main(["--db", "x.db"]) == 2
     assert "port" in capsys.readouterr().err.lower()
+
+
+COUNT_Q = Question(
+    id="total-flow-count",
+    question="How many Flow Records are there in total? Return a single number.",
+    sql="SELECT COUNT(*) AS flows FROM flows",
+)
+
+
+def count(sql, call_id="c1"):
+    return [tool_call("run_count_query", call_id, sql=sql)]
+
+
+async def test_a_right_run_count_query_answer_is_correct_without_a_result_table(
+    telemetry_db, semantic_layer_path, tmp_path
+):
+    r, _ = await run_one([count(COUNT_Q.sql), DONE], telemetry_db, semantic_layer_path, tmp_path, COUNT_Q)
+    assert r.correct and r.matched_table == "run_count_query" and r.result_tables == 0 and r.count_queries == 1
+
+
+async def test_a_wrong_run_count_query_answer_is_incorrect(telemetry_db, semantic_layer_path, tmp_path):
+    sql = "SELECT COUNT(*) FROM flows WHERE dport = 443"
+    r, _ = await run_one([count(sql), DONE], telemetry_db, semantic_layer_path, tmp_path, COUNT_Q)
+    assert not r.correct and r.count_queries == 1 and "row count" not in r.reason and r.reason
+
+
+async def test_a_rejected_count_query_is_not_an_answer(telemetry_db, semantic_layer_path, tmp_path):
+    r, _ = await run_one([count("SELECT dport FROM flows"), DONE], telemetry_db, semantic_layer_path, tmp_path, COUNT_Q)
+    assert not r.correct and r.count_queries == 0 and r.reason == "no Result Table or count answer was produced"
+
+
+async def test_a_count_does_not_answer_a_question_that_wants_a_table(telemetry_db, semantic_layer_path, tmp_path):
+    r, _ = await run_one([count("SELECT COUNT(*) FROM flows"), DONE], telemetry_db, semantic_layer_path, tmp_path)
+    assert not r.correct and r.count_queries == 1

@@ -42,6 +42,22 @@ async def test_trace_records_cached_tokens_per_step_and_in_totals(make_agent):
     assert trace["totals"]["cached_tokens"] == 160
 
 
+async def test_trace_records_cache_write_tokens_per_step_and_in_totals(make_agent):
+    llm = ScriptedLLM([tool_call("run_query", sql=SQL, title="t")], [TextChunk("Done.")])
+    llm.cache_write_tokens = 70
+    _, trace = await run(make_agent, llm)
+    assert [s["usage"]["cache_write_tokens"] for s in of_kind(trace, "llm_step")] == [70, 70]
+    assert trace["totals"]["cache_write_tokens"] == 140
+
+
+async def test_trace_totals_tolerate_older_steps_without_cache_write_tokens():
+    from flood_agent.trace import TraceBuilder
+    t = TraceBuilder.__new__(TraceBuilder)
+    t.trace = {"entries": [{"kind": "llm_step", "duration_ms": 1,
+                            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": None}}]}
+    assert t.finish()["totals"]["cache_write_tokens"] == 0
+
+
 async def test_success_turn_trace_has_every_item(make_agent):
     llm = ScriptedLLM(
         [TextChunk("Let me query."), tool_call("run_query", sql=SQL, title="t")],
@@ -58,7 +74,8 @@ async def test_success_turn_trace_has_every_item(make_agent):
     assert steps[0]["raw_response"]["content"] == "Let me query."
     call = steps[0]["raw_response"]["tool_calls"][0]
     assert call["name"] == "run_query" and json.loads(call["arguments"])["sql"] == SQL
-    assert steps[0]["usage"] == {"prompt_tokens": 100, "completion_tokens": 20, "cost": 0.0012, "cached_tokens": 0}
+    assert steps[0]["usage"] == {"prompt_tokens": 100, "completion_tokens": 20, "cost": 0.0012, "cached_tokens": 0,
+                               "cache_write_tokens": 0}
     assert steps[0]["duration_ms"] >= 0
     assert trace["totals"]["prompt_tokens"] == 200 and trace["totals"]["completion_tokens"] == 40
     assert trace["totals"]["cost"] == 0.0024

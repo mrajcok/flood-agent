@@ -114,3 +114,23 @@ def test_trace_shows_cached_tokens_only_when_some_were_cached(build_agent, live_
     plain.locator("textarea[name=message]").press("Enter")
     expect(plain.locator(".trace-totals")).to_contain_text("anthropic/claude-opus-5.5")
     expect(plain.locator(".trace-totals")).not_to_contain_text("cached")
+
+
+def test_trace_shows_cache_write_tokens_only_when_some_were_written(build_agent, live_page):
+    writing = ScriptedLLM([TextChunk("first")])
+    writing.cache_write_tokens = 70
+    page = live_page(agent=agent_with_fake_and_real(build_agent, writing))
+    box = page.locator("textarea[name=message]")
+    choose(page, "Claude Opus 5.5")
+    box.fill("hello")
+    box.press("Enter")
+    expect(page.locator(".trace-totals")).to_contain_text("70 cache write")
+    page.locator("details.trace > summary").click()
+    expect(page.locator(".trace-llm_step h4")).to_contain_text("70 cache write")
+
+    plain = live_page(agent=agent_with_fake_and_real(build_agent, ScriptedLLM([TextChunk("second")])))
+    plain.locator("textarea[name=message]").fill("hello")
+    choose(plain, "Claude Opus 5.5")
+    plain.locator("textarea[name=message]").press("Enter")
+    expect(plain.locator(".trace-totals")).to_contain_text("anthropic/claude-opus-5.5")
+    expect(plain.locator(".trace-totals")).not_to_contain_text("cache write")

@@ -45,6 +45,7 @@ class UsageChunk:
     completion_tokens: int = 0
     cost: float | None = None
     cached_tokens: int = 0
+    cache_write_tokens: int = 0
 
 
 Chunk = TextChunk | ToolCallChunk | UsageChunk
@@ -105,7 +106,7 @@ class OpenRouterClient:
                         u = obj["usage"]
                         details = u.get("prompt_tokens_details") or {}
                         usage = UsageChunk(u.get("prompt_tokens", 0), u.get("completion_tokens", 0), u.get("cost"),
-                                           details.get("cached_tokens") or 0)
+                                           details.get("cached_tokens") or 0, details.get("cache_write_tokens") or 0)
                     choices = obj.get("choices") or []
                     if not choices:
                         continue

@@ -149,7 +149,7 @@ def test_a_lookup_table_never_expires(build_agent, web_client):
     client = web_client(agent)
     add(client, "hosts", "ip\n1.1.1.1")
     clock.ms += 1000 * DAY
-    agent.sweep_expired()
+    agent.tables.sweep()
     run_turn(client)
     assert last_tool_result(llm.calls[1])["kind"] == "lookup"
     assert stored(agent, "lookup_hosts") == [["1.1.1.1"]]

@@ -11,6 +11,7 @@ import sqlite3
 import time
 from contextlib import closing
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Iterable, Literal
 
@@ -38,6 +39,7 @@ CREATE TABLE IF NOT EXISTS lookup_tables (
 """
 
 DAY_MS = 86_400_000
+ORPHAN_AGE = timedelta(hours=1)
 
 
 class TableExpired(Exception):
@@ -259,3 +261,33 @@ class Catalog(CatalogView):
         parsed = lookup_tables.parse_rows(text)
         lookup_tables.write_table(self._results_db(), name, parsed, replace=True)
         return self._register_lookup(name, parsed)
+
+    def sweep(self) -> None:
+        """Drop the physical tables of expired tables (they stay registered, as dropped), and any `rt_*`
+        table in the results database that has no registry row and whose generated name is over an hour
+        old (left by a turn cancelled while its tool call was waiting). Nothing correct depends on this."""
+        if self.results_db is None or not self.results_db.exists():
+            return
+        now = self._now()
+        # The generated name holds local time (queries.py), so compare on that basis.
+        cutoff = datetime.fromtimestamp(now / 1000) - ORPHAN_AGE
+        with closing(self._connect()) as app, closing(sqlite3.connect(self.results_db)) as results:
+            rows = app.execute("SELECT name, created_at, retention_ms, expired FROM result_tables").fetchall()
+            registered = {r["name"] for r in rows}
+            due = [r["name"] for r in rows if not r["expired"] and r["created_at"] + r["retention_ms"] <= now]
+            physical = [r[0] for r in results.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+            orphans = [n for n in physical if table_names.GENERATED_RE.fullmatch(n) and n not in registered
+                       and (_name_time(n) or cutoff) < cutoff]
+            for n in due + orphans:
+                results.execute(f"DROP TABLE IF EXISTS {table_names.quote(n)}")
+            results.commit()
+            with app:
+                app.executemany("UPDATE result_tables SET expired=1 WHERE name=?", [(n,) for n in due])
+
+
+def _name_time(name: str) -> datetime | None:
+    """The local time embedded in a generated name `rt_<YYYYMMDD>_<HHMMSS>[_n]` (None if not a real time)."""
+    try:
+        return datetime.strptime(name[3:18], "%Y%m%d_%H%M%S")
+    except ValueError:
+        return None

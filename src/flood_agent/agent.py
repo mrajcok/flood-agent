@@ -259,7 +259,13 @@ class Agent:
         self._turn_tasks: set[asyncio.Task] = set()
         self._keyed_turns: dict[str, asyncio.Task] = {}  # running turns by the key `run_turn` was given
         self._stopped_turns: set[asyncio.Task] = set()  # turns `stop_turn` cancelled
-        self.sweep_expired()
+        self.tables.sweep()
+
+    def create_conversation(self) -> str:
+        """Persist a new, empty Conversation and return its id. Also sweeps the Table Catalog (expired
+        and orphaned tables), which runs only here and at startup."""
+        self.tables.sweep()
+        return self.store.create_conversation()
 
     async def start(self) -> None:
         """Launch the long-lived MCP server. Needed before `run_turn`, not for row fetches,
@@ -354,24 +360,13 @@ class Agent:
         finally:
             con.close()
 
-    def sweep_expired(self) -> None:
-        """Delete Result Tables whose Retention has passed since their creation.
-
-        Runs on app start, before each turn, and before any row read.
-        """
-        names = self.store.due_for_expiry()
-        if not names:
-            return
-        self._drop_tables(names)
-        self.store.mark_expired(names)
 
     def list_tables(self) -> dict:
         """Names of every table the user can query, by kind, each sorted: Telemetry Database tables
         described in the Semantic Layer, Lookup Tables, and the live Saved Tables and Result Tables
         from every Conversation, plus `retention_days` and `expires_in_ms` for each of the last two
         (the only kinds with a Retention). For the web page only; touches no Conversation, message or Trace."""
-        self.sweep_expired()
-        lifetimes = self.store.live_result_table_lifetimes()
+        lifetimes = {n: self.tables[n] for n in self.tables.names()}
         saved, result = [], []
         for name in lifetimes:  # every live query-made table
             (result if table_names.is_result_table_name(name) else saved).append(name)
@@ -380,7 +375,7 @@ class Agent:
             "lookup": self.store.lookup_table_names(),
             "saved": saved,
             "result": result,
-            "retention_days": {name: life.retention_ms / DAY_MS for name, life in lifetimes.items()},
+            "retention_days": {name: life.retention_days for name, life in lifetimes.items()},
             "expires_in_ms": {name: life.expires_in_ms for name, life in lifetimes.items()},
         }
 
@@ -518,9 +513,8 @@ class Agent:
         self, conversation: Conversation, user_message: str, queue: _TurnQueue, max_result_rows: int, model: str,
         effort: str | None = None,
     ):
-        self.sweep_expired()
         if conversation.id is None:
-            conversation.id = self.store.create_conversation()
+            conversation.id = self.create_conversation()
         turn_id = self.store.start_turn(conversation.id, user_message)
         self._record(conversation, turn_id, {"role": "user", "content": user_message})
         trace = TraceBuilder(model, on_add=lambda entry: queue.put_nowait(TraceLive(entry)))

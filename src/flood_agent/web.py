@@ -27,13 +27,13 @@ from flood_agent.agent import (
     DisplayEvent,
     FlagEvent,
     LlmCallStarted,
-    ResultTableExpired,
     TextDelta,
     TraceLive,
     TraceReady,
     TurnEnd,
     resolve_chart_data,
 )
+from flood_agent.catalog import TableExpired
 from flood_agent.context_usage import context_usage
 from flood_agent.lookup_tables import InvalidLookupTable
 from flood_agent.queries import InvalidSort
@@ -88,8 +88,8 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
 
     app = FastAPI(title="Flood Agent", lifespan=lifespan)
 
-    @app.exception_handler(ResultTableExpired)
-    def expired_handler(request: Request, exc: ResultTableExpired):
+    @app.exception_handler(TableExpired)
+    def expired_handler(request: Request, exc: TableExpired):
         # Any endpoint reading Result Table rows (rows, PSV, chart rows) gets a clear 410.
         return JSONResponse({"detail": "This result has expired and been deleted. Ask again to regenerate it."}, 410)
 
@@ -147,7 +147,8 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
     def history(conversation_id: str) -> list[dict]:
         items = []
         transcript = agent.store.transcript(conversation_id)
-        expired = agent.expired_among({i["result_table"] for i in transcript if i["type"] == "display"})
+        shown = {i["result_table"] for i in transcript if i["type"] == "display"}
+        expired = shown - agent.tables.live_among(shown)
         prompt_at = None  # where the current turn's prompt is in `items`
         for item in transcript:
             if item["type"] == "display" and item["kind"] == "chart":
@@ -290,7 +291,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
         """A Saved or Result Table as the chat's table Display, for the Tables dialog's viewer.
         404 for any other table (Telemetry, Lookup, unknown); 410 once it has expired."""
         try:
-            agent.require_live_result_table(name)
+            agent.tables[name]
         except KeyError:
             raise HTTPException(404, "not a Saved or Result Table")
         return TEMPLATES.get_template("display_table.html").render(**_table_display_urls(name), result_table=name)
@@ -399,10 +400,9 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
     def get_result_table_settings(result_table: str):
         """A live Result Table's name, Retention in days and time left in ms (for a Display's name header)."""
         try:
-            agent.require_live_result_table(result_table)
+            return agent.tables[result_table].to_json()
         except KeyError:
             raise HTTPException(404, "unknown result table")
-        return agent.result_table_settings(result_table)
 
     @app.post("/api/results/{result_table}/settings")
     def result_table_settings(

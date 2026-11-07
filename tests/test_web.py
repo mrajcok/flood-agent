@@ -39,27 +39,6 @@ def test_row_endpoint_rejects_unknown_or_malformed_names(build_agent, web_client
     assert client.get("/api/results/rt_deadbeef/rows").status_code == 404
 
 
-def test_reopening_a_conversation_sweeps_expired_tables_once_not_per_display(build_agent, web_client):
-    def show(msgs):
-        return [tool_call("show_table", result_table=last_tool_result(msgs)["result_table"])]
-
-    steps = []
-    for i in range(3):  # three table Displays in one Conversation
-        steps += [[tool_call("run_query", f"q{i}", sql="SELECT dport, bytes FROM flows", title="t")], show]
-    agent = build_agent(ScriptedLLM(*steps, [TextChunk("done")]))
-    client = web_client(agent)
-    posted = client.post("/chat", data={"message": "show", "max_rows": "1000"})
-    client.get(posted.text.split('sse-connect="')[1].split('"')[0])
-    cid = agent.store.list_conversations()[0]["id"]
-
-    sweeps = []
-    real = agent.sweep_expired
-    agent.sweep_expired = lambda: (sweeps.append(1), real())[1]
-    page = client.get(f"/c/{cid}").text
-    assert page.count("data-rows-url=") == 3
-    assert len(sweeps) == 1
-
-
 @pytest.mark.subprocess
 def test_entering_the_client_starts_one_mcp_server_and_leaving_it_stops_it(build_agent):
     llm = ScriptedLLM([TextChunk("Hello.")])

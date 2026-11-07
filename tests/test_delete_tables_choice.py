@@ -107,8 +107,8 @@ def test_turn_ownership_matches_whole_table_names(build_agent, web_client):
     ask(client, "two", cid)
     one, two = turn_ids(main_pane(client.get(f"/c/{cid}").text))
     base, suffixed = "rt_20260101_000000", "rt_20260101_000000_2"
-    agent.store.add_result_table(cid, base)
-    agent.store.add_result_table(cid, suffixed)
+    agent.tables.register(base, cid, int(one))
+    agent.tables.register(suffixed, cid, int(one))
     agent.store.add_message(cid, int(one), {"role": "assistant", "content": f"made {suffixed}"})
     agent.store.add_message(cid, int(two), {"role": "assistant", "content": f"made {base}"})
     assert client.get(f"/c/{cid}/delete-preview?turn_id={one}").json()["result"] == 1

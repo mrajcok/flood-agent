@@ -4,6 +4,8 @@ from pathlib import Path
 
 import yaml
 
+from flood_agent.catalog import Table
+
 SYSTEM_INSTRUCTIONS = """\
 You help analysts explore network flow telemetry by writing SQL. You never see any
 data: only the Semantic Layer below and Query Metadata (column names, types, row
@@ -96,7 +98,7 @@ class SemanticLayer:
     def render(self) -> str:
         return yaml.safe_dump(self.data, sort_keys=False)
 
-    def system_prompt(self, result_tables: list[dict] | None = None) -> str:
+    def system_prompt(self, result_tables: list[Table] | None = None) -> str:
         return (
             f"{SYSTEM_INSTRUCTIONS}\n"
             f"The dataset ends at window_end; treat 'now' as epoch ms {self.window_end}.\n\n"
@@ -105,7 +107,7 @@ class SemanticLayer:
         )
 
     @staticmethod
-    def render_result_tables(tables: list[dict]) -> str:
+    def render_result_tables(tables: list[Table]) -> str:
         """The Conversation's live Result Tables: names, schemas and originating requests only."""
         if not tables:
             return (
@@ -122,6 +124,6 @@ class SemanticLayer:
             "Result Table from another Conversation can also be shown directly with show_table or show_chart.",
         ]
         for t in tables:
-            cols = ", ".join(f"{c['name']} {c['type']}" for c in t["columns"])
-            lines.append(f"- {t['name']} ({t['title']}): columns {cols}; from request: {t['request']!r}")
+            cols = ", ".join(f"{c['name']} {c['type']}" for c in t.columns)
+            lines.append(f"- {t.name} ({t.title}): columns {cols}; from request: {t.request!r}")
         return "\n".join(lines) + "\n"

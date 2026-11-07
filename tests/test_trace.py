@@ -235,3 +235,23 @@ def test_trace_shows_kilobytes_sent_after_each_llm_call(build_agent, web_client)
     client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
     _, body = ask(client, "hello")
     assert re.search(r"LLM step &middot; \d+ ms &middot; [\d.]+ KB sent", body)
+
+
+def render_trace(totals, usage):
+    from flood_agent.web import TEMPLATES
+    trace = {"model": "m", "system_prompt": "", "totals": totals,
+             "entries": [{"kind": "llm_step", "duration_ms": 1, "usage": usage,
+                         "raw_response": {"content": "", "tool_calls": []}}]}
+    return TEMPLATES.get_template("trace.html").render(trace=trace)
+
+
+def test_an_old_stored_trace_without_cache_write_tokens_still_renders():
+    old = {"prompt_tokens": 10, "completion_tokens": 2, "cost": 0.001, "duration_ms": 5, "cached_tokens": 4}
+    html = render_trace(old, {"prompt_tokens": 10, "completion_tokens": 2, "cost": 0.001, "cached_tokens": 4})
+    assert "10 in / 2 out tokens &middot; 4 cached &middot;" in html and "cache write" not in html
+
+
+def test_cache_write_tokens_show_in_totals_and_steps():
+    new = {"prompt_tokens": 10, "completion_tokens": 2, "cost": None, "duration_ms": 5, "cache_write_tokens": 7}
+    html = render_trace(new, {"prompt_tokens": 10, "completion_tokens": 2, "cost": None, "cache_write_tokens": 7})
+    assert html.count("7 cache write") == 2

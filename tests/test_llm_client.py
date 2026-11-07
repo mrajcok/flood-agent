@@ -137,6 +137,13 @@ def test_models_that_cache_automatically_need_no_extra_fields():
     assert caching_fields("deepseek/deepseek-v4") == {}
 
 
+@pytest.mark.parametrize("model", ["z-ai/glm-5.3", "qwen/qwen3.8-27b"])
+def test_glm_and_qwen_need_no_cache_control(model):
+    from flood_agent.llm import caching_fields
+
+    assert "cache_control" not in caching_fields(model, session_id="c7")
+
+
 SESSION_PREFIXES = ["anthropic/claude-sonnet-5.5", "openai/gpt-5.6-terra", "qwen/qwen3.8-27b",
                     "deepseek/deepseek-v4", "z-ai/glm-5.3"]
 

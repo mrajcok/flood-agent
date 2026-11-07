@@ -579,9 +579,9 @@ class Agent:
         llm = self.client_for(model)
         spec = self.config.spec_of(model)
         # Only a non-default Effort is sent; the default sends nothing extra.
-        extra: dict = {"reasoning": {"effort": effort}} if effort and spec and effort != spec.default_effort else {}
-        if model.startswith("z-ai/"):  # lets OpenRouter route every step of this conversation to one cache
-            extra["session_id"] = f"conversation-{conversation.id}"
+        reasoning = {"effort": effort} if effort and spec and effort != spec.default_effort else None
+        # Lets OpenRouter route every step of this conversation to one cache (the client decides per model).
+        session_id = f"conversation-{conversation.id}"
         connection = await self._ensure_connection()
         tools = connection.tools
         failed_attempts = 0
@@ -591,7 +591,7 @@ class Agent:
             messages += conversation.messages
             text, calls, usage = "", [], None
             step_started = time.monotonic()
-            async for chunk in llm.stream_chat(messages, tools, **extra):
+            async for chunk in llm.stream_chat(messages, tools, reasoning=reasoning, session_id=session_id):
                 if isinstance(chunk, TextChunk):
                     # Each step's text is a new paragraph on the page, as it is when the turn is reloaded.
                     shown = chunk.text if text or not chunk.text else queue.paragraph_break() + chunk.text

@@ -12,10 +12,10 @@ class UsageMeter:
     def __init__(self, inner):
         self.inner = inner
         self.usage: dict = {"cost": None, "prompt_tokens": 0, "completion_tokens": 0,
-                                "cached_tokens": 0, "cache_write_tokens": 0}
+                            "cached_tokens": 0, "cache_write_tokens": 0}
 
-    async def stream_chat(self, messages, tools, **extra):
-        async for chunk in self.inner.stream_chat(messages, tools, **extra):
+    async def stream_chat(self, messages, tools, reasoning=None, session_id=None):
+        async for chunk in self.inner.stream_chat(messages, tools, reasoning=reasoning, session_id=session_id):
             if isinstance(chunk, UsageChunk):
                 self._add(chunk)
             yield chunk

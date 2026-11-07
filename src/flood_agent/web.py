@@ -36,10 +36,11 @@ from flood_agent.context_usage import context_usage
 from flood_agent.lookup_tables import InvalidLookupTable
 from flood_agent.queries import InvalidSort
 from flood_agent.store import TablesChoice
-from flood_agent.trace import context_tokens, split_system_prompt
+from flood_agent.trace import context_tokens, short_model, split_system_prompt
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 TEMPLATES.env.filters["split_system_prompt"] = split_system_prompt
+TEMPLATES.env.filters["short_model"] = short_model
 STATIC_DIR = Path(__file__).parent / "static"
 
 

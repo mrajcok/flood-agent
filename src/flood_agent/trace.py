@@ -90,5 +90,13 @@ def context_tokens(trace: dict) -> int | None:
     return None
 
 
+def short_model(model: str) -> str:
+    """A model id without its vendor prefix, for display: "anthropic/claude-haiku-5.5" -> "Haiku-5.5"."""
+    name = model.rpartition("/")[2]
+    if name.startswith("claude-"):
+        return name[len("claude-"):].capitalize()
+    return name
+
+
 def elapsed_ms(started: float) -> int:
     return int((time.monotonic() - started) * 1000)

@@ -273,3 +273,28 @@ def test_usage_total_sums_across_values_and_keeps_cost_none_when_unreported():
     assert UsageChunk.total([a, b]) == UsageChunk(15, 3, None, 4, 3)
     assert UsageChunk.total([a, {**b, "cost": 0.5}]).cost == 0.5
     assert UsageChunk.total([]) == UsageChunk()
+
+
+def test_trace_summary_shows_total_time_in_seconds():
+    html = render_trace({"prompt_tokens": 1, "completion_tokens": 1, "cost": None, "duration_ms": 5974}, None)
+    assert "6.0 seconds" in html and "5974" not in html
+
+
+def test_trace_summary_names_the_turn_and_its_llm_call_count():
+    totals = {"llm_steps": 3, "prompt_tokens": 9, "completion_tokens": 1, "cost": None, "duration_ms": 1000}
+    html = render_trace(totals, None)
+    assert "3 LLM calls &middot;" in html and "This turn only" in html
+    assert "1 LLM call &middot;" in render_trace({**totals, "llm_steps": 1}, None)
+
+
+def test_trace_summary_shows_the_short_model_name():
+    from flood_agent.trace import short_model
+    assert short_model("anthropic/claude-haiku-5.5") == "Haiku-5.5"
+    assert short_model("deepseek/deepseek-v4-pro-0813") == "deepseek-v4-pro-0813"
+    html = render_trace({"prompt_tokens": 1, "completion_tokens": 1, "cost": None, "duration_ms": 1000}, None)
+    assert "m &middot;" in html  # the fixture's model "m" is shown as is
+    from flood_agent.web import TEMPLATES
+    t = {"model": "anthropic/claude-haiku-5.5", "system_prompt": "", "entries": [],
+         "totals": {"prompt_tokens": 1, "completion_tokens": 1, "cost": None, "duration_ms": 1000}}
+    shown = TEMPLATES.get_template("trace.html").render(trace=t)
+    assert "Haiku-5.5 &middot;" in shown and "anthropic/" not in shown

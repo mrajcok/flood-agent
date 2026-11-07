@@ -1,2 +1,2 @@
 {# Context Usage: "187k of 1M" and a bar. The page refreshes it from /context-meter when a turn ends. #}
-<span id="context-meter" class="ctx {{ context.level }}" title="{% if context.window %}Context used, from the latest LLM call{% else %}No model is called{% endif %}">{{ context.text }}{% if context.window %} <span class="meter"><i style="width: {{ context.percent }}%"></i></span>{% endif %}</span>
+<span id="context-meter" class="ctx {{ context.level }}" title="{% if context.window %}Conversation context used (includes cached tokens), from the latest LLM call{% else %}No model is called{% endif %}">{{ context.text }}{% if context.window %} <span class="meter"><i style="width: {{ context.percent }}%"></i></span>{% endif %}</span>

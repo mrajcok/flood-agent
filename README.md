@@ -142,7 +142,8 @@ default `--db` / `--semantic-layer` paths are the only settings it reads from th
 correctness, retries (failed `run_query` attempts), latency and cost (OpenRouter-reported).
 
 Comparison rules (`evalset/compare.py`): a question is correct if any successful Result Table
-the LLM created matches the reference. Column names and order are ignored; extra columns are
+the LLM created matches the reference, or any successful `run_count_query` number matches a
+one-cell reference (a count makes no Result Table). Column names and order are ignored; extra columns are
 allowed (counted in the JSON); every reference column must appear with identical values and
 rows must line up. Rows are order-insensitive unless the question sets `ordered: true`.
 Numbers: int/float interchangeable, relative tolerance 1e-6 (per-question `tolerance`);

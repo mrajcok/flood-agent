@@ -11,9 +11,9 @@ def ask_for_a_table(build_agent, live_page, days=None):
     page.get_by_placeholder("Write a prompt").fill("show me flows")
     page.get_by_role("button", name="Send message (Enter)").click()
     expect(page.locator(".reply", has_text="Here you go.")).to_be_visible()
-    (table,) = agent.store.all_live_result_table_names()
+    (table,) = agent.tables.names()
     if days is not None:
-        agent.update_result_table(table, retention_days=days)
+        agent.tables.update(table, retention_days=days)
         page.reload()
         page.locator("aside ul li a").first.click()
     return agent, page, table
@@ -25,14 +25,14 @@ def edit(page, table):
 
 
 def retention_of(agent, name):
-    return agent.result_table_settings(name)["retention_days"]
+    return agent.tables[name].retention_days
 
 
 def test_renaming_a_result_table_switches_its_retention_to_30_days(build_agent, live_page):
     agent, page, table = ask_for_a_table(build_agent, live_page)
     name, retention = edit(page, table)
     expect(retention).to_have_value("1")
-    expect(retention.locator("option:checked")).to_have_text("1 day (rt_ default)")
+    expect(retention.locator("option:checked")).to_have_text("1 day (Result Table default)")
 
     name.fill("keeper")
     expect(retention).to_have_value("30")
@@ -95,3 +95,19 @@ def test_the_table_name_has_the_same_pointer_cursor_as_the_copy_icon(build_agent
     _, page, _ = ask_for_a_table(build_agent, live_page)
     cursor = "e => getComputedStyle(e).cursor"
     assert page.locator(".table-name .name").evaluate(cursor) == page.locator(".table-name .copy").evaluate(cursor) == "pointer"
+
+
+def test_the_form_shows_the_deployments_retention_policy(build_agent, live_page):
+    from dataclasses import replace
+
+    agent, page, table = ask_for_a_table(build_agent, live_page)
+    agent.tables.policy = replace(agent.tables.policy, result_days=3, saved_days=14, max_days=100)
+    page.reload()
+    page.locator("aside ul li a").first.click()
+    name, retention = edit(page, table)
+    expect(retention).to_have_value("custom")  # created with 1 day, which is no longer a preset
+    expect(retention.locator("option", has_text="Result Table default")).to_have_text("3 days (Result Table default)")
+    name.fill("keeper")
+    expect(retention).to_have_value("14")  # the Saved Table default comes from the policy
+    retention.select_option("custom")
+    expect(page.get_by_label("Retention in days")).to_have_attribute("max", "100")  # the policy's cap

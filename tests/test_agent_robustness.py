@@ -315,7 +315,7 @@ async def first_conversation_table(agent, llm):
     conv = Conversation()
     llm.steps = [[tool_call("run_query", "c1", sql=SQL, title="t")], [TextChunk("ok")]]
     await collect(agent, "first", conv)
-    return agent.store.result_tables(conv.id)[0]
+    return agent.tables.tables_of(conv.id)[0].name
 
 
 def show_args(tool, name):
@@ -342,7 +342,7 @@ async def test_show_tools_refuse_expired_and_unknown_tables_alike(make_agent, to
     llm = ScriptedLLM()
     agent = await make_agent(llm)
     gone = await first_conversation_table(agent, llm)
-    agent.store.mark_expired([gone])
+    agent.tables.delete(gone)
 
     llm.steps = [[tool_call(tool, "c1", **show_args(tool, gone))], [tool_call(tool, "c2", **show_args(tool, "rt_deadbeef"))],
                  [TextChunk("done")]]

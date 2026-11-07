@@ -15,15 +15,6 @@ from pathlib import Path
 from flood_agent import table_names
 
 
-def check_new_table_name(new: str) -> str | None:
-    """Why `new` cannot be a Result Table's name, or None when it can."""
-    if not table_names.is_identifier(new):
-        return f"A table name must {table_names.RULE}."
-    if table_names.is_reserved(new):
-        return "A table name cannot start with rt_ or lookup_; those are reserved."
-    return None
-
-
 def rename_table(results_db: Path, old: str, new: str) -> None:
     """Rename a table in the results database; ValueError (changing nothing) if `new` is taken."""
     con = sqlite3.connect(results_db)

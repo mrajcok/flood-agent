@@ -33,9 +33,14 @@ def test_display_offers_name_and_retention_editor(build_agent, web_client):
     _, _, name = shown_table(build_agent, web_client)
     html = TEMPLATES.get_template("display_table.html").render(
         rows_url="/r", psv_url="/p", result_table=name, columns=[], settings_url=f"/api/results/{name}/settings")
-    for choice in ("1 day", "7 days", "30 days", "365 days", "Custom"):
-        assert choice in html
-    assert "days" in html and 'type="number"' in html
+    assert "Custom" in html and "Retention" in html and 'type="number"' in html
+
+
+def test_settings_get_and_post_carry_the_retention_policy(build_agent, web_client):
+    client, _, name = shown_table(build_agent, web_client)
+    policy = {"result_days": 1, "saved_days": 30, "max_days": 3650}
+    assert client.get(f"/api/results/{name}/settings").json()["policy"] == policy
+    assert client.post(f"/api/results/{name}/settings", data={"retention_days": "7"}).json()["policy"] == policy
 
 
 def test_rename_is_a_real_sql_rename(build_agent, web_client):
@@ -92,14 +97,15 @@ def test_retention_change_moves_expiry_relative_to_creation(build_agent, web_cli
 def test_settings_give_the_time_left_before_the_table_expires(build_agent, web_client):
     client, clock, name = shown_table(build_agent, web_client)
     url = f"/api/results/{name}/settings"
-    assert client.get(url).json() == {"name": name, "retention_days": 1, "expires_in_ms": DAY}
+    assert client.get(url).json() .items() >= {"name": name, "retention_days": 1, "expires_in_ms": DAY}.items()
     clock.ms += DAY // 4
     assert client.get(url).json()["expires_in_ms"] == DAY * 3 // 4
     # A Retention change counts from the table's creation; the reply has the new time left.
     assert client.post(url, data={"retention_days": "2"}).json()["expires_in_ms"] == 2 * DAY - DAY // 4
     renamed = client.post(url, data={"name": "kept"}).json()
-    assert renamed == {"name": "kept", "retention_days": 2, "expires_in_ms": 2 * DAY - DAY // 4}
-    assert client.get("/api/results/kept/rows").json()["expires_in_ms"] == 2 * DAY - DAY // 4
+    # Renaming without a Retention raises a short one to 30 days (ADR 0004), still counted from creation.
+    assert renamed.items() >= {"name": "kept", "retention_days": 30, "expires_in_ms": 30 * DAY - DAY // 4}.items()
+    assert client.get("/api/results/kept/rows").json()["expires_in_ms"] == 30 * DAY - DAY // 4
 
 
 def test_settings_of_an_unknown_or_expired_table_are_not_found_or_gone(build_agent, web_client):

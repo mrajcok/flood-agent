@@ -19,7 +19,7 @@ def ask_for_a_chart(build_agent, live_page):
     page.get_by_role("button", name="Send message (Enter)").click()
     expect(page.locator(".display.chart canvas")).to_be_visible()
     expect(page.locator(".live-trace")).to_have_count(0)  # the layout stops moving once the live trace has folded away
-    (table,) = agent.store.all_live_result_table_names()
+    (table,) = agent.tables.names()
     return agent, page, table
 
 
@@ -42,7 +42,7 @@ def test_renaming_from_a_chart_changes_the_table_and_its_time_left(build_agent, 
     header = page.locator(".display.chart .table-name")
     expect(header.locator(".name")).to_have_text("port_bytes")
     expect(header.locator(".expires")).to_have_text("expires in 30d")
-    assert agent.result_table_settings("port_bytes")["retention_days"] == 30
+    assert agent.tables["port_bytes"].retention_days == 30
     page.reload()  # the reopened Conversation shows the chart under its new name
     page.locator("aside ul li a").first.click()
     expect(page.locator(".display.chart .table-name .name")).to_have_text("port_bytes")
@@ -75,4 +75,4 @@ def test_a_table_display_follows_a_rename_for_sorting_download_and_further_edits
     page.get_by_label("Retention", exact=True).select_option("7")
     page.get_by_role("button", name="Save").click()
     expect(display.locator(".table-name .expires")).to_have_text("expires in 7d")
-    assert agent.result_table_settings("kept_flows")["retention_days"] == 7
+    assert agent.tables["kept_flows"].retention_days == 7

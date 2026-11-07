@@ -50,6 +50,10 @@ _Avoid_: Reference table, upload, Result Table (for this)
 How long after its creation a Result Table or Saved Table is kept before it expires (default 1 day for a Result Table, 30 days for a Saved Table). The user can change it per table; using the table, or activity in any Conversation, does not extend it. Lookup Tables have no Retention.
 _Avoid_: TTL (in user-facing text)
 
+**Table Catalog**:
+The record of every table a user can query (Telemetry Database tables, Result Tables, Saved Tables, Lookup Tables), with each one's kind and Retention. It is the only authority on whether a table is live, and on the rules for naming, renaming and deleting tables. Table names ignore case, and are kept in lower case.
+_Avoid_: Registry, table manager
+
 **Query Metadata**:
 What the LLM is told about a Result Table after a query runs: success or failure, column names and types, row count, and a value-free error message.
 _Avoid_: Query result, response

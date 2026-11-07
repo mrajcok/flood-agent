@@ -169,10 +169,10 @@ def semantic_layer_path(tmp_path: Path) -> Path:
 
 
 @asynccontextmanager
-async def in_process_transport(settings: ServerSettings):
+async def in_process_transport(settings: ServerSettings, clock=None):
     """Client (read, write) streams to the MCP server running in this process: the same tools
     and settings as the stdio subprocess, without its 0.4 s interpreter start."""
-    server = create_server(settings)._mcp_server  # as the SDK's own in-memory helper does
+    server = create_server(settings, clock)._mcp_server  # as the SDK's own in-memory helper does
     async with create_client_server_memory_streams() as (client_streams, (server_read, server_write)):
         async with anyio.create_task_group() as tg:
             tg.start_soon(lambda: server.run(server_read, server_write, server.create_initialization_options()))
@@ -201,7 +201,7 @@ def in_process_mcp_server(request, monkeypatch):
     if request.node.get_closest_marker("subprocess") is not None:
         yield
         return
-    monkeypatch.setattr(Agent, "_transport", lambda self: lambda: in_process_transport(self._server_settings()))
+    monkeypatch.setattr(Agent, "_transport", lambda self: lambda: in_process_transport(self._server_settings(), self.config.clock))
     spawns = _spawns[0]
     yield
     # Scanning /proc costs a few ms, so only after a test that started a process.

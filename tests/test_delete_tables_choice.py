@@ -99,20 +99,18 @@ def test_turn_delete_rt_drops_that_turns_result_tables_only(build_agent, web_cli
     assert not readable(client, first) and readable(client, second)
 
 
-def test_turn_ownership_matches_whole_table_names(build_agent, web_client):
-    # rt_X is a substring of rt_X_2: a turn mentioning only rt_X_2 must not be taken to own rt_X
+def test_turn_ownership_is_the_recorded_turn_not_the_first_mention(build_agent, web_client):
+    # turn one made rt_X and then used `kept`, a table turn two made and that was renamed since
     agent = build_agent(ScriptedLLM([TextChunk("hi")], [TextChunk("hi")]))
     client = web_client(agent)
     cid, _ = ask(client, "one")
     ask(client, "two", cid)
     one, two = turn_ids(main_pane(client.get(f"/c/{cid}").text))
-    base, suffixed = "rt_20260101_000000", "rt_20260101_000000_2"
-    agent.store.add_result_table(cid, base)
-    agent.store.add_result_table(cid, suffixed)
-    agent.store.add_message(cid, int(one), {"role": "assistant", "content": f"made {suffixed}"})
-    agent.store.add_message(cid, int(two), {"role": "assistant", "content": f"made {base}"})
-    assert client.get(f"/c/{cid}/delete-preview?turn_id={one}").json()["result"] == 1
-    assert client.get(f"/c/{cid}/delete-preview?turn_id={two}").json()["result"] == 1
+    agent.tables.register("rt_20260101_000000", cid, int(one))
+    agent.tables.register("kept", cid, int(two))
+    agent.store.add_message(cid, int(one), {"role": "assistant", "content": "first used kept here"})
+    assert client.get(f"/c/{cid}/delete-preview?turn_id={one}").json() == {"result": 1, "saved": 0}
+    assert client.get(f"/c/{cid}/delete-preview?turn_id={two}").json() == {"result": 0, "saved": 1}
 
 
 def test_dialog_markup_offers_keep_or_delete_result_tables(build_agent, web_client):

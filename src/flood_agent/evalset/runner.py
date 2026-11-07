@@ -18,7 +18,6 @@ import argparse
 import asyncio
 import json
 import re
-import sqlite3
 import sys
 import time
 from dataclasses import asdict, dataclass, replace
@@ -26,7 +25,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from flood_agent import queries, table_names
+from flood_agent import queries
 from flood_agent.agent import Agent, Conversation, TraceEntry, TraceReady, TurnError
 from flood_agent.config import Settings
 from flood_agent.evalset.client import UsageMeter
@@ -63,17 +62,6 @@ class QuestionResult:
     count_queries: int = 0  # successful run_count_query answers (they create no Result Table)
 
 
-def _result_tables(results_db: Path) -> list[str]:
-    if not results_db.exists():
-        return []
-    con = sqlite3.connect(f"file:{results_db}?mode=ro", uri=True)
-    try:
-        names = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY rowid")]
-    finally:
-        con.close()
-    return [n for n in names if table_names.GENERATED_RE.fullmatch(n)]
-
-
 def _count_answers(trace: dict | None) -> list[int]:
     """The numbers of the successful run_count_query calls in the turn: the LLM was told these
     directly and no Result Table exists for them, so they are judged as one-cell answers."""
@@ -89,8 +77,7 @@ def _count_answers(trace: dict | None) -> list[int]:
     return counts
 
 
-def _judge(q: Question, ref, results_db: Path, counts: list[int]) -> tuple[bool, str, int, str | None, int]:
-    names = _result_tables(results_db)
+def _judge(q: Question, ref, results_db: Path, names: list[str], counts: list[int]) -> tuple[bool, str, int, str | None, int]:
     if not names and not counts:
         return False, "no Result Table or count answer was produced", 0, None, 0
     ref_cols, ref_rows = ref
@@ -130,10 +117,11 @@ async def _run_question(model, q, ref, telemetry_db, semantic_layer, client_fact
         lambda _model: llm,
     )
     retries, error, trace = 0, None, None
+    conversation = Conversation()
     start = time.perf_counter()
     try:
         async with agent:
-            async for event in agent.run_turn(Conversation(), q.question, EVAL_MAX_RESULT_ROWS):
+            async for event in agent.run_turn(conversation, q.question, EVAL_MAX_RESULT_ROWS):
                 if isinstance(event, TraceEntry) and event.kind == "query_error":
                     retries += 1
                 elif isinstance(event, TraceReady):
@@ -148,7 +136,8 @@ async def _run_question(model, q, ref, telemetry_db, semantic_layer, client_fact
     if error:
         ok, reason, extra, matched, n = False, "turn failed", 0, None, 0
     else:
-        ok, reason, extra, matched, n = _judge(q, ref, results_db, counts)
+        names = [t.name for t in agent.tables.tables_of(conversation.id)] if conversation.id else []
+        ok, reason, extra, matched, n = _judge(q, ref, results_db, names, counts)
     return QuestionResult(
         q.id, model, ok, reason, retries, latency, usage.get("cost"), usage.get("prompt_tokens"),
         usage.get("completion_tokens"), extra, error, matched, n, len(counts),

@@ -149,7 +149,7 @@ def test_a_lookup_table_never_expires(build_agent, web_client):
     client = web_client(agent)
     add(client, "hosts", "ip\n1.1.1.1")
     clock.ms += 1000 * DAY
-    agent.sweep_expired()
+    agent.tables.sweep()
     run_turn(client)
     assert last_tool_result(llm.calls[1])["kind"] == "lookup"
     assert stored(agent, "lookup_hosts") == [["1.1.1.1"]]
@@ -176,7 +176,7 @@ def rejected(client, agent, name, paste, message, table="lookup_t", **kw):
     finally:
         con.close()
     assert found is None
-    assert not agent.store.is_lookup_table(table)
+    assert agent.tables.kind_of(table) != "lookup"
 
 
 def test_bad_table_name_is_named_in_the_message(build_agent, web_client):
@@ -257,7 +257,7 @@ def test_overwrite_replaces_rows_and_columns(build_agent, web_client):
     assert r.status_code == 200
     assert r.json() == {"name": "lookup_hosts", "row_count": 2, "columns": ["name", "site"]}
     assert stored(agent, "lookup_hosts") == [["x", "y"], ["z", "w"]]
-    assert agent.store.is_lookup_table("lookup_hosts")
+    assert agent.tables.kind_of("lookup_hosts") == "lookup"
 
 
 def test_failed_overwrite_leaves_the_old_table_queryable(build_agent, web_client):
@@ -289,7 +289,7 @@ def test_overwrite_cannot_replace_a_result_table_or_other_table(build_agent, web
     r = add(client, "other", "x\n1", overwrite=True)
     assert r.status_code == 422
     assert stored(agent, "lookup_other") == [["keep"]]
-    assert not agent.store.is_lookup_table("lookup_other")
+    assert agent.tables.kind_of("lookup_other") != "lookup"
 
 
 def test_dialog_shows_the_error_above_the_pasted_text_and_keeps_it(build_agent, web_client):
@@ -303,7 +303,7 @@ def test_a_paste_of_only_separators_is_refused_like_an_empty_paste(build_agent, 
     for paste in [",,,", "|||\n|||", "\t\t", " , , \n,,"]:
         r = add(client, "t", paste)
         assert r.status_code == 422 and "column names" in r.json()["detail"]
-    assert not agent.store.is_lookup_table("lookup_t")
+    assert agent.tables.kind_of("lookup_t") != "lookup"
 
 
 def test_the_registry_records_name_columns_created_time_and_row_count(build_agent, web_client):
@@ -311,10 +311,10 @@ def test_the_registry_records_name_columns_created_time_and_row_count(build_agen
     agent = build_agent(ScriptedLLM(), clock=clock)
     client = web_client(agent)
     add(client, "hosts", "ip,d\n1.1.1.1,a\n2.2.2.2,b")
-    assert agent.store.lookup_tables() == [
+    assert agent.tables.lookups() == [
         {"name": "lookup_hosts", "created_at": clock.ms, "columns": ["ip", "d"], "row_count": 2}]
     add(client, "hosts", "name\nx\ny\nz", overwrite=True)
-    assert [(t["columns"], t["row_count"]) for t in agent.store.lookup_tables()] == [(["name"], 3)]
+    assert [(t["columns"], t["row_count"]) for t in agent.tables.lookups()] == [(["name"], 3)]
 
 
 def test_a_failure_while_writing_an_overwrite_keeps_the_old_table(build_agent, web_client, monkeypatch):
@@ -328,7 +328,7 @@ def test_a_failure_while_writing_an_overwrite_keeps_the_old_table(build_agent, w
     with pytest.raises(sqlite3.Error):
         add(client, "hosts", "ignored", overwrite=True)
     assert stored(agent, "lookup_hosts") == [["1.1.1.1", "a"], ["2.2.2.2", "b"]]
-    assert agent.store.lookup_tables()[0]["row_count"] == 2
+    assert agent.tables.lookups()[0]["row_count"] == 2
 
 
 def test_a_failure_while_creating_leaves_no_half_made_table(build_agent, web_client, monkeypatch):

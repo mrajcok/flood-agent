@@ -106,7 +106,7 @@ async def test_sweep_expires_a_table_whose_conversation_is_gone(make_agent):
     con.commit()
     con.close()
     clock.ms += HOUR + 1
-    assert agent.is_expired(name)
+    assert name not in agent.tables
 
 
 async def test_expired_table_is_gone_from_prompt_and_unqueryable(make_agent):
@@ -197,3 +197,40 @@ def test_single_composed_authorizer_enforces_action_list_and_table_scope(telemet
         assert queries.run_query(telemetry_db, results, sql, **query_limits(), allowed_tables={own})["success"] is False
     con = sqlite3.connect(results)
     assert {r[0] for r in con.execute("SELECT name FROM sqlite_master")} >= {own, other}
+
+
+def _physical(agent):
+    import sqlite3
+
+    con = sqlite3.connect(agent.config.results_db)
+    try:
+        return {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    finally:
+        con.close()
+
+
+async def test_expired_table_is_dropped_when_a_new_conversation_starts_not_on_a_later_turn(make_agent):
+    clock = Clock()
+    agent, llm, conv, name = await run_first(make_agent, clock=clock, result_ttl_ms=HOUR)
+    clock.ms += HOUR + 1
+
+    llm.steps = [[TextChunk("ok")]]
+    await collect(agent, "same conversation", conv)
+    assert name in _physical(agent)  # a turn does not sweep
+
+    llm.steps = [[TextChunk("ok")]]
+    await collect(agent, "fresh start", Conversation())
+    assert name not in _physical(agent)
+    with pytest.raises(Exception, match="expired"):
+        agent.fetch_rows(name)  # dropped but still registered, so it reads as expired, not unknown
+
+
+async def test_expired_table_is_dropped_at_app_startup(make_agent, build_agent):
+    clock = Clock()
+    agent, _, _, name = await run_first(make_agent, clock=clock, result_ttl_ms=HOUR)
+    clock.ms += HOUR + 1
+    assert name in _physical(agent)
+
+    restarted = build_agent(ScriptedLLM(), clock=clock, result_ttl_ms=HOUR)
+
+    assert name not in _physical(restarted)

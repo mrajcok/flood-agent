@@ -27,17 +27,17 @@ from flood_agent.agent import (
     DisplayEvent,
     FlagEvent,
     LlmCallStarted,
-    ResultTableExpired,
+    TablesChoice,
     TextDelta,
     TraceLive,
     TraceReady,
     TurnEnd,
     resolve_chart_data,
 )
+from flood_agent.catalog import TableExpired
 from flood_agent.context_usage import context_usage
 from flood_agent.lookup_tables import InvalidLookupTable
 from flood_agent.queries import InvalidSort
-from flood_agent.store import TablesChoice
 from flood_agent.trace import context_tokens, short_model, split_system_prompt
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -88,8 +88,8 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
 
     app = FastAPI(title="Flood Agent", lifespan=lifespan)
 
-    @app.exception_handler(ResultTableExpired)
-    def expired_handler(request: Request, exc: ResultTableExpired):
+    @app.exception_handler(TableExpired)
+    def expired_handler(request: Request, exc: TableExpired):
         # Any endpoint reading Result Table rows (rows, PSV, chart rows) gets a clear 410.
         return JSONResponse({"detail": "This result has expired and been deleted. Ask again to regenerate it."}, 410)
 
@@ -147,7 +147,8 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
     def history(conversation_id: str) -> list[dict]:
         items = []
         transcript = agent.store.transcript(conversation_id)
-        expired = agent.expired_among({i["result_table"] for i in transcript if i["type"] == "display"})
+        shown = {i["result_table"] for i in transcript if i["type"] == "display"}
+        expired = shown - agent.tables.live_among(shown)
         prompt_at = None  # where the current turn's prompt is in `items`
         for item in transcript:
             if item["type"] == "display" and item["kind"] == "chart":
@@ -209,7 +210,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
         if not agent.store.exists(conversation_id):
             raise HTTPException(404, "unknown conversation")
         try:
-            return agent.store.delete_preview(conversation_id, turn_id)
+            return agent.delete_preview(conversation_id, turn_id)
         except KeyError:
             raise HTTPException(404, "unknown turn")
 
@@ -243,7 +244,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
     def add_lookup_table(name: str = Form(""), rows: str = Form(""), overwrite: str = Form("")):
         """Create a Lookup Table from pasted rows. Plain HTTP, never an MCP tool."""
         try:
-            return agent.add_lookup_table(name, rows, overwrite=bool(overwrite))
+            return agent.tables.add_lookup(name, rows, overwrite=bool(overwrite))
         except InvalidLookupTable as e:
             raise HTTPException(422, str(e))
 
@@ -259,7 +260,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
     def lookup_table_text(name: str, sep: str = "comma"):
         """A Lookup Table's rows as text, for the edit dialog. Plain HTTP, never an MCP tool."""
         try:
-            return agent.lookup_table_text(name, sep)
+            return agent.tables.lookup_text(name, sep)
         except InvalidLookupTable as e:
             raise HTTPException(422, str(e))
         except KeyError:
@@ -269,7 +270,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
     def update_lookup_table(name: str, rows: str = Form("")):
         """Save edited rows over a Lookup Table. Plain HTTP, never an MCP tool."""
         try:
-            return agent.update_lookup_table(name, rows)
+            return agent.tables.replace_lookup(name, rows)
         except InvalidLookupTable as e:
             raise HTTPException(422, str(e))
         except KeyError:
@@ -279,7 +280,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
     def delete_table(name: str):
         """Delete a Lookup, Saved or Result Table from the Tables dialog. Plain HTTP, never an MCP tool."""
         try:
-            agent.delete_table(name)
+            agent.tables.delete(name)
         except ValueError as e:
             raise HTTPException(400, str(e))
         except KeyError:
@@ -290,7 +291,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
         """A Saved or Result Table as the chat's table Display, for the Tables dialog's viewer.
         404 for any other table (Telemetry, Lookup, unknown); 410 once it has expired."""
         try:
-            agent.require_live_result_table(name)
+            agent.tables[name]
         except KeyError:
             raise HTTPException(404, "not a Saved or Result Table")
         return TEMPLATES.get_template("display_table.html").render(**_table_display_urls(name), result_table=name)
@@ -298,7 +299,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
     @app.get("/api/tables")
     def list_tables():
         """Names of the tables the user can query, for the Tables dialog. Plain HTTP, never an MCP tool."""
-        return agent.list_tables()
+        return agent.tables.listing()
 
     @app.post("/chat", response_class=HTMLResponse)
     def chat(request: Request, message: str = Form(...), conversation_id: str = Form(""), max_rows: str = Form(...),
@@ -316,7 +317,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
         turn_id = uuid.uuid4().hex
         pending[turn_id] = (conversation, message, max_result_rows, chosen_model, chosen_effort)
         if conversation.id is None:  # persist now so the sidebar and form can reference it
-            conversation.id = agent.store.create_conversation()
+            conversation.id = agent.create_conversation()
         return TEMPLATES.TemplateResponse(
             request, "turn.html",
             {"turn_id": turn_id, "message": message, **sidebar(conversation.id)},
@@ -399,10 +400,9 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
     def get_result_table_settings(result_table: str):
         """A live Result Table's name, Retention in days and time left in ms (for a Display's name header)."""
         try:
-            agent.require_live_result_table(result_table)
+            return agent.tables[result_table].to_json()
         except KeyError:
             raise HTTPException(404, "unknown result table")
-        return agent.result_table_settings(result_table)
 
     @app.post("/api/results/{result_table}/settings")
     def result_table_settings(
@@ -413,7 +413,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
             name = name.strip()
         days = None if retention_days is None else _parse_retention_days(retention_days)
         try:
-            return agent.update_result_table(result_table, name, days)
+            return agent.tables.update(result_table, name, days).to_json()
         except KeyError:
             raise HTTPException(404, "unknown result table")
         except ValueError as e:
@@ -463,17 +463,12 @@ def _parse_max_rows(raw: str) -> int:
     return int(raw)
 
 
-MAX_RETENTION_DAYS = 3650
-
-
 def _parse_retention_days(raw: str) -> float:
+    """The posted number of days; the Catalog's Retention policy decides whether it is in range."""
     try:
-        days = float(raw)
+        return float(raw)
     except ValueError:
-        days = 0.0
-    if not 0 < days <= MAX_RETENTION_DAYS:  # also rejects nan
-        raise HTTPException(422, f"retention must be more than 0 and at most {MAX_RETENTION_DAYS} days")
-    return days
+        raise HTTPException(422, "retention must be a number of days")
 
 
 def _psv_safe(v):

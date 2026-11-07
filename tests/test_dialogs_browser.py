@@ -98,8 +98,8 @@ def test_deleting_a_prompt_with_a_saved_table_says_the_saved_table_is_kept(build
     page = live_page(agent=agent)
     native = no_native_dialogs(page)
     ask_for_a_table(page)
-    (table,) = agent.store.all_live_result_table_names()
-    agent.update_result_table(table, "keeper")
+    (table,) = agent.tables.names()
+    agent.tables.update(table, "keeper")
     page.locator("aside ul li a").first.click()  # open the Conversation, so its prompts show their delete buttons
 
     page.get_by_role("button", name="Delete this turn").click()
@@ -111,3 +111,20 @@ def test_deleting_a_prompt_with_a_saved_table_says_the_saved_table_is_kept(build
     dialog.get_by_role("button", name="Cancel").click()
     expect(dialog).not_to_have_attribute("open", "")
     assert native == []
+
+
+def test_deleting_a_turn_keeps_collapsed_turns_collapsed(build_agent, live_page):
+    page = live_page(agent=build_agent(ScriptedLLM([TextChunk("One.")], [TextChunk("Two.")])))
+    for text, reply in (("first", "One."), ("second", "Two.")):
+        page.get_by_placeholder("Write a prompt").fill(text)
+        page.get_by_role("button", name="Send message (Enter)").click()
+        expect(page.locator(".reply", has_text=reply)).to_be_visible()
+    page.locator("aside ul li a").first.click()
+    page.get_by_role("button", name="Collapse turns").click()
+    expect(page.locator("details.turn[open]")).to_have_count(0)
+
+    page.get_by_role("button", name="Delete this turn").first.click(force=True)
+    page.locator("#delete-dialog").get_by_role("button", name="Delete").click()
+    expect(page.locator("details.turn")).to_have_count(1)
+    expect(page.locator("details.turn[open]")).to_have_count(0)
+    expect(page.get_by_role("button", name="Expand turns")).to_be_visible()

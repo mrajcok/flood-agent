@@ -434,6 +434,12 @@
   <script>
     // Deleting a Conversation or exchange always asks in this dialog: whether to keep or delete its
     // live Result Tables (rt_*) if it has any, and that its Saved Tables are kept (ADR 0004).
+    try {
+      if (sessionStorage.getItem("collapseTurns")) {
+        sessionStorage.removeItem("collapseTurns");
+        document.querySelectorAll("details.turn").forEach(d => d.open = false);
+      }
+    } catch (e) { /* no storage */ }
     document.addEventListener("submit", async (event) => {
       const form = event.target;
       if (!form.classList || !form.classList.contains("delete-form") || form.dataset.confirmed) return;
@@ -446,6 +452,10 @@
         if (!field) { field = document.createElement("input"); field.type = "hidden"; field.name = "tables"; form.appendChild(field); }
         field.value = choice;
         form.dataset.confirmed = "1";
+        // Deleting a turn reloads the page; keep the turns collapsed if the user had collapsed them all.
+        try {
+          if (form.classList.contains("turn-delete") && !document.querySelector("details.turn[open]")) sessionStorage.setItem("collapseTurns", "1");
+        } catch (e) { /* no storage: turns reopen */ }
         form.submit();
       };
       const dialog = document.getElementById("delete-dialog");

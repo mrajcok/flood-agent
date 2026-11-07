@@ -112,3 +112,104 @@ def test_a_conversations_tables_are_its_own_live_ones_in_creation_order(world, c
     assert [t.name for t in catalog.tables_of(cid)] == ["rt_b", "rt_a"]
     assert [t.turn_id for t in catalog.tables_of(cid)] == [1, 2]
     assert catalog.names() == ["rt_a", "rt_b", "rt_x"]
+
+
+# --- listing, kinds, deletes and ownership (#82) -------------------------------------------------------
+
+
+def _physical(path, *names):
+    import sqlite3
+
+    con = sqlite3.connect(path)
+    for n in names:
+        con.execute(f'CREATE TABLE "{n}" (x)')
+    con.commit()
+    con.close()
+
+
+def _exists(path, name) -> bool:
+    import sqlite3
+
+    con = sqlite3.connect(path)
+    try:
+        return con.execute("SELECT 1 FROM sqlite_master WHERE name=?", (name,)).fetchone() is not None
+    finally:
+        con.close()
+
+
+@pytest.fixture
+def full(tmp_path, clock):
+    """(catalog, conversation id, results db path): a Catalog that knows a Telemetry table `flows`."""
+    app_db, results_db = tmp_path / "app.db", tmp_path / "results.db"
+    catalog = Catalog(app_db, clock, default_retention_ms=HOUR, results_db=results_db, telemetry=["flows"])
+    return catalog, ConversationStore(app_db, clock).create_conversation(), results_db
+
+
+def test_kind_of_a_name_in_any_case(full):
+    catalog, cid, results_db = full
+    _physical(results_db, "rt_20260101_000000", "kept")
+    catalog.register("rt_20260101_000000", cid, 1)
+    catalog.register("kept", cid, 1)
+    catalog.add_lookup("hosts", "ip\n1.1.1.1")
+    assert [catalog.kind_of(n) for n in ("FLOWS", "RT_20260101_000000", "Kept", "lookup_Hosts", "nope")] == [
+        "telemetry", "result", "saved", "lookup", None]
+
+
+def test_listing_gives_every_kind_with_retention_and_time_left(full, clock):
+    catalog, cid, results_db = full
+    _physical(results_db, "rt_20260101_000000", "kept")
+    catalog.register("rt_20260101_000000", cid, 1)
+    catalog.register("kept", cid, 1)
+    catalog.add_lookup("hosts", "ip\n1.1.1.1")
+    clock.now += HOUR // 4
+    assert catalog.listing() == {
+        "telemetry": ["flows"], "lookup": ["lookup_hosts"], "saved": ["kept"], "result": ["rt_20260101_000000"],
+        "retention_days": {"kept": HOUR / DAY, "rt_20260101_000000": HOUR / DAY},
+        "expires_in_ms": {"kept": HOUR * 3 // 4, "rt_20260101_000000": HOUR * 3 // 4}}
+
+
+def test_delete_drops_the_table_but_keeps_it_registered_as_expired(full):
+    catalog, cid, results_db = full
+    _physical(results_db, "kept")
+    catalog.register("kept", cid, 1)
+    catalog.delete("kept")
+    assert not _exists(results_db, "kept")
+    with pytest.raises(TableExpired):
+        catalog["kept"]
+    with pytest.raises(KeyError):
+        catalog.delete("kept")  # no longer a live table
+
+
+def test_delete_of_a_lookup_table_unregisters_it_and_a_telemetry_table_is_refused(full):
+    catalog, _, results_db = full
+    catalog.add_lookup("hosts", "ip\n1.1.1.1")
+    catalog.delete("LOOKUP_hosts")
+    assert catalog.kind_of("lookup_hosts") is None and not _exists(results_db, "lookup_hosts")
+    with pytest.raises(ValueError, match="Telemetry"):
+        catalog.delete("flows")
+    with pytest.raises(KeyError):
+        catalog.delete("nope")
+
+
+def test_owned_tables_follow_the_recorded_turn_split_into_result_and_saved(full):
+    catalog, cid, _ = full
+    catalog.register("rt_20260101_000000", cid, 1)
+    catalog.register("kept", cid, 2)  # a Saved Table (renamed since) first used by turn 2
+    catalog.register("rt_20260101_000001", cid, 2)
+    assert [(len(o.result), len(o.saved)) for o in (catalog.owned(cid), catalog.owned(cid, 1), catalog.owned(cid, 2))] == [
+        (2, 1), (1, 0), (1, 1)]
+
+
+def test_drop_owned_drops_only_rt_tables_of_that_conversation_or_turn(full):
+    catalog, cid, results_db = full
+    other = ConversationStore(catalog.path).create_conversation()
+    _physical(results_db, "rt_a", "rt_b", "kept", "rt_c")
+    catalog.register("rt_a", cid, 1)
+    catalog.register("rt_b", cid, 2)
+    catalog.register("kept", cid, 2)
+    catalog.register("rt_c", other, 3)
+    assert catalog.drop_owned(cid, 1) == ["rt_a"]
+    assert not _exists(results_db, "rt_a") and _exists(results_db, "rt_b")
+    assert catalog.drop_owned(cid) == ["rt_b"]
+    assert _exists(results_db, "kept") and _exists(results_db, "rt_c")
+    assert "kept" in catalog and "rt_c" in catalog and "rt_b" not in catalog

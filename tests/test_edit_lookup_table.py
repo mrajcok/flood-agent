@@ -56,7 +56,7 @@ def test_saving_replaces_the_rows_and_columns(build_agent, web_client):
     r = save(client, "lookup_hosts", "ip|owner\n10.0.0.5|ops\n10.0.0.6|")
     assert r.json() == {"name": "lookup_hosts", "row_count": 2, "columns": ["ip", "owner"]}
     assert stored(agent, "lookup_hosts") == [["10.0.0.5", "ops"], ["10.0.0.6", None]]
-    assert agent.list_tables()["lookup"] == ["lookup_hosts"]
+    assert agent.tables.listing()["lookup"] == ["lookup_hosts"]
     assert rows_of(client, "lookup_hosts", "comma").json()["text"] == "ip,owner\n10.0.0.5,ops\n10.0.0.6,\n"
 
 
@@ -74,4 +74,4 @@ def test_only_an_existing_lookup_table_can_be_saved_over(build_agent, web_client
     client = web_client(agent)
     assert save(client, "lookup_gone", "ip\n10.0.0.1").status_code == 404
     assert save(client, "flows", "ip\n10.0.0.1").status_code == 404
-    assert agent.list_tables()["lookup"] == []
+    assert agent.tables.listing()["lookup"] == []

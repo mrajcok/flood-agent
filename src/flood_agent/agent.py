@@ -5,7 +5,6 @@ The HTTP/SSE layer is a thin adapter over `Agent.run_turn`. The LLM client is in
 
 import asyncio
 import json
-import sqlite3
 import sys
 import time
 from dataclasses import dataclass, field

@@ -6,6 +6,7 @@ import sqlite3
 
 import pytest
 from conftest import all_telemetry_values, collect, text_of
+from fastapi.testclient import TestClient
 
 from flood_agent.__main__ import build_app, picker_entries
 from flood_agent.agent import Conversation, DisplayEvent, TraceReady, TurnError
@@ -173,9 +174,17 @@ def test_fake_backend_builds_without_an_api_key(tmp_path, telemetry_db, semantic
     assert build_app(settings) is not None
 
 
-def test_openrouter_backend_still_requires_an_api_key():
-    with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
-        build_app(Settings(llm_backend="openrouter"))  # pyright: ignore[reportCallIssue]
+def test_openrouter_backend_builds_without_a_key_and_refuses_real_models_until_one_is_set(
+    tmp_path, telemetry_db, semantic_layer_path
+):
+    settings = Settings(  # pyright: ignore[reportCallIssue]
+        llm_backend="openrouter", telemetry_db=telemetry_db, results_db=tmp_path / "results.db",
+        app_db=tmp_path / "app.db", semantic_layer=semantic_layer_path,
+    )
+
+    with TestClient(build_app(settings)) as client:
+        refused = client.post("/chat", data={"message": "hi", "max_rows": "10"})
+    assert refused.status_code == 422 and "OPENROUTER_API_KEY" in refused.json()["detail"]
 
 
 async def test_a_follow_up_picked_first_replies_to_run_its_parent_and_makes_no_tool_call(make_agent):

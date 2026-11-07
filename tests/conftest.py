@@ -227,7 +227,7 @@ def config_for_test(tmp_path, telemetry_db, semantic_layer, **overrides) -> Agen
         results_db=tmp_path / "results.db",
         app_db=tmp_path / "app.db",
         semantic_layer=semantic_layer,
-        **{"model": "test/model", **overrides},
+        **overrides,
     )
 
 
@@ -242,7 +242,7 @@ def build_agent(tmp_path, telemetry_db, semantic_layer_path):
     """Factory for an Agent that is NOT started (web tests: the app lifespan starts it)."""
 
     def _build(llm, **overrides) -> Agent:
-        return Agent(config_for_test(tmp_path, telemetry_db, semantic_layer_path, **overrides), llm)
+        return Agent(config_for_test(tmp_path, telemetry_db, semantic_layer_path, **overrides), lambda model: llm)
 
     return _build
 
@@ -317,7 +317,7 @@ def chrome():
 
 @pytest.fixture
 def live_page(chrome, live_server, request):
-    """`live_page(path="/", agent=None, timezone=None)` -> a fresh page (its own browser context) in
+    """`live_page(path="/", agent=None, timezone=None, **create_app_kwargs)` -> a fresh page (its own browser context) in
     headless system Chrome, opened on the live app; `timezone` (e.g. "America/New_York") sets the
     browser's. CDN scripts (htmx, Alpine, Vega) are served from pytest's cache after the first
     download, so browser tests run offline once warmed; with a cold cache and no internet they skip."""
@@ -340,14 +340,14 @@ def live_page(chrome, live_server, request):
             os.replace(tmp, path)
         route.fulfill(path=path, content_type="application/javascript")
 
-    def _open(path: str = "/", agent: Agent | None = None, timezone: str | None = None):
+    def _open(path: str = "/", agent: Agent | None = None, timezone: str | None = None, **app_kwargs):
         context = chrome.new_context(timezone_id=timezone)
         contexts.append(context)
         page = context.new_page()
         page.set_default_timeout(5000)  # the app is local: fail fast instead of Playwright's 30s
         for pattern in CDN_HOSTS:
             page.route(pattern, serve_cached)
-        page.goto(live_server(agent) + path)
+        page.goto(live_server(agent, **app_kwargs) + path)
         if not page.evaluate("() => !!(window.Alpine && window.htmx)"):
             pytest.skip("CDN scripts unavailable (no internet and nothing cached yet)")
         return page

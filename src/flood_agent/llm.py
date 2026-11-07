@@ -8,8 +8,19 @@ from dataclasses import dataclass
 from typing import AsyncIterator, Protocol
 
 import httpx
+from pydantic import BaseModel, Field
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+
+class ModelSpec(BaseModel, frozen=True):
+    """One entry of the curated model list (`[[models]]` in defaults.toml)."""
+
+    id: str  # the OpenRouter model id
+    label: str
+    context_window: int = Field(ge=1)  # tokens
+    efforts: list[str] = []  # Effort levels it offers; empty means no Effort control
+    default_effort: str | None = None
 
 
 @dataclass

@@ -105,7 +105,7 @@ async def _run_question(model, q, ref, telemetry_db, semantic_layer, client_fact
     agent = Agent(
         replace(Settings.from_defaults().agent_config(), telemetry_db=telemetry_db, results_db=results_db,
                 semantic_layer=semantic_layer, model=model, app_db=app_db),
-        llm,
+        lambda _model: llm,
     )
     retries, error = 0, None
     start = time.perf_counter()

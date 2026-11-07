@@ -16,7 +16,7 @@ from mcp import StdioServerParameters
 from mcp.types import TextContent
 
 from flood_agent import flagging, lookup_tables, queries, table_names
-from flood_agent.llm import LLMClient, LLMError, TextChunk, ToolCallChunk, UsageChunk
+from flood_agent.llm import LLMClient, LLMError, ModelSpec, TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
 from flood_agent.mcp_protocol import QUERY_TOOLS
 from flood_agent.mcp_server import ServerSettings
@@ -33,14 +33,23 @@ class AgentConfig:
     results_db: Path
     app_db: Path
     semantic_layer: Path
-    model: str
-    context_window: int  # tokens the model accepts; 0 when there is no model (Fake Mode)
+    model: str  # the default model: runs a turn that names none
+    models: tuple[ModelSpec, ...]  # the curated list; window_of looks a model's window up here
     result_ttl_ms: int  # Result Tables expire this long after last Conversation activity
     query_timeout_s: float
     chart_row_cap: int
     max_failed_attempts: int
     max_llm_steps: int
     clock: Callable[[], int] = lambda: int(time.time() * 1000)  # epoch ms; injectable for tests
+
+
+    def window_of(self, model: str) -> int:
+        """The context window of a curated model; 0 for an id outside the list (Fake Mode's "fake")."""
+        return next((m.context_window for m in self.models if m.id == model), 0)
+
+
+ClientFactory = Callable[[str], LLMClient]
+"""Gives the client that runs a model id: the real OpenRouter client (made lazily, reused) or a scripted fake."""
 
 
 class ResultTableExpired(Exception):
@@ -204,9 +213,9 @@ def _resolve_data(node, table: str, url: dict):
 
 
 class Agent:
-    def __init__(self, config: AgentConfig, llm: LLMClient):
+    def __init__(self, config: AgentConfig, client_for: ClientFactory):
         self.config = config
-        self.llm = llm
+        self.client_for = client_for
         self.semantic_layer = SemanticLayer(config.semantic_layer)
         self.store = ConversationStore(config.app_db, config.clock)
         self._connection: McpConnection | None = None
@@ -477,18 +486,19 @@ class Agent:
         return queries.fetch_records(self.config.results_db, result_table, self.config.chart_row_cap)
 
     async def run_turn(
-        self, conversation: Conversation, user_message: str, max_result_rows: int
+        self, conversation: Conversation, user_message: str, max_result_rows: int, model: str | None = None
     ) -> AsyncIterator[Event]:
         """Run one turn on the Agent's MCP connection (`start()` first).
 
         The turn runs in a producer task. If the consumer stops early (client disconnect), the
         producer is cancelled and awaited; the MCP server keeps running.
 
-        `max_result_rows` is the row cap for this turn's queries; the user chooses it in the UI."""
+        `max_result_rows` is the row cap for this turn's queries; the user chooses it in the UI.
+        `model` is the Model Choice for this turn (an id the client factory knows); the default model when None."""
         if self._connection is None:
             raise RuntimeError("Agent not started: call `await agent.start()` or use `async with agent`")
         queue = _TurnQueue()
-        task = asyncio.create_task(self._produce(conversation, user_message, queue, max_result_rows))
+        task = asyncio.create_task(self._produce(conversation, user_message, queue, max_result_rows, model or self.config.model))
         self._turn_tasks.add(task)
         task.add_done_callback(self._turn_tasks.discard)
         finished = False
@@ -508,10 +518,10 @@ class Agent:
             await asyncio.gather(task, return_exceptions=True)
 
     async def _produce(
-        self, conversation: Conversation, user_message: str, queue: _TurnQueue, max_result_rows: int
+        self, conversation: Conversation, user_message: str, queue: _TurnQueue, max_result_rows: int, model: str
     ):
         try:
-            await self._run(conversation, user_message, queue, max_result_rows)
+            await self._run(conversation, user_message, queue, max_result_rows, model)
             await queue.put(TurnEnd())
         except asyncio.CancelledError:
             raise
@@ -519,16 +529,16 @@ class Agent:
             await queue.put(e)
 
     async def _run(
-        self, conversation: Conversation, user_message: str, queue: _TurnQueue, max_result_rows: int
+        self, conversation: Conversation, user_message: str, queue: _TurnQueue, max_result_rows: int, model: str
     ):
         self.sweep_expired()
         if conversation.id is None:
             conversation.id = self.store.create_conversation()
         turn_id = self.store.start_turn(conversation.id, user_message)
         self._record(conversation, turn_id, {"role": "user", "content": user_message})
-        trace = TraceBuilder(self.config.model)
+        trace = TraceBuilder(model)
         try:
-            await self._converse(conversation, turn_id, user_message, trace, queue, max_result_rows)
+            await self._converse(conversation, turn_id, user_message, trace, queue, max_result_rows, model)
         except asyncio.CancelledError:
             self.store.save_trace(turn_id, trace.finish())
             raise
@@ -552,8 +562,10 @@ class Agent:
         await queue.put(TurnError(message, detail))
 
     async def _converse(
-        self, conversation, turn_id, user_message, trace: TraceBuilder, queue: _TurnQueue, max_result_rows: int
+        self, conversation, turn_id, user_message, trace: TraceBuilder, queue: _TurnQueue, max_result_rows: int,
+        model: str,
     ):
+        llm = self.client_for(model)
         connection = await self._ensure_connection()
         tools = connection.tools
         failed_attempts = 0
@@ -563,7 +575,7 @@ class Agent:
             messages += conversation.messages
             text, calls, usage = "", [], None
             step_started = time.monotonic()
-            async for chunk in self.llm.stream_chat(messages, tools):
+            async for chunk in llm.stream_chat(messages, tools):
                 if isinstance(chunk, TextChunk):
                     # Each step's text is a new paragraph on the page, as it is when the turn is reloaded.
                     shown = chunk.text if text or not chunk.text else queue.paragraph_break() + chunk.text

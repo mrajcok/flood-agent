@@ -9,7 +9,7 @@ import io
 import json
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from html import escape
 from pathlib import Path
 from typing import Literal
@@ -34,7 +34,7 @@ from flood_agent.agent import (
     TurnEnd,
     resolve_chart_data,
 )
-from flood_agent.catalog import Table, TableExpired
+from flood_agent.catalog import TableExpired
 from flood_agent.context_usage import context_usage
 from flood_agent.lookup_tables import InvalidLookupTable
 from flood_agent.queries import InvalidSort
@@ -396,15 +396,11 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
         except InvalidSort:
             raise HTTPException(400, "unknown sort column")
 
-    def settings_json(table: Table) -> dict:
-        """The table's JSON plus the Catalog's Retention policy, which the rename form reads its defaults from."""
-        return {**table.to_json(), "policy": asdict(agent.tables.policy)}
-
     @app.get("/api/results/{result_table}/settings")
     def get_result_table_settings(result_table: str):
         """A live Result Table's name, Retention in days and time left in ms (for a Display's name header)."""
         try:
-            return settings_json(agent.tables[result_table])
+            return agent.tables[result_table].to_json()
         except KeyError:
             raise HTTPException(404, "unknown result table")
 
@@ -417,7 +413,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
             name = name.strip()
         days = None if retention_days is None else _parse_retention_days(retention_days)
         try:
-            return settings_json(agent.tables.update(result_table, name, days))
+            return agent.tables.update(result_table, name, days).to_json()
         except KeyError:
             raise HTTPException(404, "unknown result table")
         except ValueError as e:

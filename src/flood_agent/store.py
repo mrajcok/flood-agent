@@ -20,6 +20,7 @@ import time
 import uuid
 from contextlib import closing
 from pathlib import Path
+from typing import Any
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversations (
@@ -54,14 +55,14 @@ CREATE TABLE IF NOT EXISTS displays (
 CREATE INDEX IF NOT EXISTS displays_conv ON displays(conversation_id, id);
 """
 
-def _follow_rename(node, old: str, new: str):
+def rename_data_source(node: Any, old: str, new: str) -> Any:
     """A saved Chart Spec with every {"name": old} data reference pointing at `new`."""
     if isinstance(node, dict):
         if node == {"name": old}:
             return {"name": new}
-        return {k: _follow_rename(v, old, new) for k, v in node.items()}
+        return {k: rename_data_source(v, old, new) for k, v in node.items()}
     if isinstance(node, list):
-        return [_follow_rename(i, old, new) for i in node]
+        return [rename_data_source(i, old, new) for i in node]
     return node
 
 
@@ -189,7 +190,7 @@ class ConversationStore:
         """The Catalog's rename hook: point every Display (and Chart Spec data reference) at `new`, on the
         Catalog's connection so it commits or rolls back with the registry rename."""
         for row in con.execute("SELECT id, definition FROM displays WHERE result_table=?", (old,)).fetchall():
-            definition = json.dumps(_follow_rename(json.loads(row[1]), old, new))
+            definition = json.dumps(rename_data_source(json.loads(row[1]), old, new))
             con.execute("UPDATE displays SET result_table=?, definition=? WHERE id=?", (new, definition, row[0]))
 
     def messages(self, conversation_id: str) -> list[dict]:

@@ -1,6 +1,6 @@
 """The Table Catalog: the one authority on whether a Result Table or Saved Table is live.
 
-It owns the registry of those tables (and of Lookup Tables) in the app database. A table is live when
+It owns the records of those tables (and of Lookup Tables) in the app database. A table is live when
 it has not been dropped AND its creation time plus its Retention is later than now (the injected clock),
 worked out on every read, so nothing depends on a sweep having run. Retention is stored on the row when
 the table is registered, so a later change to the configured default does not touch existing tables.
@@ -10,7 +10,7 @@ import json
 import sqlite3
 import time
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Iterable, Literal, NamedTuple
@@ -52,6 +52,11 @@ class RetentionPolicy:
     max_days: float = 3650
 
 
+def canonical(name: str) -> str:
+    """The form a table name is kept and compared in: lower case (ADR 0005). The one place the rule lives."""
+    return name.lower()
+
+
 class TableExpired(Exception):
     """The table is registered but no longer live. Deliberately not a KeyError, so a route that turns
     KeyError (unknown table) into 404 still lets the app-wide 410 handler run."""
@@ -71,13 +76,18 @@ class Table:
     truncated_to: int | None  # the row cap the table was cut to, or None if it is complete
     retention_ms: int
     expires_in_ms: int  # from now
+    policy: RetentionPolicy = field(default=RetentionPolicy(result_days=1), compare=False)  # the Catalog's rules
 
     @property
     def retention_days(self) -> float:
         return self.retention_ms / DAY_MS
 
     def to_json(self) -> dict:
-        return {"name": self.name, "retention_days": self.retention_days, "expires_in_ms": self.expires_in_ms}
+        """The name, Retention and time left, plus the Retention policy the rename form reads its defaults from."""
+        return {
+            "name": self.name, "retention_days": self.retention_days, "expires_in_ms": self.expires_in_ms,
+            "policy": asdict(self.policy),
+        }
 
 
 class Owned(NamedTuple):
@@ -93,20 +103,33 @@ def _now() -> int:
 
 class CatalogView:
     """The read-only Table Catalog: every read, no write. It has no write operations and opens the app
-    database in SQLite read-only mode, so the guarantee holds at runtime as well as in the types. The MCP
-    server uses this (the app database must already exist)."""
+    and results databases in SQLite read-only mode, so the guarantee holds at runtime as well as in the
+    types. The MCP server uses this (the app database must already exist)."""
 
     def __init__(
         self, app_db: Path, clock: Callable[[], int] = _now, telemetry_tables: Iterable[str] = (),
-        results_db: Path | None = None, _read_only: bool = True,
+        results_db: Path | None = None, _read_only: bool = True, default_retention_ms: int = DAY_MS,
     ):
         """`clock` returns epoch ms; `telemetry_tables` are the Telemetry Database table names;
-        `results_db` is where Lookup Tables' rows are kept (needed only by the Lookup Table operations)."""
+        `results_db` is where Lookup Tables' rows are kept (needed only by the Lookup Table operations);
+        `default_retention_ms` is the Result Table Retention that `policy` reports."""
         self.path = Path(app_db)
         self.results_db = Path(results_db) if results_db is not None else None
         self._now = clock
         self._read_only = _read_only
-        self.telemetry_tables = frozenset(t.lower() for t in telemetry_tables)
+        self.telemetry_tables = frozenset(canonical(t) for t in telemetry_tables)
+        self.policy = RetentionPolicy(result_days=default_retention_ms / DAY_MS)
+
+    @property
+    def default_retention_ms(self) -> int:
+        """The Retention a new Result Table gets, derived from `policy` (the one source)."""
+        return round(self.policy.result_days * DAY_MS)
+
+    @staticmethod
+    def canonical(name: str) -> str:
+        """`name` in the form tables are kept in (lower case, ADR 0005), for callers outside the Catalog
+        that need the name a table is known by. Every Catalog method also takes a name in any case."""
+        return canonical(name)
 
     def _connect(self) -> sqlite3.Connection:
         if self._read_only:
@@ -116,20 +139,28 @@ class CatalogView:
         con.row_factory = sqlite3.Row
         return con
 
+    def _connect_results(self) -> sqlite3.Connection:
+        return lookup_tables.connect(self._results_db(), self._read_only)
+
     def lookup_names(self) -> set[str]:
         """Every registered Lookup Table (the registry, not the `lookup_` prefix, decides: ADR 0003)."""
         with closing(self._connect()) as con:
             return {r[0] for r in con.execute("SELECT name FROM lookup_tables")}
 
+    def is_lookup(self, name: str) -> bool:
+        """Whether `name` (any case) is a Lookup Table (the registry decides, not the prefix: ADR 0003)."""
+        with closing(self._connect()) as con:
+            return con.execute(
+                "SELECT 1 FROM lookup_tables WHERE name=?", (canonical(name),)).fetchone() is not None
+
     def kind_of(self, name: str) -> Literal["telemetry", "result", "saved", "lookup"] | None:
         """The kind of `name` (any case), or None if it is not a table here or no longer live."""
-        wanted = name.lower()
-        if wanted in self.telemetry_tables:
+        if canonical(name) in self.telemetry_tables:
             return "telemetry"
-        if wanted in {n.lower() for n in self.lookup_names()}:
+        if self.is_lookup(name):
             return "lookup"
         try:
-            return self[wanted].kind
+            return self[name].kind
         except (KeyError, TableExpired):
             return None
 
@@ -170,6 +201,7 @@ class CatalogView:
             conversation_id=row["conversation_id"], turn_id=row["turn_id"], title=row["title"],
             columns=json.loads(row["columns"]), request=row["request"], truncated_to=row["truncated_to"],
             retention_ms=row["retention_ms"], expires_in_ms=row["created_at"] + row["retention_ms"] - self._now(),
+            policy=self.policy,
         )
 
     @staticmethod
@@ -180,7 +212,7 @@ class CatalogView:
         """The live Result or Saved Table `name` (any case). KeyError if no such table is registered;
         `TableExpired` if it is registered but no longer live."""
         with closing(self._connect()) as con:
-            row = con.execute("SELECT * FROM result_tables WHERE name=?", (name.lower(),)).fetchone()
+            row = con.execute("SELECT * FROM result_tables WHERE name=?", (canonical(name),)).fetchone()
         if row is None:
             raise KeyError(name)
         if not self._is_live(row, self._now()):
@@ -190,13 +222,15 @@ class CatalogView:
     def __contains__(self, name: object) -> bool:
         if not isinstance(name, str):
             return False
-        with closing(self._connect()) as con:
-            row = con.execute("SELECT * FROM result_tables WHERE name=?", (name.lower(),)).fetchone()
-        return row is not None and self._is_live(row, self._now())
+        try:
+            self[name]
+        except (KeyError, TableExpired):
+            return False
+        return True
 
     def live_among(self, names: Iterable[str]) -> set[str]:
         """The subset of `names` that are live Result or Saved Tables (one query per 500 names)."""
-        names, now, out = list({n.lower() for n in names}), self._now(), set()
+        names, now, out = list({canonical(n) for n in names}), self._now(), set()
         with closing(self._connect()) as con:
             for i in range(0, len(names), 500):
                 chunk = names[i:i + 500]
@@ -221,9 +255,11 @@ class CatalogView:
 
     # --- Lookup Tables: the registry, not the `lookup_` prefix, makes a table one (ADR 0003) ----------
 
-    def _is_lookup(self, name: str) -> bool:
-        with closing(self._connect()) as con:
-            return con.execute("SELECT 1 FROM lookup_tables WHERE name=?", (name.lower(),)).fetchone() is not None
+    def _lookup_name(self, name: str) -> str:
+        """The canonical name of Lookup Table `name`; KeyError if it is not one."""
+        if not self.is_lookup(name):
+            raise KeyError(name)
+        return canonical(name)
 
     def _results_db(self) -> Path:
         if self.results_db is None:
@@ -233,10 +269,9 @@ class CatalogView:
     def lookup_text(self, name: str, sep: str) -> dict:
         """A Lookup Table's rows as text for the edit dialog, header line first, separated by `sep` (a key
         of `lookup_tables.SEPARATORS`). KeyError if `name` is not a Lookup Table."""
-        if not self._is_lookup(name):
-            raise KeyError(name)
-        name = name.lower()
-        return {"name": name, "text": lookup_tables.format_rows(lookup_tables.read_table(self._results_db(), name), sep)}
+        name = self._lookup_name(name)
+        with closing(self._connect_results()) as con:
+            return {"name": name, "text": lookup_tables.format_rows(lookup_tables.read_table(con, name), sep)}
 
 
 class Catalog(CatalogView):
@@ -247,12 +282,11 @@ class Catalog(CatalogView):
         telemetry_tables: Iterable[str] = (), results_db: Path | None = None,
         on_rename: Callable[[sqlite3.Connection, str, str], None] | None = None,
     ):
-        """`default_retention_ms` is the Retention a new Result Table is given. `on_rename(con, old, new)` is
+        """`default_retention_ms` is the Retention a new Result Table is given (kept in `policy`). `on_rename(con, old, new)` is
         the store's hook: it runs in the same app-database transaction as the registry rename, to update
         whatever else shows the old name (Displays and Chart Specs), so the Catalog never knows their schema."""
-        super().__init__(app_db, clock, telemetry_tables, results_db, _read_only=False)
-        self.default_retention_ms = default_retention_ms
-        self.policy = RetentionPolicy(result_days=default_retention_ms / DAY_MS)
+        super().__init__(app_db, clock, telemetry_tables, results_db, _read_only=False,
+                         default_retention_ms=default_retention_ms)
         self._on_rename = on_rename
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as con, con:
@@ -268,7 +302,7 @@ class Catalog(CatalogView):
             con.execute(
                 "INSERT OR IGNORE INTO result_tables(name, conversation_id, turn_id, created_at, title, columns,"
                 " request, truncated_to, retention_ms) VALUES (?,?,?,?,?,?,?,?,?)",
-                (name.lower(), conversation_id, turn_id, now, title, json.dumps(columns or []), request, truncated_to,
+                (canonical(name), conversation_id, turn_id, now, title, json.dumps(columns or []), request, truncated_to,
                  self.default_retention_ms),
             )
             con.execute("UPDATE conversations SET last_activity_at=? WHERE id=?", (now, conversation_id))
@@ -302,7 +336,7 @@ class Catalog(CatalogView):
             raise ValueError(f"{name} is a Telemetry Database table and cannot be deleted.")
         if kind is None:
             raise KeyError(name)
-        name = name.lower()
+        name = canonical(name)
         self._drop_physical([name])
         if kind == "lookup":
             with closing(self._connect()) as con, con:
@@ -324,7 +358,7 @@ class Catalog(CatalogView):
             if not 0 < retention_days <= self.policy.max_days:  # also rejects nan
                 raise ValueError(f"Retention must be more than 0 and at most {self.policy.max_days:g} days.")
             retention_ms = max(1, round(retention_days * DAY_MS))
-        new = new_name.lower() if new_name is not None else None
+        new = canonical(new_name) if new_name is not None else None
         if new is not None and new != table.name:
             if retention_ms is None and table.kind == "result":
                 retention_ms = max(table.retention_ms, round(self.policy.saved_days * DAY_MS))
@@ -381,7 +415,7 @@ class Catalog(CatalogView):
         refused (`InvalidLookupTable`), unless it is a Lookup Table and `overwrite` is set. Never expires."""
         name = lookup_tables.table_name(suffix)
         parsed = lookup_tables.parse_rows(text)
-        registered = self._is_lookup(name)
+        registered = self.is_lookup(name)
         try:
             lookup_tables.write_table(self._results_db(), name, parsed, replace=registered and overwrite)
         except lookup_tables.TableExists:
@@ -394,9 +428,7 @@ class Catalog(CatalogView):
     def replace_lookup(self, name: str, text: str) -> dict:
         """Replace a Lookup Table's rows (and columns) with edited text; its name stays. KeyError if `name`
         is not a Lookup Table; `InvalidLookupTable`, changing nothing, for a bad paste."""
-        if not self._is_lookup(name):
-            raise KeyError(name)
-        name = name.lower()
+        name = self._lookup_name(name)
         parsed = lookup_tables.parse_rows(text)
         lookup_tables.write_table(self._results_db(), name, parsed, replace=True)
         return self._register_lookup(name, parsed)
@@ -410,18 +442,15 @@ class Catalog(CatalogView):
         now = self._now()
         # The generated name holds local time (queries.py), so compare on that basis.
         cutoff = datetime.fromtimestamp(now / 1000) - ORPHAN_AGE
-        with closing(self._connect()) as app, closing(sqlite3.connect(self.results_db)) as results:
+        with closing(self._connect()) as app, closing(self._connect_results()) as results:
             rows = app.execute("SELECT name, created_at, retention_ms, expired FROM result_tables").fetchall()
             registered = {r["name"] for r in rows}
             due = [r["name"] for r in rows if not r["expired"] and r["created_at"] + r["retention_ms"] <= now]
             physical = [r[0] for r in results.execute("SELECT name FROM sqlite_master WHERE type='table'")]
             orphans = [n for n in physical if table_names.GENERATED_RE.fullmatch(n) and n not in registered
                        and (_name_time(n) or cutoff) < cutoff]
-            for n in due + orphans:
-                results.execute(f"DROP TABLE IF EXISTS {table_names.quote(n)}")
-            results.commit()
-            with app:
-                app.executemany("UPDATE result_tables SET expired=1 WHERE name=?", [(n,) for n in due])
+        self._drop_physical(due + orphans)
+        self._mark_expired(due)
 
 
 def _name_time(name: str) -> datetime | None:

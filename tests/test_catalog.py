@@ -2,6 +2,7 @@
 
 import sqlite3
 from contextlib import closing
+from dataclasses import replace
 from datetime import datetime
 
 import pytest
@@ -312,3 +313,45 @@ def test_drop_owned_drops_only_rt_tables_of_that_conversation_or_turn(full):
     assert catalog.drop_owned(cid) == ["rt_b"]
     assert _exists(results_db, "kept") and _exists(results_db, "rt_c")
     assert "kept" in catalog and "rt_c" in catalog and "rt_b" not in catalog
+
+
+def test_the_view_reports_the_retention_policy_and_the_table_json_carries_it(world):
+    catalog, cid = world
+    catalog.register("rt_a", cid, 1)
+    view = CatalogView(catalog.path, catalog._now, default_retention_ms=2 * DAY)
+
+    assert (view.policy.result_days, view.policy.saved_days, view.policy.max_days) == (2, 30, 3650)
+    assert view["rt_a"].to_json()["policy"] == {"result_days": 2, "saved_days": 30, "max_days": 3650}
+
+
+def test_the_default_retention_follows_the_policy(world):
+    catalog, cid = world
+    catalog.policy = replace(catalog.policy, result_days=3)
+    catalog.register("rt_a", cid, 1)
+
+    assert catalog.default_retention_ms == 3 * DAY
+    assert catalog["rt_a"].retention_days == 3
+
+
+def test_is_lookup_and_canonical_take_any_case(tmp_path, clock):
+    results = tmp_path / "results.db"
+    sqlite3.connect(results).close()
+    app_db = tmp_path / "app.db"
+    catalog = Catalog(app_db, clock, results_db=results)
+    catalog.add_lookup("Hosts", "ip,name\n1,a")
+    view = CatalogView(app_db, clock, results_db=results)
+
+    assert view.is_lookup("LOOKUP_HOSTS") and not view.is_lookup("rt_x")
+    assert view.canonical("MyTable") == "mytable"
+    assert view.lookup_text("Lookup_Hosts", "comma")["name"] == "lookup_hosts"
+
+
+def test_the_view_opens_the_results_database_read_only(tmp_path, clock):
+    results = tmp_path / "results.db"
+    sqlite3.connect(results).close()
+    catalog = Catalog(tmp_path / "app.db", clock, results_db=results)
+    catalog.add_lookup("hosts", "ip,name\n1,a")
+    view = CatalogView(catalog.path, clock, results_db=results)
+
+    with closing(view._connect_results()) as con, pytest.raises(sqlite3.OperationalError):
+        con.execute("CREATE TABLE x(y)")

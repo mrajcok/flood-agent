@@ -32,7 +32,7 @@ def test_renaming_a_result_table_switches_its_retention_to_30_days(build_agent, 
     agent, page, table = ask_for_a_table(build_agent, live_page)
     name, retention = edit(page, table)
     expect(retention).to_have_value("1")
-    expect(retention.locator("option:checked")).to_have_text("1 day (rt_ default)")
+    expect(retention.locator("option:checked")).to_have_text("1 day (Result Table default)")
 
     name.fill("keeper")
     expect(retention).to_have_value("30")
@@ -106,7 +106,7 @@ def test_the_form_shows_the_deployments_retention_policy(build_agent, live_page)
     page.locator("aside ul li a").first.click()
     name, retention = edit(page, table)
     expect(retention).to_have_value("custom")  # created with 1 day, which is no longer a preset
-    expect(retention.locator("option", has_text="rt_ default")).to_have_text("3 days (rt_ default)")
+    expect(retention.locator("option", has_text="Result Table default")).to_have_text("3 days (Result Table default)")
     name.fill("keeper")
     expect(retention).to_have_value("14")  # the Saved Table default comes from the policy
     retention.select_option("custom")

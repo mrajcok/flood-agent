@@ -29,7 +29,7 @@ document.addEventListener("alpine:init", () => {
       return [...new Set(days)].sort((a, b) => a - b).map(String);
     },
     presetLabel(days) {
-      return FloodFormat.formatRetention(Number(days)) + (Number(days) === this.policy.result_days ? " (rt_ default)" : "");
+      return FloodFormat.formatRetention(Number(days)) + (Number(days) === this.policy.result_days ? " (Result Table default)" : "");
     },
     expire() { this.gone = true; this.editing = false; this.$dispatch("table-expired"); },
     get expiresIn() { return this.expiresInMs === null ? "" : FloodFormat.formatExpiresIn(this.expiresInMs); },
@@ -45,7 +45,7 @@ document.addEventListener("alpine:init", () => {
     renamed() {
       // Renaming a Result Table (rt_*) makes it a Saved Table, kept 30 days unless the user picks
       // a Retention in this edit or it is already kept at least that long (ADR 0004).
-      if (this.retentionTouched || !this.name.toLowerCase().startsWith("rt_") || this.retentionDays >= this.policy.saved_days) return;
+      if (this.retentionTouched || !this.name.startsWith("rt_") || this.retentionDays >= this.policy.saved_days) return;
       this.choice = this.draft.trim() === this.name ? this.originalChoice : String(this.policy.saved_days);
     },
     async save() {

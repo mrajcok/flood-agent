@@ -106,3 +106,39 @@ async def test_a_stopped_turn_keeps_the_table_its_query_registered_with_that_tur
     (table,) = agent.tables.tables_of(conversation.id)
     turn_id = next(e.turn_id for e in events if isinstance(e, TraceReady))
     assert (table.turn_id, table.title, table.request) == (turn_id, "Ports", "ports please")
+
+
+async def test_a_turn_stopped_the_instant_its_tool_call_returns_still_registers_the_table(make_agent):
+    agent = await make_agent(HangingLLM([tool_call("run_query", sql=SQL, title="Ports")]))
+    connection = agent._connection
+    real_call_tool = connection.call_tool
+
+    async def stop_after_the_call(*args, **kwargs):
+        result = await real_call_tool(*args, **kwargs)
+        assert agent.stop_turn("t1")  # cancellation lands at the next await after the tool call returns
+        return result
+
+    connection.call_tool = stop_after_the_call
+    conversation = Conversation()
+    async for _ in agent.run_turn(conversation, "ports please", 1000, turn_key="t1"):
+        pass
+
+    (table,) = agent.tables.tables_of(conversation.id)
+    assert table.title == "Ports"
+
+
+async def test_a_registration_failure_is_not_reported_as_the_tool_failing(make_agent):
+    agent = await make_agent(HangingLLM([tool_call("run_query", sql=SQL, title="Ports")]))
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("catalog down")
+
+    agent.tables.register = broken
+    conversation = Conversation()
+    async for ev in agent.run_turn(conversation, "ports please", 1000, turn_key="t1"):
+        if isinstance(ev, TextDelta) and "Partial" in ev.text:
+            agent.stop_turn("t1")
+
+    tool_messages = [m["content"] for m in conversation.messages if m["role"] == "tool"]
+    assert tool_messages and "could not be recorded" in tool_messages[0]
+    assert "failed to run" not in tool_messages[0]

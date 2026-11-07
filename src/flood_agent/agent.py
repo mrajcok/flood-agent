@@ -601,16 +601,19 @@ class Agent:
                 args = parsed
                 try:
                     result = await connection.call_tool(c.name, args, conversation_id, max_result_rows)
-                    content = "".join(b.text for b in result.content if isinstance(b, TextContent))
+                except Exception as e:  # a broken tool call must not corrupt or abort the turn
+                    trace.add("tool_error", name=c.name, detail=f"{type(_unwrap(e)).__name__}: {_unwrap(e)}")
+                    return _fail("The tool failed to run. Try again."), args, None, 1
+                content = "".join(b.text for b in result.content if isinstance(b, TextContent))
+                try:
                     # Straight after the call returns, before any other await, so a turn stopped here
                     # still has its table registered (and so listed and swept).
                     self._register_result_table(conversation_id, turn_id, content, args, request)
-                    if result.isError:
-                        content = _fail(content[:500] or "The tool call was rejected.")
-                except Exception as e:  # a broken tool call must not corrupt or abort the turn
-                    trace.add("tool_error", name=c.name, detail=f"{type(_unwrap(e)).__name__}: {_unwrap(e)}")
-                    content = _fail("The tool failed to run. Try again.")
-                    return content, args, None, 1
+                except Exception as e:  # the tool ran; only recording its table failed
+                    trace.add("registration_error", name=c.name, detail=f"{type(e).__name__}: {e}")
+                    return _fail("The query ran but its Result Table could not be recorded. Try again."), args, None, 1
+                if result.isError:
+                    content = _fail(content[:500] or "The tool call was rejected.")
         if is_query:
             content, executed_sql = self._strip_executed_sql(content)
             content, failed = await self._split_query_error(content, args, queue, trace)

@@ -23,7 +23,6 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import anyio.to_thread
 from mcp.server.fastmcp import Context, FastMCP
@@ -31,6 +30,7 @@ from mcp.server.fastmcp import Context, FastMCP
 from flood_agent import logs, queries
 from flood_agent.catalog import CatalogView
 from flood_agent.mcp_protocol import META_MAX_RESULT_ROWS
+from flood_agent.store import rename_data_source
 
 
 @dataclass(frozen=True)
@@ -96,15 +96,6 @@ LOOKUP_NOT_SHOWABLE = (
     "That is a Lookup Table, which cannot be shown directly. Query it with run_query to make a "
     "Result Table, then show that."
 )
-
-
-def _rename_data(node: Any, old: str, new: str) -> Any:
-    """A Chart Spec with every {"name": old} data reference pointing at `new`."""
-    if isinstance(node, dict):
-        return {"name": new} if node == {"name": old} else {k: _rename_data(v, old, new) for k, v in node.items()}
-    if isinstance(node, list):
-        return [_rename_data(i, old, new) for i in node]
-    return node
 
 
 def _not_showable(catalog: CatalogView | None, name: str) -> str:
@@ -256,9 +247,9 @@ def create_server(settings: ServerSettings, clock: Callable[[], int] | None = No
         """Describe a table the user names: its kind, column names and types, and row count. Works
         for any live table from any chat, not only those listed in your prompt. Never returns
         rows. Query it by name with run_query."""
-        name = name.lower()  # table names are kept in lower case (ADR 0005)
         kind = catalog.kind_of(name) if catalog else None
         kind = kind if kind in ("lookup", "result", "saved") else None
+        name = CatalogView.canonical(name)
         described = queries.describe_results_table(settings.results_db, name) if kind else None
         if described is None:
             return json.dumps({"success": False, "error": "No such table."})
@@ -270,8 +261,8 @@ def create_server(settings: ServerSettings, clock: Callable[[], int] | None = No
         """Show a live Result Table, from any chat, to the user as a table Display. You
         will not see the rows."""
         # Any live Result Table may be shown (ADR 0003).
-        result_table = result_table.lower()  # table names are kept in lower case (ADR 0005)
         live = catalog is not None and result_table in catalog
+        result_table = CatalogView.canonical(result_table)
         available = queries.result_table_columns(settings.results_db, result_table) if live else None
         if available is None:
             return json.dumps({"success": False, "error": _not_showable(catalog, result_table)})
@@ -292,10 +283,10 @@ def create_server(settings: ServerSettings, clock: Callable[[], int] | None = No
         table = data.get("name") if isinstance(data, dict) else None
         if not isinstance(table, str):
             return json.dumps({"success": False, "error": "Missing data source. " + CHART_GUIDANCE})
-        if table != table.lower():  # names are kept in lower case (ADR 0005): chart the table by that name
-            vega_lite_spec = _rename_data(vega_lite_spec, table, table.lower())
-            table = table.lower()
         live = catalog is not None and table in catalog
+        if table != CatalogView.canonical(table):  # the Display records the table under its canonical name
+            vega_lite_spec = rename_data_source(vega_lite_spec, table, CatalogView.canonical(table))
+            table = CatalogView.canonical(table)
         count = queries.result_table_row_count(settings.results_db, table) if live else None
         if count is None:
             return json.dumps({"success": False, "error": f"{_not_showable(catalog, table)} {CHART_GUIDANCE}"})

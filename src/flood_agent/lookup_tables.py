@@ -132,12 +132,15 @@ def format_rows(parsed: ParsedRows, sep: str) -> str:
     return out.getvalue()
 
 
-def read_table(results_db: Path, name: str) -> ParsedRows:
+def connect(results_db: Path, read_only: bool = False) -> sqlite3.Connection:
+    """A connection to the results database, opened read-only if `read_only`."""
+    if read_only:
+        return sqlite3.connect(f"file:{results_db}?mode=ro", uri=True, timeout=5)
+    return sqlite3.connect(results_db)
+
+
+def read_table(con: sqlite3.Connection, name: str) -> ParsedRows:
     """Columns and rows of `name` (a registered Lookup Table), in insertion order."""
-    con = sqlite3.connect(results_db)
-    try:
-        cur = con.execute(f"SELECT * FROM {table_names.quote(name)} ORDER BY rowid")
-        rows = [list(r) for r in cur]
-        return ParsedRows([d[0] for d in cur.description], rows)
-    finally:
-        con.close()
+    cur = con.execute(f"SELECT * FROM {table_names.quote(name)} ORDER BY rowid")
+    rows = [list(r) for r in cur]
+    return ParsedRows([d[0] for d in cur.description], rows)

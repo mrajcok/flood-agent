@@ -1,10 +1,13 @@
 """The Semantic Layer: a hand-authored YAML file rendered into the system prompt."""
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
 
-from flood_agent.catalog import Table
+if TYPE_CHECKING:  # annotations only: no import-time coupling to the Catalog
+    from flood_agent.catalog import Table
+
 
 SYSTEM_INSTRUCTIONS = """\
 You help analysts explore network flow telemetry by writing SQL. You never see any
@@ -98,7 +101,7 @@ class SemanticLayer:
     def render(self) -> str:
         return yaml.safe_dump(self.data, sort_keys=False)
 
-    def system_prompt(self, result_tables: list[Table] | None = None) -> str:
+    def system_prompt(self, result_tables: "list[Table] | None" = None) -> str:
         return (
             f"{SYSTEM_INSTRUCTIONS}\n"
             f"The dataset ends at window_end; treat 'now' as epoch ms {self.window_end}.\n\n"
@@ -107,7 +110,7 @@ class SemanticLayer:
         )
 
     @staticmethod
-    def render_result_tables(tables: list[Table]) -> str:
+    def render_result_tables(tables: "list[Table]") -> str:
         """The Conversation's live Result Tables: names, schemas and originating requests only."""
         if not tables:
             return (

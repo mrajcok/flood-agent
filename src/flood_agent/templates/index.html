@@ -299,12 +299,12 @@
                                   if (!level) return;
                                   try { localStorage.setItem('flood-agent.efforts', JSON.stringify({ ...this.savedEfforts(), [this.model]: level })); } catch (e) {}
                                 },
-                                settleEffort(carried) {
-                                  /* After a model change: keep the Effort if the model offers it, else that model's remembered choice, else its default. */
+                                settleEffort() {
+                                  /* After a model change: that model's own remembered Effort, else its default. Never carried over from the previous model. */
                                   const offered = this.efforts;
                                   if (!offered.length) { this.effort = ''; return; }
                                   const saved = this.savedEfforts()[this.model];
-                                  this.effort = offered.includes(carried) ? carried : offered.includes(saved) ? saved : this.current.default_effort;
+                                  this.effort = offered.includes(saved) ? saved : this.current.default_effort;
                                 },
                                 get modelLabel() { return (this.models.find(m => m.id === this.model) || {}).label || this.model },
                                 load() {
@@ -313,13 +313,12 @@
                                   try { saved = localStorage.getItem('flood-agent.model'); } catch (e) {}
                                   const ok = id => this.models.some(m => m.id === id && !m.disabled);
                                   this.model = ok(saved) ? saved : this.defaultModel;
-                                  this.settleEffort(null);
+                                  this.settleEffort();
                                   this.refreshMeter();
                                 },
                                 pick(id) {
-                                  const carried = this.effort;
                                   this.model = id; this.modelOpen = false;
-                                  this.settleEffort(carried);
+                                  this.settleEffort();
                                   try { localStorage.setItem('flood-agent.model', id); } catch (e) {}
                                   this.refreshMeter();
                                 },

@@ -1,4 +1,4 @@
-"""The strip's Effort dropdown: the selected model's levels, carry-over and reset on a model switch,
+"""The strip's Effort dropdown: the selected model's levels, each model's own remembered level on a switch,
 the per-model memory, and the disabled "no effort" state."""
 
 from playwright.sync_api import expect
@@ -43,19 +43,23 @@ def test_glm_shows_a_disabled_no_effort_control_that_sends_nothing(live_page):
     expect(page.locator("#effort")).to_have_value("")
 
 
-def test_switching_keeps_an_effort_the_new_model_offers_and_resets_one_it_does_not(live_page):
+def test_each_model_returns_to_its_own_remembered_effort_never_carrying_one_over(live_page):
     page = live_page()
     pick_model(page, "Claude Sonnet 5.5")
     pick_effort(page, "low")
 
-    pick_model(page, "DeepSeek V4 Pro")  # offers low
-    expect(effort_button(page)).to_have_text("low")
-
-    pick_model(page, "Claude Opus 5.5")  # offers low
-    pick_effort(page, "xhigh")
-    pick_model(page, "DeepSeek V4 Pro")  # does not offer xhigh: its default
+    pick_model(page, "DeepSeek V4 Pro")  # offers low too, but nothing was chosen for it: its own default
     expect(effort_button(page)).to_have_text("high")
     expect(page.locator("#effort")).to_have_value("high")
+
+    pick_model(page, "Claude Opus 5.5")  # never chosen for Opus: its default, not Sonnet's low
+    expect(effort_button(page)).to_have_text("medium")
+    pick_effort(page, "xhigh")
+
+    pick_model(page, "Claude Sonnet 5.5")  # back to its own choice
+    expect(effort_button(page)).to_have_text("low")
+    pick_model(page, "Claude Opus 5.5")
+    expect(effort_button(page)).to_have_text("xhigh")
 
 
 def test_switching_away_and_back_restores_the_choice_made_for_that_model(live_page):

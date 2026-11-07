@@ -33,7 +33,7 @@ def test_values_from_the_env_file_override_the_toml_defaults(tmp_path):
     env_file = write_env(
         tmp_path / ".env",
         OPENROUTER_API_KEY="sk-from-the-file",
-        OPENROUTER_MODEL="z-ai/glm-5.3",
+        DEFAULT_MODEL="qwen/qwen3.8-27b",
         TELEMETRY_DB=tmp_path / "t.db",
         RESULTS_DB=tmp_path / "r.db",
         APP_DB=tmp_path / "a.db",
@@ -50,7 +50,7 @@ def test_values_from_the_env_file_override_the_toml_defaults(tmp_path):
     cfg = settings.agent_config()
 
     assert settings.require_api_key() == "sk-from-the-file"
-    assert cfg.model == "z-ai/glm-5.3"
+    assert cfg.model == "qwen/qwen3.8-27b"
     assert cfg.telemetry_db == tmp_path / "t.db"
     assert cfg.results_db == tmp_path / "r.db"
     assert cfg.app_db == tmp_path / "a.db"
@@ -74,7 +74,7 @@ def test_the_real_environment_wins_over_the_env_file(tmp_path, monkeypatch):
 def test_blank_values_are_treated_as_unset(tmp_path, monkeypatch):
     baseline = Settings()
     env_file = tmp_path / ".env"
-    env_file.write_text("QUERY_TIMEOUT_S=\nCHART_ROW_CAP=  \nTELEMETRY_DB=\nOPENROUTER_MODEL=\nMAX_LLM_STEPS=\n")
+    env_file.write_text("QUERY_TIMEOUT_S=\nCHART_ROW_CAP=  \nTELEMETRY_DB=\nDEFAULT_MODEL=\nMAX_LLM_STEPS=\n")
     monkeypatch.setenv("MAX_FAILED_ATTEMPTS", "")
     settings = Settings(_env_file=env_file)
 
@@ -115,6 +115,37 @@ def test_defaults_toml_has_exactly_the_settings_that_have_defaults():
     assert in_toml == fields - {"openrouter_api_key"}  # the only setting without a default is the secret
 
 
+def test_the_curated_model_list_parses_in_the_specs_order():
+    models = Settings().models
+
+    assert [m.id for m in models] == [
+        "anthropic/claude-sonnet-5.5", "anthropic/claude-opus-5.5", "anthropic/claude-haiku-5.5",
+        "deepseek/deepseek-v4-pro-0813", "z-ai/glm-5.3", "qwen/qwen3.8-27b",
+        "openai/gpt-5.6-terra", "openai/gpt-5.6-sol", "openai/gpt-5.6-luna",
+    ]
+    sonnet, opus, _, deepseek, glm, qwen, *_ = models
+    assert (sonnet.label, sonnet.context_window, sonnet.default_effort) == ("Claude Sonnet 5.5", 1_000_000, "high")
+    assert opus.default_effort == "medium"
+    assert (deepseek.efforts, deepseek.context_window) == (["max", "high", "low", "none"], 1_048_576)
+    assert (glm.efforts, glm.default_effort) == (["max", "high", "low"], "max")
+    assert (qwen.efforts[0], qwen.context_window) == ("xhigh", 1_024_000)
+
+
+def test_the_default_model_is_one_of_the_list_and_sets_the_agents_default():
+    settings = Settings()
+
+    assert settings.default_model == "z-ai/glm-5.3"
+    assert settings.agent_config().model == "z-ai/glm-5.3"
+    assert {m.id: m.context_window for m in settings.agent_config().models}["z-ai/glm-5.3"] == 1_048_576
+
+
+def test_a_default_model_outside_the_list_is_refused(tmp_path):
+    env_file = write_env(tmp_path / ".env", DEFAULT_MODEL="nobody/nothing")
+
+    with pytest.raises(ValidationError, match="default_model"):
+        Settings(_env_file=env_file)
+
+
 def test_every_setting_is_described():
     undocumented = [name for name, field in Settings.model_fields.items() if not field.description]
 
@@ -152,7 +183,7 @@ async def agent_from_env_file(tmp_path, telemetry_db, semantic_layer_path):
             SEMANTIC_LAYER=semantic_layer_path,
             **env,
         )
-        agent = Agent(Settings(_env_file=env_file).agent_config(), llm)
+        agent = Agent(Settings(_env_file=env_file).agent_config(), lambda model: llm)
         await agent.start()
         agents.append(agent)
         return agent

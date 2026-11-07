@@ -4,8 +4,7 @@
 # upper case (QUERY_TIMEOUT_S, ...). The real environment wins over .env.
 # openrouter_api_key has no default; it is a secret and belongs in .env.
 
-llm_backend = "openrouter"  # or "fake" (Fake Mode: no LLM, no key)
-openrouter_model = "anthropic/claude-sonnet-5.5"
+default_model = "z-ai/glm-5.3"  # an id from the [[models]] list at the end of this file
 
 telemetry_db = "data/telemetry.db"
 results_db = "data/results.db"
@@ -20,3 +19,72 @@ max_llm_steps = 10
 
 host = "127.0.0.1"
 port = 8000
+
+# The curated model list, in the order the Model dropdown shows it ("No model" is added last by
+# the app). context_window is OpenRouter's `context_length` from a 2026-11-06 snapshot; re-check
+# it against https://openrouter.ai/api/v1/models whenever you add or change an entry.
+# efforts are the Effort levels the model offers (empty: no Effort control); default_effort is
+# the level OpenRouter applies when none is sent.
+
+[[models]]
+id = "anthropic/claude-sonnet-5.5"
+label = "Claude Sonnet 5.5"
+context_window = 1_000_000
+efforts = ["low", "medium", "high", "xhigh", "max"]
+default_effort = "high"
+
+[[models]]
+id = "anthropic/claude-opus-5.5"
+label = "Claude Opus 5.5"
+context_window = 1_000_000
+efforts = ["low", "medium", "high", "xhigh", "max"]
+default_effort = "medium"  # Anthropic's default; OpenRouter's is high
+
+[[models]]
+id = "anthropic/claude-haiku-5.5"
+label = "Claude Haiku 5.5"
+context_window = 1_000_000
+efforts = ["low", "medium", "high", "xhigh", "max", "none"]
+default_effort = "medium"
+
+[[models]]
+id = "deepseek/deepseek-v4-pro-0813"
+label = "DeepSeek V4 Pro"
+context_window = 1_048_576
+efforts = ["max", "high", "low", "none"]
+default_effort = "high"
+
+[[models]]
+id = "z-ai/glm-5.3"
+label = "GLM 5.3"
+context_window = 1_048_576
+efforts = ["max", "high", "low"]
+default_effort = "max"
+
+[[models]]
+id = "qwen/qwen3.8-27b"
+label = "Qwen3.8 27B"
+context_window = 1_024_000
+efforts = ["xhigh", "medium", "low", "none"]
+default_effort = "xhigh"
+
+[[models]]
+id = "openai/gpt-5.6-terra"
+label = "GPT-5.6 Terra"
+context_window = 1_050_000
+efforts = ["low", "medium", "high", "xhigh", "max", "none"]
+default_effort = "medium"
+
+[[models]]
+id = "openai/gpt-5.6-sol"
+label = "GPT-5.6 Sol"
+context_window = 1_050_000
+efforts = ["low", "medium", "high", "xhigh", "max", "none"]
+default_effort = "medium"
+
+[[models]]
+id = "openai/gpt-5.6-luna"
+label = "GPT-5.6 Luna"
+context_window = 1_050_000
+efforts = ["low", "medium", "high", "xhigh", "max", "none"]
+default_effort = "medium"

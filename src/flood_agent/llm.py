@@ -8,8 +8,19 @@ from dataclasses import dataclass
 from typing import AsyncIterator, Protocol
 
 import httpx
+from pydantic import BaseModel, Field
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+
+class ModelSpec(BaseModel, frozen=True):
+    """One entry of the curated model list (`[[models]]` in defaults.toml)."""
+
+    id: str  # the OpenRouter model id
+    label: str
+    context_window: int = Field(ge=1)  # tokens
+    efforts: list[str] = []  # Effort levels it offers; empty means no Effort control
+    default_effort: str | None = None
 
 
 @dataclass
@@ -40,6 +51,7 @@ Chunk = TextChunk | ToolCallChunk | UsageChunk
 
 class LLMClient(Protocol):
     def stream_chat(self, messages: list[dict], tools: list[dict]) -> AsyncIterator[Chunk]: ...
+    # A client that takes `reasoning=` (OpenRouterClient) gets it only when the user picked a non-default Effort.
 
 
 class LLMError(Exception):
@@ -54,9 +66,11 @@ class OpenRouterClient:
                  transport: httpx.AsyncBaseTransport | None = None):
         self.api_key, self.model, self.url, self.transport = api_key, model, url, transport
 
-    async def stream_chat(self, messages, tools):
+    async def stream_chat(self, messages, tools, reasoning: dict | None = None):
         body = {"model": self.model, "messages": messages, "tools": tools, "stream": True,
             "stream_options": {"include_usage": True}, "usage": {"include": True}}
+        if reasoning:
+            body["reasoning"] = reasoning
         headers = {"Authorization": f"Bearer {self.api_key}"}
         pending: dict[int, dict] = {}
         usage = None

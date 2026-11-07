@@ -18,7 +18,7 @@ async def real_layer_agent(tmp_path, telemetry_db):
     agents = []
 
     async def _make(llm, tmp_path=tmp_path, telemetry_db=telemetry_db):
-        agent = Agent(config_for_test(tmp_path, telemetry_db, REAL), llm)
+        agent = Agent(config_for_test(tmp_path, telemetry_db, REAL), lambda model: llm)
         await agent.start()
         agents.append(agent)
         return agent

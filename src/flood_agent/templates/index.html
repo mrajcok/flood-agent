@@ -23,16 +23,36 @@
     .topbar { flex: none; display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
     .topbar h1 { margin: .6rem 0; }
     .controls { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
-    .max-rows { display: flex; align-items: center; gap: .5rem; margin: 0; font-size: .9rem; color: #2a4ba0; }
-    .max-rows label { font-weight: 600; }
-    .max-rows select, .max-rows input[type=text], .toggle-all { font: inherit; color: #2a4ba0; background: #eef3fd; border: 1px solid #b9c7e6; border-radius: 999px; padding: .25rem .8rem; }
-    .max-rows select, .max-rows input[type=text] { color: #333; background-color: #f6f7f9; border-color: #c4c9d4; }  /* gray, like the Keep for select */
-    .max-rows select { appearance: none; -webkit-appearance: none; cursor: pointer; padding-right: 1.9rem;
-      background: #f6f7f9 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23333' stroke-width='1.6'/%3E%3C/svg%3E") no-repeat right .75rem center; }
-    .max-rows select:hover { background-color: #eceef2; }
+    .toggle-all { font: inherit; color: #2a4ba0; background: #eef3fd; border: 1px solid #b9c7e6; border-radius: 999px; padding: .25rem .8rem; }
     .toggle-all:hover { background-color: #dce7fb; }
-    .max-rows select:focus-visible, .max-rows input[type=text]:focus-visible, .toggle-all:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
-    .max-rows input[type=text] { box-sizing: content-box; width: 9ch; min-width: 0; padding: .25rem .5rem; text-align: right; }
+    .toggle-all:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
+    /* The strip under the prompt box: model and context on the left, the row cap on the right.
+       Controls read as plain text until hovered; they open rounded popovers above. */
+    .strip { position: relative; margin-top: .3rem; color: #444; font-size: .9rem; }
+    .strip .row { display: flex; align-items: center; flex-wrap: wrap; gap: .15rem .5rem; white-space: nowrap; }
+    .strip .spacer { flex: 1; min-width: .5rem; }
+    .strip .sep { color: #b4b8c2; }
+    .strip .dd { position: relative; }
+    .strip .trig { font: inherit; color: inherit; background: transparent; border: 0; border-radius: .4rem; padding: .1rem .3rem; margin: 0 -.3rem; cursor: pointer; line-height: 1.5; }
+    .strip .trig:hover, .strip .trig.open { background: #e3e8f4; }
+    .strip .trig:disabled { cursor: default; color: #8a91a3; background: transparent; }
+    .strip .trig:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
+    .strip .meter { display: inline-block; width: 4.5rem; height: .4rem; background: #e3e7ef; border-radius: 999px; overflow: hidden; vertical-align: middle; }
+    .strip .meter i { display: block; height: 100%; background: #4a6fd3; }
+    .strip .amber .meter i { background: #d98e04; } .strip .red .meter i { background: #c0392b; }
+    .strip .ctx.amber { color: #8a5a00; } .strip .ctx.red { color: #a52a1e; font-weight: 600; }
+    .strip .panel { position: absolute; bottom: calc(100% + .45rem); right: -.4rem; z-index: 10; background: #fff; border: 1px solid #cfd5e2; border-radius: 1rem;
+                    box-shadow: 0 8px 24px rgba(30,40,80,.18); padding: .5rem; min-width: 12rem; display: grid; gap: .1rem; white-space: nowrap; }
+    .strip .panel.left { right: auto; left: -.4rem; }
+    .strip .item:disabled { color: #8a91a3; cursor: not-allowed; background: transparent; }
+    .strip .item small { color: #8a91a3; }
+    .strip .panel h6 { margin: .2rem .7rem .15rem; font-size: .7rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #8a91a3; }
+    .strip .panel h6.sentence { text-transform: none; letter-spacing: 0; font-size: .75rem; }
+    .strip .item { display: flex; align-items: center; gap: .5rem; width: 100%; text-align: left; font: inherit; color: #333; background: transparent; border: 0;
+                   border-radius: .6rem; cursor: pointer; padding: .4rem .7rem; }
+    .strip .item:hover { background: #e9eefb; }
+    .strip .item .tick { width: 1em; color: #4a6fd3; }
+    .strip .panel input[type=text] { font: inherit; width: 8ch; margin: .2rem .7rem; padding: .25rem .5rem; border: 1px solid #cfd5e2; border-radius: .5rem; text-align: right; }
     .toggle-all { cursor: pointer; font-size: .9rem; }
     .scroll-y { overflow-y: auto; min-height: 0; }
     .user { margin: 1.25rem 0 .45rem; padding: .6rem .9rem; background: #e8f0fe; border-radius: .75rem; white-space: pre-wrap; }
@@ -177,8 +197,9 @@
     @keyframes spin { to { transform: rotate(360deg); } }
     @media (prefers-reduced-motion: reduce) { .thinking { animation-duration: 3s; } }
     form { display: flex; gap: .5rem; margin-top: 1rem; }
-    .badge { font-size: .5em; vertical-align: middle; padding: .15rem .5rem; background: #fde68a; border-radius: .25rem; }
-    .canned { margin-top: 1rem; font-size: .9rem; }
+    .canned { display: none; margin-top: 1rem; font-size: .9rem; }
+    body[data-model={{ no_model }}] .canned { display: block; }  /* Canned Prompts show only under "No model" */
+    .refusal { margin: .4rem 0; padding: .4rem .6rem; border-left: 4px solid #b00; background: #fdecec; font-size: .9rem; }
     .canned .fails { color: #a40; }
     .canned ul { list-style: none; padding: 0; margin: .25rem 0; }
     .canned .follow-up { margin-left: 1.5rem; }
@@ -193,13 +214,13 @@
     .chat-box .send:focus-visible { outline: 2px solid #2a4ba0; outline-offset: 2px; }
   </style>
 </head>
-<body>
+<body data-model="{{ default_model }}">
   {% macro entry(c, css_class="") %}
-  <li{% if css_class %} class="{{ css_class }}"{% endif %}><button type="button" hx-post="/chat" hx-include="#conversation_id, #max_rows" hx-vals='{{ {"message": c.prompt} | tojson }}'
+  <li{% if css_class %} class="{{ css_class }}"{% endif %}><button type="button" hx-post="/chat" hx-include="#conversation_id, #max_rows" hx-vals='{{ {"message": c.prompt, "model": no_model} | tojson }}'
     hx-target="#chat" hx-swap="beforeend">{{ c.prompt }}</button>{% if c.fails_on_purpose %} <small class="fails">fails on purpose</small>{% endif %}</li>
   {% endmacro %}
   <div class="topbar">
-    <h1>Flood Agent{% if fake_mode %} <span class="badge">Fake Mode — no LLM</span>{% endif %}</h1>
+    <h1>Flood Agent</h1>
     <div class="controls">
     <button type="button" class="toggle-all" x-data="{ anyOpen: true }"
             x-init="const refresh = () => { anyOpen = !!document.querySelector('details.turn[open]') };
@@ -207,21 +228,6 @@
                     refresh()"
             @click="const open = !anyOpen; document.querySelectorAll('details.turn').forEach(d => d.open = open)"
             x-text="anyOpen ? 'Collapse turns' : 'Expand turns'">Collapse turns</button>
-    <div class="max-rows" x-data="{ choice: '10000', custom: '' }">
-      <label for="max-rows-choice">Max result rows</label>
-      <select id="max-rows-choice" x-model="choice">
-        <option value="10">10</option>
-        <option value="100">100</option>
-        <option value="1000">1,000</option>
-        <option value="10000">10,000</option>
-        <option value="100000">100,000</option>
-        <option value="1000000">1,000,000</option>
-        <option value="custom">custom...</option>
-      </select>
-      <input type="text" inputmode="numeric" x-show="choice === 'custom'" x-cloak x-model="custom"
-             @input="custom = custom.replace(/\D/g, '')" aria-label="Custom max result rows" placeholder="rows">
-      <input type="hidden" id="max_rows" name="max_rows" :value="choice === 'custom' ? custom : choice" value="10000">
-    </div>
     </div>
   </div>
   <div class="layout">
@@ -243,9 +249,9 @@
     {% endfor %}
     {% if turn.open %}</details>{% endif %}
   </div>
-  {% if fake_mode %}
+  {% if picker %}
   <div class="canned">
-    <strong>You can only use the following canned prompts with Fake Mode:</strong>
+    <strong>Canned prompts (no model is called):</strong>
     <ul>
     {% for c in picker %}
       {{ entry(c) }}
@@ -255,7 +261,7 @@
   </div>
   {% endif %}
   </div>
-  <form hx-post="/chat" hx-include="#max_rows" hx-target="#chat" hx-swap="beforeend" hx-on::after-request="this.reset()"
+  <form hx-post="/chat" hx-include="#max_rows, #model, #effort" hx-target="#chat" hx-swap="beforeend" hx-on::after-request="this.reset()"
         hx-on::before-request="if (!this.elements.message.value.trim()) event.preventDefault()"
         x-data="{ lastEscape: 0,
           escape() {
@@ -272,11 +278,97 @@
         } }" @reset="$nextTick(() => { grow(); $refs.message.focus(); })">
     <input type="hidden" id="conversation_id" name="conversation_id" value="{{ current_id or '' }}">
     <div class="chat-box">
-      <textarea name="message" x-ref="message" rows="1" placeholder="Write a prompt to analyze flow traffic..." autocomplete="off" required
+      <textarea name="message" x-ref="message" rows="1" placeholder="Write a prompt to analyze Flood data (Shift-Enter for newline, Esc-Esc to clear)" autocomplete="off" required
                 @input="grow()" @keydown.escape="escape()" @keydown.enter="if (!$event.shiftKey && !$event.isComposing && $event.keyCode !== 229) { $event.preventDefault(); $el.form.requestSubmit(); }"></textarea>
       <button type="submit" class="send" title="Send message (Enter)" aria-label="Send message (Enter)"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M20 4v9a2 2 0 0 1-2 2H9v4l-6-5.5L9 8v4h8V4z"/></svg></button>
     </div>
   </form>
+  <div class="strip" x-data="{ choice: '10000', custom: '', open: false, options: ['10', '100', '1000', '10000', '100000', '1000000'],
+                                modelOpen: false, effortOpen: false, effort: '', models: {{ models | tojson | forceescape }}, model: {{ default_model | tojson | forceescape }},
+                                defaultModel: {{ default_model | tojson | forceescape }},
+                                get shown() { return this.choice === 'custom' ? (this.custom || '?') : Number(this.choice).toLocaleString() },
+                                get current() { return this.models.find(m => m.id === this.model) || {} },
+                                get efforts() { return this.current.efforts || [] },
+                                get effortLabel() { return this.effort || 'no effort' },
+                                savedEfforts() {
+                                  try { return JSON.parse(localStorage.getItem('flood-agent.efforts')) || {}; } catch (e) { return {}; }
+                                },
+                                setEffort(level) {
+                                  /* Remember it for the selected model, in the browser. */
+                                  this.effort = level; this.effortOpen = false;
+                                  if (!level) return;
+                                  try { localStorage.setItem('flood-agent.efforts', JSON.stringify({ ...this.savedEfforts(), [this.model]: level })); } catch (e) {}
+                                },
+                                settleEffort() {
+                                  /* After a model change: that model's own remembered Effort, else its default. Never carried over from the previous model. */
+                                  const offered = this.efforts;
+                                  if (!offered.length) { this.effort = ''; return; }
+                                  const saved = this.savedEfforts()[this.model];
+                                  this.effort = offered.includes(saved) ? saved : this.current.default_effort;
+                                },
+                                get modelLabel() { return (this.models.find(m => m.id === this.model) || {}).label || this.model },
+                                load() {
+                                  /* The remembered Model Choice, unless it is gone or disabled: then the default model. */
+                                  let saved = null;
+                                  try { saved = localStorage.getItem('flood-agent.model'); } catch (e) {}
+                                  const ok = id => this.models.some(m => m.id === id && !m.disabled);
+                                  this.model = ok(saved) ? saved : this.defaultModel;
+                                  this.settleEffort();
+                                  this.refreshMeter();
+                                },
+                                pick(id) {
+                                  this.model = id; this.modelOpen = false;
+                                  this.settleEffort();
+                                  try { localStorage.setItem('flood-agent.model', id); } catch (e) {}
+                                  this.refreshMeter();
+                                },
+                                refreshMeter() {
+                                  /* The meter shows the window of the model selected for the next prompt. */
+                                  const cid = document.getElementById('conversation_id').value;
+                                  htmx.ajax('GET', '/context-meter?model=' + encodeURIComponent(this.model) + '&conversation_id=' + encodeURIComponent(cid),
+                                            { target: '#context-meter', swap: 'outerHTML' });
+                                } }"
+       @htmx:sse-close.window="refreshMeter()" x-init="load()" x-effect="document.body.dataset.model = model" @click.outside="open = false; modelOpen = false; effortOpen = false" @keydown.escape.window="open = false; modelOpen = false; effortOpen = false">
+    <input type="hidden" id="max_rows" name="max_rows" :value="choice === 'custom' ? custom : choice" value="10000">
+    <input type="hidden" id="effort" name="effort" :value="effort" value="">
+    <input type="hidden" id="model" name="model" :value="model" value="{{ default_model }}">
+    <div class="row">
+      <span class="dd">
+        <button type="button" class="trig" :class="{ open: modelOpen }" aria-haspopup="true" :aria-expanded="modelOpen" title="Model for the next prompt"
+                @click="modelOpen = !modelOpen; open = false; effortOpen = false" x-text="modelLabel">{{ (models | selectattr("id", "equalto", default_model) | first).label }}</button>
+        <div class="panel left" role="dialog" aria-label="Model" x-show="modelOpen" x-cloak>
+          <h6>Model</h6>
+          <template x-for="m in models" :key="m.id"><button type="button" class="item" :disabled="m.disabled" @click="pick(m.id)">
+            <span class="tick" x-text="m.id === model ? '\u2713' : ''"></span><span x-text="m.label"></span>
+            <small x-show="m.disabled">{{ needs_key }}</small></button></template>
+        </div>
+      </span>
+      <span class="sep">&middot;</span>
+      <span class="dd">
+        <button type="button" class="trig" :class="{ open: effortOpen }" :disabled="!efforts.length" aria-haspopup="true" :aria-expanded="effortOpen"
+                title="Effort for the next prompt" @click="effortOpen = !effortOpen; modelOpen = false; open = false" x-text="effortLabel">no effort</button>
+        <div class="panel left" role="dialog" aria-label="Reasoning effort" x-show="effortOpen" x-cloak>
+          <h6>Reasoning effort</h6>
+          <template x-for="level in efforts" :key="level"><button type="button" class="item" @click="setEffort(level)">
+            <span class="tick" x-text="level === effort ? '\u2713' : ''"></span><span x-text="level"></span></button></template>
+        </div>
+      </span>
+      <span class="sep">&middot;</span>
+      {% include "context_meter.html" %}
+      <span class="spacer"></span>
+      <span class="dd">
+        <button type="button" class="trig" :class="{ open }" aria-haspopup="true" :aria-expanded="open" @click="open = !open; modelOpen = false; effortOpen = false"
+                title="Rows kept from each query run by this prompt">&le; <span x-text="shown">10,000</span> rows per query</button>
+        <div class="panel" role="dialog" aria-label="Max rows kept per query" x-show="open" x-cloak>
+          <h6 class="sentence">Max rows kept per query</h6>
+          <template x-for="r in options" :key="r"><button type="button" class="item" @click="choice = r; custom = ''; open = false">
+            <span class="tick" x-text="r === choice ? '\u2713' : ''"></span><span x-text="Number(r).toLocaleString()"></span></button></template>
+          <input type="text" inputmode="numeric" placeholder="custom" aria-label="Custom max rows" x-model="custom"
+                 @input="custom = custom.replace(/\D/g, ''); choice = custom ? 'custom' : '10000'">
+        </div>
+      </span>
+    </div>
+  </div>
   </main>
   </div>
   <div class="toast" role="status" x-data="{ added: null, timer: null }" x-show="added" x-transition.opacity x-cloak
@@ -341,6 +433,21 @@
       input.setSelectionRange(head.length, head.length);
       input.dispatchEvent(new Event("input", { bubbles: true }));
     }
+  </script>
+  <script>
+    // A refused prompt (for example a real model with no API key) shows its reason in the chat; htmx
+    // does not swap error responses itself.
+    document.body.addEventListener("htmx:responseError", (event) => {
+      const xhr = event.detail.xhr;
+      if (event.detail.pathInfo.requestPath !== "/chat") return;
+      let reason = "The prompt was not sent (HTTP " + xhr.status + ").";
+      try { const detail = JSON.parse(xhr.responseText).detail; if (typeof detail === "string") reason = detail; } catch (e) {}
+      const note = document.createElement("p");
+      note.className = "refusal";
+      note.setAttribute("role", "alert");
+      note.textContent = reason;
+      document.getElementById("chat").appendChild(note);
+    });
   </script>
   <script>
     // Keep the newest streamed content in view, unless the user has scrolled up to read.

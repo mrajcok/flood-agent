@@ -79,9 +79,23 @@ _Avoid_: Widget, view, output
 ## Fake Mode
 
 **Fake Mode**:
-Running Flood Agent with a scripted stand-in for the LLM, so no language model is called. Everything else — the Agent, queries, Result Tables, Displays, Traces — runs for real.
+The state of a prompt sent with the Model Choice "No model": a scripted stand-in answers instead of a language model, so no model is called and no API key is needed. Everything else — the Agent, queries, Result Tables, Displays, Traces — runs for real. A Conversation can mix Fake Mode and real prompts.
 _Avoid_: Demo mode, offline mode, mock mode
 
 **Canned Prompt**:
-A fixed user message offered in Fake Mode, paired with the scripted LLM replies it produces.
+A fixed user message offered while "No model" is selected, always sent as a Fake Mode prompt, paired with the scripted LLM replies it produces.
 _Avoid_: Sample query, test prompt, scenario
+
+## Model choice
+
+**Model Choice**:
+The language model (or "No model", which is Fake Mode) the user picks for their next prompt, from a curated list.
+_Avoid_: Model picker, backend
+
+**Effort**:
+How much reasoning the user asks the chosen model to spend on a prompt. Only some models support it.
+_Avoid_: Reasoning level, thinking budget
+
+**Context Usage**:
+How much of the chosen model's context window the Conversation occupies, as the provider's token count for the latest LLM call against the window size (e.g. 187k of 1M). Shown so the user can tell when to start a new Conversation.
+_Avoid_: Context size, token count, memory

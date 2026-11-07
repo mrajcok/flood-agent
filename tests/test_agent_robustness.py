@@ -154,14 +154,15 @@ async def test_one_mcp_server_serves_several_turns_across_two_conversations(buil
     def script():
         return ScriptedLLM([tool_call("run_query", "c1", sql=SQL, title="t")], [TextChunk("done")])
 
-    agent = build_agent(script())
+    llm = script()
+    agent = build_agent(llm)
     assert mcp_children() == []  # constructing an Agent starts nothing
     await agent.start()
     (server,) = mcp_children()
     try:
         for _ in range(2):
             for conv in (Conversation(), Conversation()):
-                agent.llm.steps = script().steps
+                llm.steps = script().steps
                 events = await collect(agent, "q", conv)
                 assert isinstance(events[-1], TurnEnd)
                 assert mcp_children() == [server]

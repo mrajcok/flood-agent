@@ -22,7 +22,9 @@ class TraceBuilder:
         self.trace["entries"].append(entry)
         return entry
 
-    def llm_step(self, system_prompt: str, text: str, calls: list, usage, started: float) -> None:
+    def llm_step(self, system_prompt: str, text: str, calls: list, usage, started: float,
+                 request_bytes: int | None = None) -> None:
+        """`request_bytes`: the size of the messages and tool definitions sent to the model."""
         if self.trace["system_prompt"] is None:
             self.trace["system_prompt"] = system_prompt
         extra = {} if system_prompt == self.trace["system_prompt"] else {"system_prompt": system_prompt}
@@ -37,6 +39,7 @@ class TraceBuilder:
             else {"prompt_tokens": usage.prompt_tokens, "completion_tokens": usage.completion_tokens,
                   "cost": usage.cost},
             duration_ms=elapsed_ms(started),
+            request_bytes=request_bytes,
             **extra,
         )
 
@@ -78,6 +81,14 @@ def split_system_prompt(prompt: str | None) -> tuple[str, str, str]:
         return prompt, "", ""
     layer, rt_sep, rest = tail.partition("\n# Result Tables")
     return head, "# Semantic Layer\n" + layer, (rt_sep + rest).lstrip("\n")
+
+
+def context_tokens(trace: dict) -> int | None:
+    """The prompt tokens of the latest LLM call in a Trace: how full the context was when it was sent."""
+    for e in reversed(trace["entries"]):
+        if e["kind"] == "llm_step" and e["usage"]:
+            return e["usage"]["prompt_tokens"]
+    return None
 
 
 def elapsed_ms(started: float) -> int:

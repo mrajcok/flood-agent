@@ -170,7 +170,7 @@ class FakeClient:
             yield text[i : i + CHUNK_SIZE]
 
     def _unmatched_reply(self) -> str:
-        return "I'm in Fake Mode: no LLM is running. Pick one of the canned prompts above the message box."
+        return "I'm in Fake Mode (\"No model\"), so no language model is involved. Pick one of the canned prompts above the message box."
 
     def _resolve(self, node, messages: list[dict]):
         """Fill `{result_table}` / `{result_table:-2}` anywhere inside the arguments (nested

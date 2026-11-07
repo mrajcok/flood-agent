@@ -24,28 +24,24 @@ uv run python -m flood_agent                    # http://127.0.0.1:8000
 ```
 
 To restart automatically when the code, templates, Semantic Layer or `.env` change, run
-`uv run flood-agent-dev` instead (same settings, e.g. `LLM_BACKEND=fake uv run flood-agent-dev`).
+`uv run flood-agent-dev` instead (same settings).
 Reload the page after a restart.
 
-### Fake Mode (no LLM, no key)
+### Fake Mode ("No model")
 
-Fake Mode replaces only the LLM with a scripted stand-in, so you can try the MCP tools, table
-and chart Displays, Traces, saved Conversations and PSV export without an OpenRouter key and
-without any cost or model latency. Generate the data first (default seed, as in Setup), then:
+Choosing "No model" under the prompt box sends that prompt to a scripted stand-in instead of a
+language model, so you can try the MCP tools, table and chart Displays, Traces, saved
+Conversations and PSV export without an OpenRouter key and without any cost or model latency.
+It is always selectable, and a Conversation can mix "No model" and real prompts. Generate the
+data first (default seed, as in Setup), run the app, and pick "No model".
 
-```
-LLM_BACKEND=fake uv run python -m flood_agent   # or set LLM_BACKEND=fake in .env
-```
-
-The page shows a "Fake Mode — no LLM" badge and a list of Canned Prompts above the chat
-input; click one to send it. Follow-ups are indented under the prompt they build on (run the
-parent first in the same Conversation), and entries marked "fails on purpose" exercise error
-paths (bad SQL, row and chart caps, malformed tool calls, an LLM stream error). Any other
-message gets a short reply pointing to the Canned Prompts shown above the message box. Traces show the model as `fake` and $0.00.
-
-To keep fake Conversations out of your real ones, also set `APP_DB=data/fake.db`. Canned
-Prompts live in `src/flood_agent/canned_prompts.yaml` (format in its header); `pytest`
-runs every one and checks its declared outcome.
+A list of Canned Prompts appears above the message box while "No model" is selected; click one
+to send it. Follow-ups are indented under the prompt they build on (run the parent first in the
+same Conversation), and entries marked "fails on purpose" exercise error paths (bad SQL, row and
+chart caps, malformed tool calls, an LLM stream error). Any other message gets a short reply
+pointing to the Canned Prompts. Traces show "No model" and $0.00. Canned Prompts live
+in `src/flood_agent/canned_prompts.yaml` (format in its header); `pytest` runs every one and
+checks its declared outcome.
 
 ## Settings
 

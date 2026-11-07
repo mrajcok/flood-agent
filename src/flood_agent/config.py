@@ -6,12 +6,10 @@ call (in request `_meta`), and it scopes which Result Tables a call may use.
 
 import tomllib
 from collections.abc import Mapping
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 from dotenv import dotenv_values
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import (
     BaseSettings,
     DotEnvSettingsSource,
@@ -20,9 +18,9 @@ from pydantic_settings import (
     TomlConfigSettingsSource,
 )
 
-from flood_agent.agent import AgentConfig
-from flood_agent.fake_llm import CannedPrompt, FakeClient, load_canned_prompts
-from flood_agent.llm import LLMClient, OpenRouterClient
+from flood_agent.agent import NO_MODEL, AgentConfig, ClientFactory
+from flood_agent.fake_llm import FakeClient, load_canned_prompts
+from flood_agent.llm import LLMClient, ModelSpec, OpenRouterClient
 
 DEFAULTS_FILE = Path(__file__).with_name("defaults.toml")
 
@@ -42,44 +40,27 @@ class _LiteralDotEnvSource(DotEnvSettingsSource):
         }
 
 
-@dataclass(frozen=True)
-class LLMBackend:
-    """The chosen LLM client with the model name to report; `canned_prompts` is set only in Fake Mode."""
-
-    client: LLMClient
-    model: str
-    canned_prompts: list[CannedPrompt] | None = None
-
-    @property
-    def fake_mode(self) -> bool:
-        return self.canned_prompts is not None
-
-
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", env_ignore_empty=True, extra="ignore", toml_file=DEFAULTS_FILE
     )
 
-    llm_backend: Literal["openrouter", "fake"] = Field(
-        description="openrouter calls a real model (needs OPENROUTER_API_KEY). fake is Fake Mode: a scripted\n"
-        "stand-in answers Canned Prompts listed on the page, so no model is called and no key is needed.\n"
-        "Try it for one run with: LLM_BACKEND=fake uv run python -m flood_agent"
-    )
     openrouter_api_key: SecretStr | None = Field(
-        None, description="OpenRouter API key. Required when LLM_BACKEND is openrouter; the only setting without a default. Never commit a real key."
+        None, description="OpenRouter API key. Needed to send a prompt to a real model (not No model); the only setting without a default. Never commit a real key."
     )
-    openrouter_model: str = Field(
-        description="Model used for chat.\n"
-        "Cheaper open-weight models to try (confirm with the eval runner first):\n"
-        "deepseek/deepseek-v4-pro-0813, z-ai/glm-5.3"
+    default_model: str = Field(
+        description="The model preselected under the prompt box: an id from the curated [[models]] list in\n"
+        "defaults.toml. The list (label, context window, Effort levels) is edited there, not here."
+    )
+    models: list[ModelSpec] = Field(
+        description="MODELS: the curated model list, the [[models]] tables in defaults.toml (not set from .env)."
     )
     telemetry_db: Path = Field(
         description="Read-only flow records. Create with: uv run python -m flood_agent.generator data/telemetry.db"
     )
     results_db: Path = Field(description="Writable database holding Result Tables.")
     app_db: Path = Field(
-        description="Conversations, messages, Displays and Traces.\n"
-        "Tip: use a separate database for Fake Mode, for example data/fake.db."
+        description="Conversations, messages, Displays and Traces."
     )
     semantic_layer: Path = Field(
         description="Hand-authored Semantic Layer (the generator also writes window_start/window_end into it)."
@@ -116,26 +97,42 @@ class Settings(BaseSettings):
         """Only defaults.toml, ignoring any .env file or environment variable. For reproducible runs."""
         return cls.model_validate(tomllib.loads(DEFAULTS_FILE.read_text()))
 
+    @model_validator(mode="after")
+    def _default_model_is_listed(self) -> "Settings":
+        if self.default_model not in {m.id for m in self.models}:
+            raise ValueError(f"default_model {self.default_model!r} is not an id in the [[models]] list")
+        return self
+
     def require_api_key(self) -> str:
         if self.openrouter_api_key is None:
             raise RuntimeError("OPENROUTER_API_KEY is not set")
         return self.openrouter_api_key.get_secret_value()
 
-    def llm_backend_choice(self) -> LLMBackend:
-        """The one place that turns `llm_backend` into a client and model name."""
-        if self.llm_backend == "fake":
-            canned = load_canned_prompts()
-            return LLMBackend(FakeClient(canned, telemetry_db=self.telemetry_db), "fake", canned)
-        return LLMBackend(OpenRouterClient(self.require_api_key(), self.openrouter_model), self.openrouter_model)
+    def client_factory(self) -> ClientFactory:
+        """The client per model id, made on first use (so the app starts without a key) and then
+        reused: the scripted stand-in for NO_MODEL (no key needed), else the real OpenRouter client,
+        which raises RuntimeError naming OPENROUTER_API_KEY when there is no key."""
+        clients: dict[str, LLMClient] = {}
+
+        def client_for(model: str) -> LLMClient:
+            if model not in clients:
+                if model == NO_MODEL:
+                    clients[model] = FakeClient(load_canned_prompts(), telemetry_db=self.telemetry_db)
+                else:
+                    clients[model] = OpenRouterClient(self.require_api_key(), model)
+            return clients[model]
+
+        return client_for
 
     def agent_config(self, model: str | None = None) -> AgentConfig:
-        """`model` is the name the chosen LLM backend reports; it defaults to the OpenRouter model."""
+        """`model` is the default model for a turn that names none; it defaults to `default_model`."""
         return AgentConfig(
             telemetry_db=self.telemetry_db.resolve(),
             results_db=self.results_db.resolve(),
             semantic_layer=self.semantic_layer.resolve(),
             app_db=self.app_db.resolve(),
-            model=model or self.openrouter_model,
+            model=model or self.default_model,
+            models=tuple(self.models),
             result_ttl_ms=int(self.result_ttl_hours * 3600 * 1000),
             query_timeout_s=self.query_timeout_s,
             chart_row_cap=self.chart_row_cap,
@@ -172,6 +169,8 @@ def render_env_example() -> str:
         lines.append("")
         lines += [f"# {line}" for line in (field.description or "").splitlines()]
         variable = name.upper()
+        if name == "models":
+            continue  # a list of tables: edited in defaults.toml, never set from .env
         lines.append(f"# {variable}={defaults[name]}" if name in defaults else f"{variable}=")
     lines += ["", _ENV_EXAMPLE_FOOTER]
     return "\n".join(lines) + "\n"

@@ -6,7 +6,6 @@ call (in request `_meta`), and it scopes which Result Tables a call may use.
 
 import tomllib
 from collections.abc import Mapping
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -20,8 +19,8 @@ from pydantic_settings import (
     TomlConfigSettingsSource,
 )
 
-from flood_agent.agent import AgentConfig, ClientFactory
-from flood_agent.fake_llm import CannedPrompt, FakeClient, load_canned_prompts
+from flood_agent.agent import NO_MODEL, AgentConfig, ClientFactory
+from flood_agent.fake_llm import FakeClient, load_canned_prompts
 from flood_agent.llm import LLMClient, ModelSpec, OpenRouterClient
 
 DEFAULTS_FILE = Path(__file__).with_name("defaults.toml")
@@ -40,19 +39,6 @@ class _LiteralDotEnvSource(DotEnvSettingsSource):
             for key, value in values.items()
             if value is not None and not (self.env_ignore_empty and value == "")
         }
-
-
-@dataclass(frozen=True)
-class LLMBackend:
-    """The chosen client factory with the model name to report; `canned_prompts` is set only in Fake Mode."""
-
-    client_for: ClientFactory
-    model: str
-    canned_prompts: list[CannedPrompt] | None = None
-
-    @property
-    def fake_mode(self) -> bool:
-        return self.canned_prompts is not None
 
 
 class Settings(BaseSettings):
@@ -129,28 +115,24 @@ class Settings(BaseSettings):
             raise RuntimeError("OPENROUTER_API_KEY is not set")
         return self.openrouter_api_key.get_secret_value()
 
-    def llm_backend_choice(self) -> LLMBackend:
-        """The one place that turns `llm_backend` into a client and model name."""
-        if self.llm_backend == "fake":
-            canned = load_canned_prompts()
-            fake = FakeClient(canned, telemetry_db=self.telemetry_db)
-            return LLMBackend(lambda model: fake, "fake", canned)
-        return LLMBackend(self.client_factory(), self.default_model)
-
     def client_factory(self) -> ClientFactory:
-        """The real OpenRouter client per model id: made on first use (so the app starts without a
-        key) and then reused. Raises RuntimeError naming OPENROUTER_API_KEY when there is no key."""
+        """The client per model id, made on first use (so the app starts without a key) and then
+        reused: the scripted stand-in for NO_MODEL (no key needed), else the real OpenRouter client,
+        which raises RuntimeError naming OPENROUTER_API_KEY when there is no key."""
         clients: dict[str, LLMClient] = {}
 
         def client_for(model: str) -> LLMClient:
             if model not in clients:
-                clients[model] = OpenRouterClient(self.require_api_key(), model)
+                if model == NO_MODEL:
+                    clients[model] = FakeClient(load_canned_prompts(), telemetry_db=self.telemetry_db)
+                else:
+                    clients[model] = OpenRouterClient(self.require_api_key(), model)
             return clients[model]
 
         return client_for
 
     def agent_config(self, model: str | None = None) -> AgentConfig:
-        """`model` is the name the chosen LLM backend reports; it defaults to `default_model`."""
+        """`model` is the default model for a turn that names none; it defaults to `default_model`."""
         return AgentConfig(
             telemetry_db=self.telemetry_db.resolve(),
             results_db=self.results_db.resolve(),

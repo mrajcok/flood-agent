@@ -44,9 +44,12 @@ class AgentConfig:
 
 
     def window_of(self, model: str) -> int:
-        """The context window of a curated model; 0 for an id outside the list (Fake Mode's "fake")."""
+        """The context window of a curated model; 0 for an id outside the list (NO_MODEL: no context window)."""
         return next((m.context_window for m in self.models if m.id == model), 0)
 
+
+NO_MODEL = "no-model"
+"""The Model Choice id for Fake Mode: a prompt sent with it is answered by the scripted stand-in."""
 
 ClientFactory = Callable[[str], LLMClient]
 """Gives the client that runs a model id: the real OpenRouter client (made lazily, reused) or a scripted fake."""

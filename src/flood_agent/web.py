@@ -21,6 +21,7 @@ from fastapi.templating import Jinja2Templates
 
 from flood_agent import lookup_tables
 from flood_agent.agent import (
+    NO_MODEL,
     Agent,
     Conversation,
     DisplayEvent,
@@ -73,11 +74,9 @@ def _table_display_urls(result_table: str) -> dict:
 NEEDS_KEY = "needs OPENROUTER_API_KEY"
 
 
-def create_app(
-    agent: Agent, picker: list[PickerEntry] | None = None, fake_mode: bool = False, has_api_key: bool = True
-) -> FastAPI:
-    """In Fake Mode the page shows a badge and the `picker` list of prompts and has no Model dropdown.
-    Otherwise the Model dropdown lists the curated models, disabled when `has_api_key` is False."""
+def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_key: bool = True) -> FastAPI:
+    """The Model dropdown lists the curated models, disabled when `has_api_key` is False, then "No model"
+    (Fake Mode, always selectable). The `picker` Canned Prompts show on the page only while it is selected."""
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # One long-lived MCP server for the app; a server that can't start fails app startup.
@@ -97,38 +96,40 @@ def create_app(
     def sidebar(current: str | None) -> dict:
         return {
             "conversations": agent.store.list_conversations(), "current_id": current,
-            "fake_mode": fake_mode, "picker": picker or [],
+            "picker": picker or [],
         }
 
     models = [{"id": m.id, "label": m.label, "disabled": not has_api_key, "efforts": m.efforts,
                "default_effort": m.default_effort} for m in agent.config.models]
-    default_model = agent.config.model
+    models.append({"id": NO_MODEL, "label": "No model", "disabled": False, "efforts": [], "default_effort": None})
+    default_model = agent.config.model if has_api_key else NO_MODEL
 
     def meter(tokens: int | None, model: str | None = None) -> dict:
-        """The Context Usage meter for `model` (the default when None); Fake Mode has no model, so no window."""
-        window = 0 if fake_mode else agent.config.window_of(model or default_model)
-        return {"context": context_usage(tokens, window), "model": "No model (Fake Mode)" if fake_mode else None}
+        """The Context Usage meter for `model` (the default when None); No model has no window."""
+        return {"context": context_usage(tokens, agent.config.window_of(model or default_model))}
+
+    def last_real_tokens(traces: list[dict]) -> int | None:
+        """The latest real LLM call's prompt tokens: fake (No model) turns do not count."""
+        real = [t for t in traces if t["model"] != NO_MODEL]
+        return context_tokens(real[-1]) if real else None
 
     def latest_tokens(conversation_id: str | None) -> int | None:
         if not conversation_id or not agent.store.exists(conversation_id):
             return None
-        traces = [i["trace"] for i in agent.store.transcript(conversation_id) if i["type"] == "trace"]
-        return context_tokens(traces[-1]) if traces else None
+        return last_real_tokens([i["trace"] for i in agent.store.transcript(conversation_id) if i["type"] == "trace"])
 
     def model_choice(raw: str | None) -> str:
         """The model a prompt asked for, checked against the curated list and the API key (422 otherwise)."""
-        if fake_mode:
-            return default_model  # the Fake Mode backend answers every prompt
-        choice = default_model if raw is None else raw
+        choice = raw or default_model
         if choice not in {m["id"] for m in models}:
             raise HTTPException(422, f"unknown model {choice!r}")
-        if not has_api_key:
+        if choice != NO_MODEL and not has_api_key:
             raise HTTPException(422, f"{choice} {NEEDS_KEY}: set it in .env and restart the app")
         return choice
 
     def effort_choice(model: str, raw: str | None) -> str | None:
         """The Effort a prompt asked for (None: the model's default), checked against the model's levels (422 otherwise)."""
-        if fake_mode or not raw:
+        if model == NO_MODEL or not raw:
             return None
         spec = next(m for m in agent.config.models if m.id == model)
         if raw not in spec.efforts:
@@ -168,7 +169,7 @@ def create_app(
     @app.get("/context-meter", response_class=HTMLResponse)
     def context_meter(model: str, conversation_id: str = ""):
         """The meter for the model selected for the next prompt (the Conversation's tokens, that model's window)."""
-        if not fake_mode and model not in {m["id"] for m in models}:
+        if model not in {m["id"] for m in models}:
             raise HTTPException(422, f"unknown model {model!r}")
         return TEMPLATES.get_template("context_meter.html").render(**meter(latest_tokens(conversation_id), model))
 
@@ -184,7 +185,7 @@ def create_app(
         traces = [i["trace"] for i in items if i["type"] == "trace"]
         return TEMPLATES.TemplateResponse(
             request, "index.html",
-            {**sidebar(conversation_id), **meter(context_tokens(traces[-1]) if traces else None),
+            {**sidebar(conversation_id), **meter(last_real_tokens(traces)),
              **model_picker(), "items": items, "current_id": conversation_id},
         )
 
@@ -337,9 +338,9 @@ def create_app(
                             yield _sse("turn", TEMPLATES.get_template("turn_delete.html").render(
                                 conversation_id=conversation.id, turn_id=ev.turn_id))
                         trace_html = TEMPLATES.get_template("trace.html").render(trace=ev.trace)
-                        # The meter under the prompt box refreshes in place (hx-swap-oob).
-                        meter_html = TEMPLATES.get_template("context_meter.html").render(
-                            oob=True, **meter(context_tokens(ev.trace), ev.trace["model"]))
+                        # The meter under the prompt box refreshes in place (hx-swap-oob); a fake turn leaves it alone.
+                        meter_html = "" if ev.trace["model"] == NO_MODEL else TEMPLATES.get_template(
+                            "context_meter.html").render(oob=True, **meter(context_tokens(ev.trace), ev.trace["model"]))
                         yield _sse("trace", trace_html + meter_html)
                     elif isinstance(ev, TurnEnd):
                         break

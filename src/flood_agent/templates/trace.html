@@ -1,7 +1,7 @@
 {# Per-turn Trace, collapsed by default. Autoescaped: it holds SQL, raw LLM output and error text. #}
 <details class="trace">
   <summary>Trace
-    <span class="trace-totals">{{ trace.model }} &middot;
+    <span class="trace-totals">{{ "No model" if trace.model == "no-model" else trace.model }} &middot;
       {{ trace.totals.prompt_tokens }} in / {{ trace.totals.completion_tokens }} out tokens &middot;
       {% if trace.totals.cost is not none %}${{ "%.3f"|format(trace.totals.cost) }}{% else %}cost n/a{% endif %} &middot;
       {{ trace.totals.duration_ms }} ms</span></summary>

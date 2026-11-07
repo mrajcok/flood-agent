@@ -141,25 +141,20 @@ async def test_a_follow_up_whose_parent_query_failed_says_the_query_failed_not_r
     assert not [e for e in events if isinstance(e, DisplayEvent)]
 
 
-def test_fake_mode_page_shows_badge_and_clickable_canned_prompts(build_agent, web_client):
-    client = web_client(build_agent(fake_client(), model="fake"), picker=PICKER, fake_mode=True)
+def test_page_lists_canned_prompts_that_always_send_a_no_model_prompt_and_has_no_badge(build_agent, web_client):
+    client = web_client(build_agent(fake_client()), picker=PICKER)
 
     html = client.get("/").text
 
-    assert "Fake Mode — no LLM" in html
-    assert "You can only use the following canned prompts with Fake Mode:" in html
+    assert "Fake Mode" not in html and 'class="badge"' not in html
     assert CANNED[0].prompt in html
-    created = client.post("/chat", data={"message": CANNED[0].prompt, "max_rows": "1000"}).text
-    cid = created.split('name="conversation_id" value="')[1].split('"')[0]
-    reopened = client.get(f"/c/{cid}").text
-    assert "Fake Mode — no LLM" in reopened and CANNED[0].prompt in reopened
+    assert html.count('"model": "no-model"') == len(CANNED)  # every Canned Prompt button sends it
 
 
-def test_real_mode_page_has_neither_badge_nor_list(build_agent, web_client):
+def test_page_without_canned_prompts_has_no_list(build_agent, web_client):
     html = web_client(build_agent(fake_client())).get("/").text
 
-    assert "Fake Mode" not in html
-    assert CANNED[0].prompt not in html
+    assert CANNED[0].prompt not in html and 'class="canned"' not in html
 
 
 def test_fake_backend_builds_without_an_api_key(tmp_path, telemetry_db, semantic_layer_path):
@@ -183,7 +178,7 @@ def test_openrouter_backend_builds_without_a_key_and_refuses_real_models_until_o
     )
 
     with TestClient(build_app(settings)) as client:
-        refused = client.post("/chat", data={"message": "hi", "max_rows": "10"})
+        refused = client.post("/chat", data={"message": "hi", "max_rows": "10", "model": "anthropic/claude-sonnet-5.5"})
     assert refused.status_code == 422 and "OPENROUTER_API_KEY" in refused.json()["detail"]
 
 
@@ -277,7 +272,7 @@ def test_picker_indents_follow_ups_under_their_parent(build_agent, web_client):
     follow_up = next(c for c in CANNED if c.after)
     parent = parent_of(follow_up, CANNED)
     assert parent
-    client = web_client(build_agent(fake_client(), model="fake"), picker=PICKER, fake_mode=True)
+    client = web_client(build_agent(fake_client()), picker=PICKER)
 
     html = client.get("/").text
 
@@ -287,7 +282,7 @@ def test_picker_indents_follow_ups_under_their_parent(build_agent, web_client):
 
 
 def test_picker_marks_prompts_that_fail_on_purpose(build_agent, web_client):
-    html = web_client(build_agent(fake_client(), model="fake"), picker=PICKER, fake_mode=True).get("/").text
+    html = web_client(build_agent(fake_client()), picker=PICKER).get("/").text
 
     marked = [c for c in CANNED if c.fails_on_purpose]
     assert marked and len(marked) < len(CANNED)

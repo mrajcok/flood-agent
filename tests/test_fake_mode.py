@@ -148,7 +148,8 @@ def test_page_lists_canned_prompts_that_always_send_a_no_model_prompt_and_has_no
 
     assert "Fake Mode" not in html and 'class="badge"' not in html
     assert CANNED[0].prompt in html
-    assert html.count('"model": "no-model"') == len(CANNED)  # every Canned Prompt button sends it
+    assert html.count("<option value=") == len(CANNED) + 1  # every Canned Prompt, plus the placeholder
+    assert html.count('"model": "no-model"') == 1  # the drop-down sends them all as No model
 
 
 def test_page_without_canned_prompts_has_no_list(build_agent, web_client):
@@ -278,9 +279,9 @@ def test_picker_indents_follow_ups_under_their_parent(build_agent, web_client):
 
     html = client.get("/").text
 
-    assert html.count('class="follow-up"') == sum(1 for c in CANNED if c.after)
-    parent_at = html.index(parent.prompt)
-    assert parent_at < html.index('class="follow-up"')
+    assert html.count("↳") == sum(1 for c in CANNED if c.after)  # each follow-up is marked with an arrow
+    parent_at = html.index(f'<option value="{parent.prompt}"')
+    assert parent_at < html.index("↳")
 
 
 def test_picker_marks_prompts_that_fail_on_purpose(build_agent, web_client):
@@ -291,7 +292,7 @@ def test_picker_marks_prompts_that_fail_on_purpose(build_agent, web_client):
     assert html.count("fails on purpose") == len(marked)
 
     def row(c):
-        return html.split(c.prompt, 1)[1].split("</li>", 1)[0]
+        return html.split(c.prompt, 1)[1].split("</option>", 1)[0]
 
     assert all("fails on purpose" in row(c) for c in marked)
     assert not any("fails on purpose" in row(c) for c in CANNED if not c.fails_on_purpose)

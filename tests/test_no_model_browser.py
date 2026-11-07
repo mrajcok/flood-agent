@@ -1,5 +1,7 @@
 """\"No model\" in the browser: Canned Prompts show only under it, and fake and real turns mix in one Conversation."""
 
+import re
+
 from conftest import ScriptedLLM
 from playwright.sync_api import expect
 
@@ -11,6 +13,7 @@ from flood_agent.llm import TextChunk
 CANNED = load_canned_prompts()
 FIRST = CANNED[0].prompt
 TRIGGER = "button[title='Model for the next prompt']"
+PICKER = "select[aria-label='Canned prompts']"
 
 
 def choose(page, label):
@@ -27,26 +30,40 @@ def agent_with_fake_and_real(build_agent, real):
 
 def test_canned_prompts_show_only_while_no_model_is_selected(live_page):
     page = live_page(picker=picker_entries(CANNED))
-    canned = page.get_by_role("button", name=FIRST)
+    canned = page.locator(PICKER)
     expect(canned).to_be_hidden()  # GLM 5.3 is selected
+    expect(page.locator("textarea[name=message]")).to_be_enabled()
 
     choose(page, "No model")
     expect(canned).to_be_visible()
+    box = page.locator("textarea[name=message]")
+    expect(box).to_be_disabled()
+    expect(box).to_have_attribute("placeholder", "No model is selected: choose one of the canned prompts below")
+
+    choose(page, "Claude Opus 5.5")
+    box.fill("typed earlier")
+    choose(page, "No model")
+    expect(box).to_have_value("")  # nothing is left stuck in the disabled box
     expect(page.locator("body")).not_to_contain_text("Fake Mode")
     expect(page.locator("button[title='Effort for the next prompt']")).to_be_disabled()
 
     choose(page, "Claude Opus 5.5")
     expect(canned).to_be_hidden()
+    expect(box).to_be_enabled()
+    expect(box).to_have_attribute("placeholder", re.compile("^Write a prompt"))
 
 
 def test_a_canned_prompt_sends_a_fake_prompt_even_with_a_real_model_selected(build_agent, live_page):
     real = ScriptedLLM()
     page = live_page(agent=agent_with_fake_and_real(build_agent, real), picker=picker_entries(CANNED))
     choose(page, "No model")
-    page.get_by_role("button", name=FIRST).click()  # visible only under No model
+    page.locator(PICKER).select_option(FIRST)  # visible only under No model
+    expect(page.locator("#chat")).not_to_contain_text("No model")  # choosing does not send; Send does
+    page.get_by_role("button", name="Send", exact=True).click()
     expect(page.locator("#chat")).to_contain_text("No model")
+    expect(page.locator(PICKER)).to_have_value("")  # back to its placeholder, ready for the next one
     choose(page, "Claude Opus 5.5")
-    expect(page.get_by_role("button", name=FIRST)).to_be_hidden()
+    expect(page.locator(PICKER)).to_be_hidden()
     assert real.calls == []
 
 
@@ -56,7 +73,9 @@ def test_with_no_key_the_app_preselects_no_model_and_shows_canned_prompts(live_p
     expect(page.locator(TRIGGER)).to_have_text("No model")
     expect(page.locator("#model")).to_have_value(NO_MODEL)
     expect(page.locator("#context-meter")).to_contain_text("no context used")
-    expect(page.get_by_role("button", name=FIRST)).to_be_visible()
+    expect(page.locator(PICKER)).to_be_visible()
+    expect(page.locator("textarea[name=message]")).to_be_disabled()
+    expect(page.locator("textarea[name=message]")).to_have_attribute("placeholder", re.compile("^No model is selected"))
 
 
 def test_a_refused_prompt_shows_its_message_in_the_page(live_page):

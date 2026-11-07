@@ -199,13 +199,10 @@
     .live-trace pre { white-space: pre-wrap; word-break: break-word; background: #f6f6f6; padding: .4rem; margin: .2rem 0; }
     .live-trace h4 { margin: .6rem 0 .2rem; }
     form { display: flex; gap: .5rem; margin-top: 1rem; }
-    .canned { display: none; margin-top: 1rem; font-size: .9rem; }
-    body[data-model={{ no_model }}] .canned { display: block; }  /* Canned Prompts show only under "No model" */
+    .canned { display: none; gap: .5rem; margin-top: .5rem; font-size: .9rem; }
+    .canned select { flex: 1; min-width: 0; padding: .35rem; font: inherit; }
+    body[data-model={{ no_model }}] .canned { display: flex; }  /* Canned Prompts show only under "No model" */
     .refusal { margin: .4rem 0; padding: .4rem .6rem; border-left: 4px solid #b00; background: #fdecec; font-size: .9rem; }
-    .canned .fails { color: #a40; }
-    .canned ul { list-style: none; padding: 0; margin: .25rem 0; }
-    .canned .follow-up { margin-left: 1.5rem; }
-    .canned button { background: none; border: 0; padding: .15rem 0; color: #06c; cursor: pointer; text-align: left; }
     .chat-box { flex: 1; position: relative; display: flex; }
     textarea[name=message] { flex: 1; box-sizing: border-box; padding: .5rem 2.4rem .5rem .5rem; font: inherit; line-height: 1.4;
                              resize: none; overflow-y: auto; max-height: 40vh; border: 1px solid #999; border-radius: .5rem; }
@@ -241,9 +238,11 @@
   </style>
 </head>
 <body data-model="{{ default_model }}">
-  {% macro entry(c, css_class="") %}
-  <li{% if css_class %} class="{{ css_class }}"{% endif %}><button type="button" hx-post="/chat" hx-include="#conversation_id, #max_rows" hx-vals='{{ {"message": c.prompt, "model": no_model} | tojson }}'
-    hx-target="#chat" hx-swap="beforeend">{{ c.prompt }}</button>{% if c.fails_on_purpose %} <small class="fails">fails on purpose</small>{% endif %}</li>
+  {% set prompt_hint = "Write a prompt to analyze Flood data (Shift-Enter for newline, Esc-Esc to clear)" %}
+  {% set canned_hint = "No model is selected: choose one of the canned prompts below" %}
+  {% set starts_canned = picker and default_model == no_model %}
+  {% macro entry(c, indent="") %}
+  <option value="{{ c.prompt }}">{{ indent }}{{ c.prompt }}{% if c.fails_on_purpose %} (fails on purpose){% endif %}</option>
   {% endmacro %}
   <div class="topbar">
     <h1>Flood Agent</h1>
@@ -276,17 +275,6 @@
     {% endfor %}
     {% if turn.open %}</details>{% endif %}
   </div>
-  {% if picker %}
-  <div class="canned">
-    <strong>Canned prompts (no model is called):</strong>
-    <ul>
-    {% for c in picker %}
-      {{ entry(c) }}
-      {% for f in c.follow_ups %}{{ entry(f, "follow-up") }}{% endfor %}
-    {% endfor %}
-    </ul>
-  </div>
-  {% endif %}
   </div>
   <form hx-post="/chat" hx-include="#max_rows, #model, #effort" hx-target="#chat" hx-swap="beforeend" hx-on::after-request="this.reset()"
         hx-on::before-request="if (!this.elements.message.value.trim() || this.dataset.busy) event.preventDefault()"
@@ -313,12 +301,27 @@
         } }" @reset="$nextTick(() => { grow(); $refs.message.focus(); })">
     <input type="hidden" id="conversation_id" name="conversation_id" value="{{ current_id or '' }}">
     <div class="chat-box">
-      <textarea name="message" x-ref="message" rows="1" placeholder="Write a prompt to analyze Flood data (Shift-Enter for newline, Esc-Esc to clear)" autocomplete="off" required
+      <textarea name="message" x-ref="message" rows="1" data-placeholder="{{ prompt_hint }}" placeholder="{{ canned_hint if starts_canned else prompt_hint }}"{% if starts_canned %} disabled{% endif %} autocomplete="off" required
                 @input="grow()" @keydown.escape="escape()" @keydown.enter="if (!$event.shiftKey && !$event.isComposing && $event.keyCode !== 229) { $event.preventDefault(); if (!busy) $el.form.requestSubmit(); }"></textarea>
       <button type="button" class="send stop" :disabled="stopping" @click="stop()" title="Stop" aria-label="Stop"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><rect x="8.5" y="8.5" width="7" height="7" rx="1" fill="currentColor" stroke="none"/></svg></button>
       <button type="submit" class="send" title="Send message (Enter)" aria-label="Send message (Enter)"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M20 4v9a2 2 0 0 1-2 2H9v4l-6-5.5L9 8v4h8V4z"/></svg></button>
     </div>
   </form>
+  {% if picker %}
+  <div class="canned">
+    <select id="canned-select" name="message" aria-label="Canned prompts">
+      <option value="" selected>Canned prompts (no model is called)</option>
+      {% for c in picker %}
+      {{ entry(c) }}
+      {% for f in c.follow_ups %}{{ entry(f, "   ↳ ") }}{% endfor %}
+      {% endfor %}
+    </select>
+    <button type="button" hx-post="/chat" hx-include="#conversation_id, #max_rows, #canned-select" hx-vals='{{ {"model": no_model} | tojson }}'
+            hx-target="#chat" hx-swap="beforeend"
+            hx-on::before-request="if (!document.getElementById('canned-select').value) event.preventDefault()"
+            hx-on::after-request="document.getElementById('canned-select').selectedIndex = 0">Send</button>
+  </div>
+  {% endif %}
   <div class="strip" x-data="{ choice: '10000', custom: '', open: false, options: ['10', '100', '1000', '10000', '100000', '1000000'],
                                 modelOpen: false, effortOpen: false, meterRequests: 0, effort: '', models: {{ models | tojson | forceescape }}, model: {{ default_model | tojson | forceescape }},
                                 defaultModel: {{ default_model | tojson | forceescape }},
@@ -341,6 +344,14 @@
                                   if (!offered.length) { this.effort = ''; return; }
                                   const saved = this.savedEfforts()[this.model];
                                   this.effort = offered.includes(saved) ? saved : this.current.default_effort;
+                                },
+                                syncPrompt() {
+                                  /* Under No model, the Canned Prompts drop-down is the only way to send, so the box is disabled and says so. */
+                                  const box = document.querySelector('textarea[name=message]');
+                                  const canned = {{ (picker | length > 0) | tojson }} && this.model === {{ no_model | tojson | forceescape }};
+                                  box.disabled = canned;
+                                  if (canned) { box.value = ''; box.dispatchEvent(new Event('input')); }  /* text typed earlier would be stuck in a disabled box */
+                                  box.placeholder = canned ? {{ canned_hint | tojson | forceescape }} : box.dataset.placeholder;
                                 },
                                 get modelLabel() { return (this.models.find(m => m.id === this.model) || {}).label || this.model },
                                 load() {
@@ -372,7 +383,7 @@
                                     })
                                     .catch(() => {});
                                 } }"
-       @htmx:sse-close.window="refreshMeter()" x-init="load()" x-effect="document.body.dataset.model = model" @click.outside="open = false; modelOpen = false; effortOpen = false" @keydown.escape.window="open = false; modelOpen = false; effortOpen = false">
+       @htmx:sse-close.window="refreshMeter()" x-init="load()" x-effect="document.body.dataset.model = model; syncPrompt()" @click.outside="open = false; modelOpen = false; effortOpen = false" @keydown.escape.window="open = false; modelOpen = false; effortOpen = false">
     <input type="hidden" id="max_rows" name="max_rows" :value="choice === 'custom' ? custom : choice" value="10000">
     <input type="hidden" id="effort" name="effort" :value="effort" value="">
     <input type="hidden" id="model" name="model" :value="model" value="{{ default_model }}">

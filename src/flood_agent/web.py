@@ -138,7 +138,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
         spec = agent.config.spec_of(model)
         assert spec is not None  # model_choice has already vetted it
         if raw not in spec.efforts:
-            raise HTTPException(422, f"{spec.label} does not offer effort {raw!r}")
+            raise HTTPException(422, f"{spec.label} does not offer reasoning effort {raw!r}")
         return raw
 
     def history(conversation_id: str) -> list[dict]:

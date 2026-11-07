@@ -60,7 +60,7 @@ def test_an_effort_the_model_does_not_offer_is_rejected_before_any_turn_starts(b
 
     for model, effort in [(SONNET, "none"), (SONNET, "bogus"), (GLM, "low")]:
         response = post_chat(client, model=model, effort=effort)
-        assert response.status_code == 422 and "effort" in response.json()["detail"]
+        assert response.status_code == 422 and "does not offer reasoning effort" in response.json()["detail"]
 
     assert llm.calls == [] and agent.store.list_conversations() == []
 

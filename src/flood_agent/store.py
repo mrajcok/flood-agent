@@ -272,12 +272,6 @@ class ConversationStore:
             if retention_ms is not None:
                 con.execute("UPDATE result_tables SET retention_ms=? WHERE name=?", (retention_ms, name))
 
-    def register_lookup_table(self, name: str, columns: list[str], row_count: int) -> None:
-        """Record `name` as a Lookup Table (no Conversation, no expiry)."""
-        self._write("INSERT INTO lookup_tables(name, created_at, columns, row_count) VALUES (?,?,?,?) "
-                    "ON CONFLICT(name) DO UPDATE SET columns=excluded.columns, row_count=excluded.row_count",
-                    (name, self._now(), json.dumps(columns), row_count))
-
     def lookup_tables(self) -> list[dict]:
         """The Lookup Tables registry: name, created time, columns and row count."""
         with closing(self._connect()) as con:

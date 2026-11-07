@@ -244,7 +244,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
     def add_lookup_table(name: str = Form(""), rows: str = Form(""), overwrite: str = Form("")):
         """Create a Lookup Table from pasted rows. Plain HTTP, never an MCP tool."""
         try:
-            return agent.add_lookup_table(name, rows, overwrite=bool(overwrite))
+            return agent.tables.add_lookup(name, rows, overwrite=bool(overwrite))
         except InvalidLookupTable as e:
             raise HTTPException(422, str(e))
 
@@ -260,7 +260,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
     def lookup_table_text(name: str, sep: str = "comma"):
         """A Lookup Table's rows as text, for the edit dialog. Plain HTTP, never an MCP tool."""
         try:
-            return agent.lookup_table_text(name, sep)
+            return agent.tables.lookup_text(name, sep)
         except InvalidLookupTable as e:
             raise HTTPException(422, str(e))
         except KeyError:
@@ -270,7 +270,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
     def update_lookup_table(name: str, rows: str = Form("")):
         """Save edited rows over a Lookup Table. Plain HTTP, never an MCP tool."""
         try:
-            return agent.update_lookup_table(name, rows)
+            return agent.tables.replace_lookup(name, rows)
         except InvalidLookupTable as e:
             raise HTTPException(422, str(e))
         except KeyError:

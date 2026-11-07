@@ -369,7 +369,7 @@ async def test_with_the_lookup_table_present_the_turn_describes_it_joins_it_and_
     agent = await make_agent(fake_client(), model="fake")
     with sqlite3.connect(telemetry_db) as db:
         watched = db.execute("SELECT dip FROM flows LIMIT 1").fetchone()[0]
-    agent.add_lookup_table("watchlist", f"ip\n{watched}")
+    agent.tables.add_lookup("watchlist", f"ip\n{watched}")
 
     events = await collect(agent, WATCHLIST_PROMPT)
 

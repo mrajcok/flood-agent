@@ -4,6 +4,7 @@
     <span class="trace-totals">{{ "No model" if trace.model == "no-model" else trace.model }} &middot;
       {{ trace.totals.prompt_tokens }} in / {{ trace.totals.completion_tokens }} out tokens &middot;
       {% if trace.totals.cached_tokens %}{{ trace.totals.cached_tokens }} cached &middot;
+      {% endif %}{% if trace.totals.cache_write_tokens %}{{ trace.totals.cache_write_tokens }} cache write &middot;
       {% endif %}      {% if trace.totals.cost is not none %}${{ "%.3f"|format(trace.totals.cost) }}{% else %}cost n/a{% endif %} &middot;
       {{ trace.totals.duration_ms }} ms</span></summary>
   {% set parts = trace.system_prompt|split_system_prompt %}
@@ -14,7 +15,7 @@
   {% for e in trace.entries %}
   <section class="trace-entry trace-{{ e.kind }}">
     {% if e.kind == "llm_step" %}
-      <h4>LLM step &middot; {{ e.duration_ms }} ms{% if e.request_bytes %} &middot; {{ "%.1f"|format(e.request_bytes / 1024) }} KB sent{% endif %}{% if e.usage %} &middot; {{ e.usage.prompt_tokens }} in / {{ e.usage.completion_tokens }} out{% if e.usage.cached_tokens %} &middot; {{ e.usage.cached_tokens }} cached{% endif %}{% if e.usage.cost is not none %} &middot; ${{ "%.3f"|format(e.usage.cost) }}{% endif %}{% endif %}</h4>
+      <h4>LLM step &middot; {{ e.duration_ms }} ms{% if e.request_bytes %} &middot; {{ "%.1f"|format(e.request_bytes / 1024) }} KB sent{% endif %}{% if e.usage %} &middot; {{ e.usage.prompt_tokens }} in / {{ e.usage.completion_tokens }} out{% if e.usage.cached_tokens %} &middot; {{ e.usage.cached_tokens }} cached{% endif %}{% if e.usage.cache_write_tokens %} &middot; {{ e.usage.cache_write_tokens }} cache write{% endif %}{% if e.usage.cost is not none %} &middot; ${{ "%.3f"|format(e.usage.cost) }}{% endif %}{% endif %}</h4>
       {% if e.system_prompt %}{% set now = e.system_prompt|split_system_prompt %}
         {% if now[0] != parts[0] %}<details class="trace-part"><summary>System prompt changed</summary><pre>{{ now[0] }}</pre></details>{% endif %}
         {% if now[1] != parts[1] %}<details class="trace-part"><summary>Semantic Layer changed</summary><pre>{{ now[1] }}</pre></details>{% endif %}

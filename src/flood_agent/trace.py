@@ -37,7 +37,8 @@ class TraceBuilder:
             usage=None
             if usage is None
             else {"prompt_tokens": usage.prompt_tokens, "completion_tokens": usage.completion_tokens,
-                  "cost": usage.cost, "cached_tokens": usage.cached_tokens},
+                  "cost": usage.cost, "cached_tokens": usage.cached_tokens,
+                  "cache_write_tokens": usage.cache_write_tokens},
             duration_ms=elapsed_ms(started),
             request_bytes=request_bytes,
             **extra,
@@ -64,6 +65,7 @@ class TraceBuilder:
             "prompt_tokens": sum(u["prompt_tokens"] for u in usages),
             "completion_tokens": sum(u["completion_tokens"] for u in usages),
             "cached_tokens": sum(u.get("cached_tokens", 0) for u in usages),
+            "cache_write_tokens": sum(u.get("cache_write_tokens", 0) for u in usages),
             "cost": round(sum(costs), 10) if costs else None,
             "duration_ms": sum(e["duration_ms"] for e in self.trace["entries"] if "duration_ms" in e),
         }

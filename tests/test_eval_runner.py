@@ -124,12 +124,13 @@ async def test_usage_meter_totals_cached_tokens():
     class Inner:
         async def stream_chat(self, messages, tools):
             yield UsageChunk(100, 20, 0.001, cached_tokens=80)
-            yield UsageChunk(100, 20, 0.001)
+            yield UsageChunk(100, 20, 0.001, cache_write_tokens=30)
 
     meter = UsageMeter(Inner())
     async for _ in meter.stream_chat([], []):
         pass
     assert meter.usage["cached_tokens"] == 80
+    assert meter.usage["cache_write_tokens"] == 30
 
 
 async def test_client_exception_is_recorded_not_raised(telemetry_db, semantic_layer_path, tmp_path):

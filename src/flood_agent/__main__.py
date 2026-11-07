@@ -31,6 +31,10 @@ def build_app(settings: Settings | None = None):
     return create_app(Agent(config, settings.client_factory()), picker=picker, has_api_key=has_api_key)
 
 
-if __name__ == "__main__":
+def main() -> None:
     settings = Settings()  # pyright: ignore[reportCallIssue]  # pydantic-settings fills fields from env/TOML
     uvicorn.run(build_app(settings), host=settings.host, port=settings.port)
+
+
+if __name__ == "__main__":
+    main()

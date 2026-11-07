@@ -99,7 +99,7 @@ def test_deleting_a_prompt_with_a_saved_table_says_the_saved_table_is_kept(build
     native = no_native_dialogs(page)
     ask_for_a_table(page)
     (table,) = agent.tables.names()
-    agent.update_result_table(table, "keeper")
+    agent.tables.update(table, "keeper")
     page.locator("aside ul li a").first.click()  # open the Conversation, so its prompts show their delete buttons
 
     page.get_by_role("button", name="Delete this turn").click()

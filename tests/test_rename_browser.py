@@ -13,7 +13,7 @@ def ask_for_a_table(build_agent, live_page, days=None):
     expect(page.locator(".reply", has_text="Here you go.")).to_be_visible()
     (table,) = agent.tables.names()
     if days is not None:
-        agent.update_result_table(table, retention_days=days)
+        agent.tables.update(table, retention_days=days)
         page.reload()
         page.locator("aside ul li a").first.click()
     return agent, page, table

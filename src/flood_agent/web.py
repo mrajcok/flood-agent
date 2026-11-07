@@ -413,7 +413,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
             name = name.strip()
         days = None if retention_days is None else _parse_retention_days(retention_days)
         try:
-            return agent.update_result_table(result_table, name, days)
+            return agent.tables.update(result_table, name, days).to_json()
         except KeyError:
             raise HTTPException(404, "unknown result table")
         except ValueError as e:
@@ -463,17 +463,12 @@ def _parse_max_rows(raw: str) -> int:
     return int(raw)
 
 
-MAX_RETENTION_DAYS = 3650
-
-
 def _parse_retention_days(raw: str) -> float:
+    """The posted number of days; the Catalog's Retention policy decides whether it is in range."""
     try:
-        days = float(raw)
+        return float(raw)
     except ValueError:
-        days = 0.0
-    if not 0 < days <= MAX_RETENTION_DAYS:  # also rejects nan
-        raise HTTPException(422, f"retention must be more than 0 and at most {MAX_RETENTION_DAYS} days")
-    return days
+        raise HTTPException(422, "retention must be a number of days")
 
 
 def _psv_safe(v):

@@ -98,8 +98,9 @@ def test_settings_give_the_time_left_before_the_table_expires(build_agent, web_c
     # A Retention change counts from the table's creation; the reply has the new time left.
     assert client.post(url, data={"retention_days": "2"}).json()["expires_in_ms"] == 2 * DAY - DAY // 4
     renamed = client.post(url, data={"name": "kept"}).json()
-    assert renamed == {"name": "kept", "retention_days": 2, "expires_in_ms": 2 * DAY - DAY // 4}
-    assert client.get("/api/results/kept/rows").json()["expires_in_ms"] == 2 * DAY - DAY // 4
+    # Renaming without a Retention raises a short one to 30 days (ADR 0004), still counted from creation.
+    assert renamed == {"name": "kept", "retention_days": 30, "expires_in_ms": 30 * DAY - DAY // 4}
+    assert client.get("/api/results/kept/rows").json()["expires_in_ms"] == 30 * DAY - DAY // 4
 
 
 def test_settings_of_an_unknown_or_expired_table_are_not_found_or_gone(build_agent, web_client):

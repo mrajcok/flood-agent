@@ -1,5 +1,4 @@
 # work items
-- should there be a keystroke that can stop the LLM from running? (e.g. if it is taking too long)
 - tests are taking too long to run. We need a way for you to only run targeted tests after a change, instead of running all tests.
 
 - ability to update a query if has a "in the last 4 hours" kind of time range

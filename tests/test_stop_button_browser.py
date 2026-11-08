@@ -80,3 +80,59 @@ def test_each_llm_call_collapses_when_the_next_starts_and_all_fold_into_the_trac
     expect(turn.locator(".live-trace")).to_have_count(0)
     expect(turn.locator("details.trace > summary")).not_to_contain_text("stopped")
     expect(page.get_by_role("button", name="Send message (Enter)")).to_be_visible()
+
+
+def stopped(page):
+    turn = page.locator("details.turn").last
+    expect(turn.locator("details.trace > summary")).to_contain_text("stopped")
+    expect(page.get_by_role("button", name="Send message (Enter)")).to_be_visible()
+
+
+def test_escape_stops_the_running_turn(live_page, build_agent):
+    page = live_page(agent=build_agent(HangingLLM()))
+    send(page)
+    expect(page.get_by_role("button", name="Stop")).to_be_visible()
+    page.keyboard.press("Escape")
+    stopped(page)
+
+
+def test_ctrl_c_stops_the_running_turn_when_nothing_is_selected(live_page, build_agent):
+    page = live_page(agent=build_agent(HangingLLM()))
+    send(page)
+    expect(page.get_by_role("button", name="Stop")).to_be_visible()
+    page.get_by_placeholder("Write a prompt").press("Control+c")
+    stopped(page)
+
+
+def test_ctrl_c_with_selected_text_copies_and_does_not_stop(live_page, build_agent):
+    page = live_page(agent=build_agent(HangingLLM()))
+    send(page)
+    stop = page.get_by_role("button", name="Stop")
+    expect(stop).to_be_visible()
+    box = page.get_by_placeholder("Write a prompt")
+    box.fill("draft")
+    box.press("Control+a")
+    box.press("Control+c")
+    expect(stop).to_be_visible()
+
+
+def test_escape_closes_an_open_popup_without_stopping_the_turn(live_page, build_agent):
+    page = live_page(agent=build_agent(HangingLLM()))
+    send(page)
+    stop = page.get_by_role("button", name="Stop")
+    expect(stop).to_be_visible()
+    page.get_by_title("Model for the next prompt").click()
+    panel = page.get_by_role("dialog", name="Model")
+    expect(panel).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(panel).to_be_hidden()
+    expect(stop).to_be_visible()
+
+
+def test_escape_and_ctrl_c_do_nothing_when_no_turn_is_running(live_page):
+    page = live_page()
+    box = page.get_by_placeholder("Write a prompt")
+    box.fill("draft")
+    box.press("Control+c")
+    box.press("Escape")
+    assert box.input_value() == "draft"

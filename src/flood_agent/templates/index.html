@@ -362,6 +362,15 @@
             } else handled = false;
             if (handled) e.preventDefault();
           },
+          interrupt(e) {
+            /* Esc, or Ctrl-C with nothing selected, stops the running turn. Esc first closes an open popup. */
+            if (!this.busy || this.stopping || e.isComposing || e.metaKey || e.shiftKey) return;
+            if (e.key === 'Escape') {
+              if ([...document.querySelectorAll('.strip .panel, .strip [role=listbox], [role=listbox]')].some(el => el.offsetParent !== null)) return;
+            } else if (!(e.ctrlKey && !e.altKey && e.code === 'KeyC' && !window.getSelection().toString() && $refs.message.selectionStart === $refs.message.selectionEnd)) return;
+            if (e.key !== 'Escape') e.preventDefault();
+            this.stop();
+          },
           escape() {
             /* Two presses within 600 ms clear the box. */
             const now = Date.now();
@@ -373,7 +382,7 @@
           const box = $refs.message;
           box.style.height = 'auto';
           box.style.height = box.scrollHeight + box.offsetHeight - box.clientHeight + 'px';
-        } }" @reset="$nextTick(() => { grow(); $refs.message.focus(); })">
+        } }" @keydown.window="interrupt($event)" @reset="$nextTick(() => { grow(); $refs.message.focus(); })">
     <input type="hidden" id="conversation_id" name="conversation_id" value="{{ current_id or '' }}">
     <div class="chat-box">
       <textarea name="message" x-ref="message" rows="1" data-placeholder="{{ prompt_hint }}" placeholder="{{ canned_hint if starts_canned else prompt_hint }}"{% if starts_canned %} disabled{% endif %} autocomplete="off" required

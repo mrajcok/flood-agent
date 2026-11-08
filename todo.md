@@ -1,5 +1,4 @@
 # work items
-- more keystrokes supported in the prompt area: ctrl-a to move the cursot to the beginning of the prompt, ctrl-e to move the cursor to the end of the prompt, ctrl-k to delete from the cursor to the end of the prompt, ctrl-u to delete from the cursor to the beginning of the prompt, ctrl-w to delete the word before the cursor, ctrl-d to delete the character under the cursor, ctrl-h to delete the character before the cursor, ctrl-y to paste from clipboard, ctrl-l to clear the prompt area.
 - should there be a keystroke that can stop the LLM from running? (e.g. if it is taking too long)
 - tests are taking too long to run. We need a way for you to only run targeted tests after a change, instead of running all tests.
 

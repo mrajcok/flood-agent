@@ -325,6 +325,43 @@
             this.stopping = true;
             fetch('/chat/stop/' + encodeURIComponent(this.turnId), { method: 'POST' }).catch(() => {});
           },
+          kill: '',
+          readline(e) {
+            /* Bash/readline editing keys. Ctrl-W is the browser's (it closes the tab), so it is left alone. */
+            if (e.isComposing || e.metaKey || e.shiftKey) return;
+            const box = e.target, v = box.value, a = box.selectionStart, z = box.selectionEnd;
+            const word = /\w/, code = e.code;
+            const back = () => { let i = a; while (i > 0 && !word.test(v[i - 1])) i--; while (i > 0 && word.test(v[i - 1])) i--; return i; };
+            const fwd = () => { let i = a; while (i < v.length && !word.test(v[i])) i++; while (i < v.length && word.test(v[i])) i++; return i; };
+            const lineStart = v.lastIndexOf('\n', a - 1) + 1;
+            const lineEnd = (i => i < 0 ? v.length : i)(v.indexOf('\n', a));
+            const move = i => box.setSelectionRange(i, i);
+            const cut = (from, to) => { if (to <= from) return; this.kill = v.slice(from, to); box.setSelectionRange(from, to); document.execCommand('delete'); };
+            let handled = true;
+            if (e.ctrlKey && !e.altKey) {
+              if (code === 'KeyA') { if (a !== z) return; move(lineStart); }
+              else if (code === 'KeyE') move(lineEnd);
+              else if (code === 'KeyB') move(Math.max(a - 1, 0));
+              else if (code === 'KeyF') move(Math.min(a + 1, v.length));
+              else if (code === 'KeyH') document.execCommand('delete');
+              else if (code === 'KeyD') document.execCommand('forwardDelete');
+              else if (code === 'KeyK') cut(a, a === lineEnd ? Math.min(a + 1, v.length) : lineEnd);
+              else if (code === 'KeyU') cut(lineStart, a);
+              else if (code === 'KeyY') { if (this.kill) document.execCommand('insertText', false, this.kill); }
+              else if (code === 'KeyT') {
+                const i = a === lineEnd ? a - 1 : a;
+                if (i < 1 || a !== z || v[i - 1] === '\n' || v[i] === '\n') return e.preventDefault();
+                box.setSelectionRange(i - 1, i + 1); document.execCommand('insertText', false, v[i] + v[i - 1]);
+              }
+              else handled = false;
+            } else if (e.altKey && !e.ctrlKey) {
+              if (code === 'KeyB') move(back());
+              else if (code === 'KeyF') move(fwd());
+              else if (code === 'KeyD') cut(a, fwd());
+              else handled = false;
+            } else handled = false;
+            if (handled) e.preventDefault();
+          },
           escape() {
             /* Two presses within 600 ms clear the box. */
             const now = Date.now();
@@ -340,7 +377,7 @@
     <input type="hidden" id="conversation_id" name="conversation_id" value="{{ current_id or '' }}">
     <div class="chat-box">
       <textarea name="message" x-ref="message" rows="1" data-placeholder="{{ prompt_hint }}" placeholder="{{ canned_hint if starts_canned else prompt_hint }}"{% if starts_canned %} disabled{% endif %} autocomplete="off" required
-                @input="grow()" @keydown.escape="escape()" @keydown.enter="if (!$event.shiftKey && !$event.isComposing && $event.keyCode !== 229) { $event.preventDefault(); if (!busy) $el.form.requestSubmit(); }"></textarea>
+                @input="grow()" @keydown="readline($event)" @keydown.escape="escape()" @keydown.enter="if (!$event.shiftKey && !$event.isComposing && $event.keyCode !== 229) { $event.preventDefault(); if (!busy) $el.form.requestSubmit(); }"></textarea>
       <button type="button" class="send stop" :disabled="stopping" @click="stop()" title="Stop" aria-label="Stop"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><rect x="8.5" y="8.5" width="7" height="7" rx="1" fill="currentColor" stroke="none"/></svg></button>
       <button type="submit" class="send" title="Send message (Enter)" aria-label="Send message (Enter)"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M20 4v9a2 2 0 0 1-2 2H9v4l-6-5.5L9 8v4h8V4z"/></svg></button>
     </div>

@@ -173,6 +173,16 @@
          } catch (e) { this.error = 'Could not change the separator.'; this.sep = previous; }
          this.busy = false;
        },
+       async loadFile(event) {
+         const input = event.target, file = input.files[0];
+         if (!file) return;
+         this.error = '';
+         try {
+           this.rows = await file.text();
+           if (!this.name) this.name = file.name.replace(/\.[^.]*$/, '').replace(/[^A-Za-z0-9_]+/g, '_').slice(0, 60);
+         } catch (e) { this.error = 'Could not read that file.'; }
+         input.value = '';
+       },
        async submit() {
          this.busy = true; this.error = '';
          const verb = this.editing ? 'Updated' : 'Added';
@@ -200,6 +210,7 @@
           <div class="add-fields">
             <label>Name: <span class="prefix">lookup_</span><input type="text" x-model="name" maxlength="60" required pattern="[A-Za-z0-9_]+" aria-label="Lookup table name"></label>
             <label><input type="checkbox" x-model="overwrite"> overwrite existing table</label>
+            <label>Or load from a file: <input type="file" accept=".csv,.tsv,.txt,text/*" aria-label="File to load" :disabled="busy" @change="loadFile($event)"></label>
           </div>
         </template>
         <template x-if="editing">

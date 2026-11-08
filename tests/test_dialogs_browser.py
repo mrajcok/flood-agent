@@ -128,3 +128,28 @@ def test_deleting_a_turn_keeps_collapsed_turns_collapsed(build_agent, live_page)
     expect(page.locator("details.turn")).to_have_count(1)
     expect(page.locator("details.turn[open]")).to_have_count(0)
     expect(page.get_by_role("button", name="Expand turns")).to_be_visible()
+
+
+def test_loading_a_file_fills_the_rows_and_suggests_a_name(live_page, tmp_path):
+    page = live_page()
+    f = tmp_path / "bad-ips.csv"
+    f.write_text("ip,label\n10.0.0.1,bad\n10.0.0.2,worse\n")
+    page.get_by_role("button", name="Create lookup table").click()
+    dialog = page.locator(".lookup dialog")
+    dialog.get_by_label("File to load").set_input_files(str(f))
+    expect(dialog.get_by_label("Rows")).to_have_value("ip,label\n10.0.0.1,bad\n10.0.0.2,worse\n")
+    expect(dialog.get_by_label("Lookup table name")).to_have_value("bad_ips")
+    dialog.get_by_role("button", name="Submit").click()
+    expect(page.get_by_role("status")).to_have_text("Added lookup_bad_ips: 2 rows, columns ip, label.")
+
+
+def test_loading_a_file_keeps_a_name_already_typed(live_page, tmp_path):
+    page = live_page()
+    f = tmp_path / "x.csv"
+    f.write_text("a,b\n1,2\n")
+    page.get_by_role("button", name="Create lookup table").click()
+    dialog = page.locator(".lookup dialog")
+    dialog.get_by_label("Lookup table name").fill("mine")
+    dialog.get_by_label("File to load").set_input_files(str(f))
+    expect(dialog.get_by_label("Rows")).to_have_value("a,b\n1,2\n")
+    expect(dialog.get_by_label("Lookup table name")).to_have_value("mine")

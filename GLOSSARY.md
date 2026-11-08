@@ -43,8 +43,8 @@ A Result Table the user has renamed to keep it. It is queried by its new name, s
 _Avoid_: Renamed Result Table, kept table, named table
 
 **Lookup Table**:
-A table the user creates by pasting rows (e.g. a list of IP addresses and descriptions), for queries in any Conversation to join or filter against. Its contents never reach the LLM.
-_Avoid_: Reference table, upload, Result Table (for this)
+A table the user creates by pasting rows or loading a file of them (e.g. a list of IP addresses and descriptions), for queries in any Conversation to join or filter against. Its contents never reach the LLM.
+_Avoid_: Reference table, Result Table (for this)
 
 **Retention**:
 How long after its creation a Result Table or Saved Table is kept before it expires (default 1 day for a Result Table, 30 days for a Saved Table). The user can change it per table; using the table, or activity in any Conversation, does not extend it. Lookup Tables have no Retention.

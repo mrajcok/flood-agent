@@ -238,6 +238,15 @@
     details.turn::details-content, details.trace::details-content { height: 0; overflow: clip; opacity: 0;
       transition: height var(--collapse) ease, opacity var(--collapse) ease, content-visibility var(--collapse) allow-discrete; }
     details.turn[open]::details-content, details.trace[open]::details-content { height: auto; opacity: 1; }
+    /* Opening another conversation is a page load: cross-fade the chat pane and keep the sidebar still. */
+    @view-transition { navigation: auto; }
+    #sidebar { view-transition-name: sidebar; }
+    #prompt-area { view-transition-name: chat; }
+    ::view-transition-group(chat) { overflow: clip; }
+    @keyframes chat-out { to { opacity: 0; } } @keyframes chat-in { from { opacity: 0; } }
+    ::view-transition-old(chat) { animation: chat-out .22s ease both; }
+    ::view-transition-new(chat) { animation: chat-in .3s ease .1s both; }
+    @media (prefers-reduced-motion: reduce) { ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; } }
     .live-trace.leaving { overflow: hidden; opacity: 0; max-height: 0 !important; margin-top: 0; margin-bottom: 0; pointer-events: none;
                           transition: opacity var(--leave) ease, max-height var(--leave) ease, margin var(--leave) ease; }
     @media (prefers-reduced-motion: reduce) {
@@ -550,11 +559,11 @@
     // Keep the newest streamed content in view, unless the user has scrolled up to read.
     (function () {
       const area = document.getElementById("prompt-area");
-      let stick = true;
+      let stick = false;  // an opened conversation lands at its start; sending a prompt follows the new turn again
       area.addEventListener("scroll", () => { stick = area.scrollHeight - area.scrollTop - area.clientHeight < 80; });
       const follow = () => { if (stick) area.scrollTop = area.scrollHeight; };
       new MutationObserver(follow).observe(area, { childList: true, subtree: true, characterData: true });
-      follow();
+      document.body.addEventListener("htmx:beforeRequest", (event) => { if (event.detail.pathInfo.requestPath === "/chat") stick = true; });
     })();
   </script>
 </body>

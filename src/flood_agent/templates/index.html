@@ -234,6 +234,10 @@
     .live-step, .live-step section, .turn[data-turn-id] details.trace { animation: fade-in var(--appear) ease-out; }
     .live-step::details-content { height: 0; overflow: clip; transition: height var(--collapse) ease, content-visibility var(--collapse) allow-discrete; }
     .live-step[open]::details-content { height: auto; }
+    /* A turn, and a finished Trace, slide and fade as they collapse and expand. */
+    details.turn::details-content, details.trace::details-content { height: 0; overflow: clip; opacity: 0;
+      transition: height var(--collapse) ease, opacity var(--collapse) ease, content-visibility var(--collapse) allow-discrete; }
+    details.turn[open]::details-content, details.trace[open]::details-content { height: auto; opacity: 1; }
     .live-trace.leaving { overflow: hidden; opacity: 0; max-height: 0 !important; margin-top: 0; margin-bottom: 0; pointer-events: none;
                           transition: opacity var(--leave) ease, max-height var(--leave) ease, margin var(--leave) ease; }
     @media (prefers-reduced-motion: reduce) {

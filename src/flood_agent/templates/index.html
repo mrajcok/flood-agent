@@ -23,6 +23,15 @@
     .topbar { flex: none; display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
     .topbar h1 { margin: .6rem 0; }
     .controls { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+    /* View toggles: sliders that hide traces, live traces and table names. On = shown. */
+    .hide-traces details.trace, .hide-traces .live-trace, .hide-live .live-trace, .hide-tables .table-name { display: none !important; }
+    .view-switch { display: inline-flex; align-items: center; gap: .4rem; font-size: .9rem; cursor: pointer; user-select: none; }
+    .view-switch input { appearance: none; width: 2rem; height: 1.1rem; border-radius: 999px; background: #c5cbd8; position: relative; margin: 0; cursor: pointer; transition: background var(--fade, .2s); }
+    .view-switch input::after { content: ""; position: absolute; top: .1rem; left: .1rem; width: .9rem; height: .9rem; border-radius: 50%; background: #fff; transition: left var(--fade, .2s); }
+    .view-switch input:checked { background: #2a4ba0; }
+    .view-switch input:checked::after { left: 1rem; }
+    .view-switch input:disabled { opacity: .45; cursor: default; }
+    .view-switch input:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 2px; }
     .toggle-all { font: inherit; color: #2a4ba0; background: #eef3fd; border: 1px solid #b9c7e6; border-radius: 999px; padding: .25rem .8rem; }
     .toggle-all:hover { background-color: #dce7fb; }
     .toggle-all:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
@@ -262,7 +271,20 @@
   {% set starts_canned = picker and default_model == no_model %}
   <div class="topbar">
     <h1>Flood Agent</h1>
-    <div class="controls">
+    <div class="controls" x-data="{
+        show: { traces: true, live: true, tables: true },
+        init() {
+          try { Object.assign(this.show, JSON.parse(localStorage.getItem('viewToggles') || '{}')); } catch (e) {}
+          this.apply();
+          this.$watch('show', () => { this.apply(); try { localStorage.setItem('viewToggles', JSON.stringify(this.show)); } catch (e) {} });
+        },
+        apply() {
+          const c = document.body.classList;
+          c.toggle('hide-traces', !this.show.traces); c.toggle('hide-live', !this.show.live); c.toggle('hide-tables', !this.show.tables);
+        } }">
+    <label class="view-switch"><input type="checkbox" x-model="show.traces"> Traces</label>
+    <label class="view-switch"><input type="checkbox" x-model="show.live" :disabled="!show.traces"> Live traces</label>
+    <label class="view-switch"><input type="checkbox" x-model="show.tables"> Table names</label>
     <button type="button" class="toggle-all" x-data="{ anyOpen: true }"
             x-init="const refresh = () => { anyOpen = !!document.querySelector('details.turn[open]') };
                     new MutationObserver(refresh).observe(document.getElementById('chat'), { childList: true, subtree: true, attributes: true, attributeFilter: ['open'] });

@@ -65,7 +65,7 @@ def test_new_name_is_queryable_and_old_is_not(build_agent, web_client):
         def step(msgs):
             if table is None:  # the second query follows the first one's result
                 results.append(last_tool_result(msgs))
-            return [tool_call("run_count_query", sql=f"SELECT COUNT(*) FROM {seen.get('old') if table is None else table}")]
+            return [tool_call("run_count_query", sql=f"SELECT COUNT(*) FROM {seen.get('old') if table is None else table}", title="T")]
         return step
 
     def done(msgs):

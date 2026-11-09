@@ -106,7 +106,7 @@ class _TurnQueue(asyncio.Queue):
     def put_nowait(self, item) -> None:  # `put` goes through here too
         if isinstance(item, TextDelta) and item.text:
             self.mid_paragraph = not item.text.endswith("\n")
-        elif isinstance(item, DisplayEvent):
+        elif isinstance(item, (DisplayEvent, CountEvent)):
             self.mid_paragraph = False
         super().put_nowait(item)
 
@@ -126,6 +126,17 @@ class DisplayEvent:
     columns: list[str] = field(default_factory=list)
     spec: dict | None = None  # charts: Chart Spec after data-reference resolution
     source_spec: dict | None = None  # charts: Chart Spec as the LLM wrote it (for the Trace)
+
+
+@dataclass
+class CountEvent:
+    """A Count Display: the number a successful run_count_query returned, shown as its own one-line item.
+    `sql` is kept (also in the saved definition) so a later Refresh can run it again."""
+
+    title: str
+    value: int
+    sql: str
+    computed_at_ms: int
 
 
 @dataclass
@@ -184,7 +195,7 @@ class TurnEnd:
     pass
 
 
-Event = TextDelta | DisplayEvent | TraceEntry | FlagEvent | TraceReady | LlmCallStarted | TraceLive | TurnError | TurnEnd
+Event = TextDelta | DisplayEvent | CountEvent | TraceEntry | FlagEvent | TraceReady | LlmCallStarted | TraceLive | TurnError | TurnEnd
 
 GIVE_UP_MESSAGE = (
     "Sorry, I couldn't build a working query for that after several attempts. "
@@ -615,7 +626,7 @@ class Agent:
                 self._trace_result_table(trace, content)
                 displays = await self._prepare_displays(
                     conversation, content, args, queue, trace
-                )
+                ) + await self._prepare_count_display(c.name, content, args, queue)
                 items.append(({"role": "tool", "tool_call_id": c.id, "content": content}, displays))
             self.store.add_step(conversation.id, turn_id, items)
             conversation.messages.extend(m for m, _ in items)
@@ -793,3 +804,20 @@ class Agent:
             return []
         await queue.put(DisplayEvent(display["kind"], table, display["columns"]))
         return [(display["kind"], table, {"columns": display["columns"]})]
+
+    async def _prepare_count_display(self, tool: str, content: str, args: dict, queue: asyncio.Queue) -> list[tuple]:
+        """A successful run_count_query makes a Count Display: emit it and return its definition to persist with
+        the tool message. It has no result table (so no Retention) and lives and dies with its Conversation."""
+        if tool != "run_count_query":
+            return []
+        try:
+            payload = json.loads(content)
+        except ValueError:
+            return []
+        if not isinstance(payload, dict) or not payload.get("success") or not isinstance(payload.get("count"), int):
+            return []
+        title = args.get("title")
+        event = CountEvent(title if isinstance(title, str) else "", payload["count"], args["sql"], self.config.clock())
+        await queue.put(event)
+        return [("count", None, {"title": event.title, "value": event.value, "sql": event.sql,
+                                 "computed_at_ms": event.computed_at_ms})]

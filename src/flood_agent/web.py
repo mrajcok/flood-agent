@@ -42,6 +42,7 @@ from flood_agent.catalog import TableExpired
 from flood_agent.context_usage import context_usage
 from flood_agent.lookup_tables import InvalidLookupTable
 from flood_agent.queries import InvalidSort
+from flood_agent.store import COUNT_KIND
 from flood_agent.trace import context_tokens, short_model, split_system_prompt
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -167,7 +168,7 @@ def create_app(
         expired = shown - agent.tables.live_among(shown)
         prompt_at = None  # where the current turn's prompt is in `items`
         for item in transcript:
-            if item["type"] == "display" and item["kind"] == "count":
+            if item["type"] == "display" and item["kind"] == COUNT_KIND:
                 items.append(item)
             elif item["type"] == "display" and item["kind"] == "chart":
                 spec = resolve_chart_data(item["spec"], item["result_table"])

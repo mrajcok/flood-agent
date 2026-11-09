@@ -24,7 +24,7 @@ from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
 from flood_agent.mcp_protocol import QUERY_TOOLS
 from flood_agent.mcp_server import ServerSettings
 from flood_agent.semantic_layer import SemanticLayer
-from flood_agent.store import ConversationStore
+from flood_agent.store import COUNT_KIND, ConversationStore
 from flood_agent.trace import TraceBuilder
 
 log = logging.getLogger("uvicorn.error")  # the app's terminal log
@@ -659,7 +659,7 @@ class Agent:
             items: list[tuple[dict, list[tuple]]] = [(assistant, [])]
             # The step's Display events in call order, sent once the step is saved (a Count Display needs its
             # id): (event, index in items of the message its Display is saved after).
-            shown: list[tuple[DisplayEvent | CountEvent, int]] = []
+            step_displays: list[tuple[DisplayEvent | CountEvent, int]] = []
             for c in calls:
                 call_started = time.monotonic()
                 content, args, executed_sql, failed = await self._run_tool(
@@ -669,15 +669,15 @@ class Agent:
                 trace.tool_call(c.name, args, content, call_started, executed_sql)
                 self._trace_result_table(trace, content)
                 displays, events = self._prepare_displays(conversation, content, args, trace)
-                shown += [(e, len(items)) for e in events]
+                step_displays += [(e, len(items)) for e in events]
                 count = self._count_display(c.name, content, args)
                 if count:
-                    displays.append(("count", None, {"title": count.title, "value": count.value, "sql": count.sql,
+                    displays.append((COUNT_KIND, None, {"title": count.title, "value": count.value, "sql": count.sql,
                                                      "computed_at_ms": count.computed_at_ms}))
-                    shown.append((count, len(items)))
+                    step_displays.append((count, len(items)))
                 items.append(({"role": "tool", "tool_call_id": c.id, "content": content}, displays))
             _, display_ids = self.store.add_step(conversation.id, turn_id, items)
-            for event, index in shown:
+            for event, index in step_displays:
                 if isinstance(event, CountEvent):
                     event.display_id = display_ids[index][-1]  # a call makes one Display: its count is the last
                 await queue.put(event)

@@ -22,6 +22,8 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+COUNT_KIND = "count"  # the kind of a Count Display, among table and chart Displays
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY,
@@ -194,13 +196,13 @@ class ConversationStore:
         """A Count Display's saved definition ({title, value, sql, computed_at_ms}), or None if there is
         no Count Display with that id."""
         with closing(self._connect()) as con:
-            row = con.execute("SELECT definition FROM displays WHERE id=? AND kind='count'", (display_id,)).fetchone()
+            row = con.execute("SELECT definition FROM displays WHERE id=? AND kind=?", (display_id, COUNT_KIND)).fetchone()
         return json.loads(row[0]) if row else None
 
     def update_count(self, display_id: int, value: int, computed_at_ms: int) -> None:
         """Overwrite a Count Display's number and "as of" time (a Refresh). KeyError if it no longer exists."""
         with closing(self._connect()) as con, con:
-            row = con.execute("SELECT definition FROM displays WHERE id=? AND kind='count'", (display_id,)).fetchone()
+            row = con.execute("SELECT definition FROM displays WHERE id=? AND kind=?", (display_id, COUNT_KIND)).fetchone()
             if row is None:
                 raise KeyError(display_id)
             definition = {**json.loads(row[0]), "value": value, "computed_at_ms": computed_at_ms}

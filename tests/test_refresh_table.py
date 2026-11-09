@@ -207,3 +207,15 @@ def test_a_catalog_from_before_this_feature_gains_the_new_columns(tmp_path):
               VALUES ('rt_20240101_000000', 'c', 1, 1, 100000000000);""")
     catalog = Catalog(app_db, clock=lambda: 5)
     assert catalog["rt_20240101_000000"].refreshable is False
+
+
+def test_refreshing_a_table_leaves_the_system_prompt_byte_identical(build_agent, web_client):
+    """The prompt lists the Conversation's tables in creation order; a Refresh must not reorder them, or the
+    next turn misses the prompt cache."""
+    client, agent, clock, _, (first, second) = ask(build_agent, web_client, RECENT, RECENT)
+    cid = agent.tables[first].conversation_id
+    before = agent.semantic_layer.system_prompt(agent.tables.tables_of(cid))
+    clock.ms += HOUR
+    assert refresh(client, first).status_code == 200
+    assert [t.name for t in agent.tables.tables_of(cid)] == [first, second]
+    assert agent.semantic_layer.system_prompt(agent.tables.tables_of(cid)) == before

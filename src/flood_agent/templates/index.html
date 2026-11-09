@@ -325,6 +325,8 @@
       {% elif item.type == "flags" %}{% with flags=item.flags %}{% include "flag_note.html" %}{% endwith %}
       {% elif item.type == "trace" %}{% with trace=item.trace %}{% include "trace.html" %}{% endwith %}
       {% elif item.type == "display" and item.expired %}<p class="expired"><em>expired</em> (this result has been deleted)</p>
+      {% elif item.type == "display" and item.kind == "count" %}
+        {% with title=item.title, value=item.value, computed_at_ms=item.computed_at_ms, display_id=item.display_id %}{% include "display_count.html" %}{% endwith %}
       {% elif item.type == "display" and item.kind == "table" %}
         {% with rows_url=item.rows_url, psv_url=item.psv_url, settings_url=item.settings_url, result_table=item.result_table, columns=item.columns %}{% include "display_table.html" %}{% endwith %}
       {% elif item.type == "display" and item.kind == "chart" %}

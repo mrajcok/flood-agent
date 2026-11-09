@@ -237,9 +237,10 @@ def create_server(settings: ServerSettings, clock: Callable[[], int] | None = No
 
     @mcp.tool()
     @_in_worker_thread
-    def run_count_query(sql: str, ctx: Context) -> str:
+    def run_count_query(sql: str, title: str, ctx: Context) -> str:
         """Run a single read-only SELECT that returns one number, e.g. SELECT COUNT(*) FROM ...
-        No Result Table is created; the count itself is returned to you and you may state it."""
+        No Result Table is created; the count itself is returned to you and you may state it. The user
+        is shown it as a one-line Count Display labelled with `title` (a short name for what is counted)."""
         allowed = catalog.readable() if catalog else set()
         return json.dumps(
             queries.run_count_query(settings.telemetry_db, settings.results_db, sql, settings.query_timeout_s, allowed)

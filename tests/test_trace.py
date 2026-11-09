@@ -214,7 +214,7 @@ def test_only_a_changed_result_tables_section_is_called_a_change_and_every_syste
 
 def test_an_unchanged_system_prompt_is_not_reported_as_changed(build_agent, web_client):
     client = web_client(
-        build_agent(ScriptedLLM([tool_call("run_count_query", sql="SELECT COUNT(*) FROM flows")], [TextChunk("n")]))
+        build_agent(ScriptedLLM([tool_call("run_count_query", sql="SELECT COUNT(*) FROM flows", title="T")], [TextChunk("n")]))
     )
     cid, _ = ask(client, "how many")
     page = client.get(f"/c/{cid}").text

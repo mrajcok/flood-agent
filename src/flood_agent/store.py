@@ -223,7 +223,8 @@ class ConversationStore:
             out.append({"type": "message", "turn_id": m["turn_id"], "message": json.loads(m["body"])})
             for d in displays:
                 if d["after_message_id"] == m["id"]:
-                    out.append({"type": "display", "kind": d["kind"], "result_table": d["result_table"],
+                    out.append({"type": "display", "display_id": d["id"], "kind": d["kind"],
+                                "result_table": d["result_table"],
                                 **json.loads(d["definition"])})
             if m["id"] in trace_after:
                 out.append({"type": "trace", "trace": trace_after[m["id"]]})

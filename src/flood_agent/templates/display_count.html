@@ -1,0 +1,1 @@
+<p class="count-display"{% if display_id %} data-display-id="{{ display_id }}"{% endif %} x-data="{ asOfMs: {{ computed_at_ms }} }"><span class="count-title">{{ title }}</span> <strong class="count-value">{{ "{:,}".format(value) }}</strong> <span class="as-of" data-as-of-ms="{{ computed_at_ms }}" x-text="FloodFormat.formatAsOf(asOfMs)"></span></p>

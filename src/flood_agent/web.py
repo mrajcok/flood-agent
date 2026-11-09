@@ -24,6 +24,7 @@ from flood_agent.agent import (
     NO_MODEL,
     Agent,
     Conversation,
+    CountEvent,
     DisplayEvent,
     FlagEvent,
     LlmCallStarted,
@@ -153,11 +154,13 @@ def create_app(
     def history(conversation_id: str) -> list[dict]:
         items = []
         transcript = agent.store.transcript(conversation_id)
-        shown = {i["result_table"] for i in transcript if i["type"] == "display"}
+        shown = {i["result_table"] for i in transcript if i["type"] == "display" and i["result_table"]}
         expired = shown - agent.tables.live_among(shown)
         prompt_at = None  # where the current turn's prompt is in `items`
         for item in transcript:
-            if item["type"] == "display" and item["kind"] == "chart":
+            if item["type"] == "display" and item["kind"] == "count":
+                items.append(item)
+            elif item["type"] == "display" and item["kind"] == "chart":
                 spec = resolve_chart_data(item["spec"], item["result_table"])
                 items.append({
                     **item, **_table_display_urls(item["result_table"]), "spec_json": json.dumps(spec),
@@ -349,6 +352,9 @@ def create_app(
                 async for ev in agent.run_turn(conversation, message, max_result_rows, chosen_model, chosen_effort, turn_key=turn_id):
                     if isinstance(ev, TextDelta):
                         yield _sse("text", f'<span class="md-delta">{escape(ev.text)}</span>')  # markdown.js renders it
+                    elif isinstance(ev, CountEvent):
+                        yield _sse("display", TEMPLATES.get_template("display_count.html").render(
+                            title=ev.title, value=ev.value, computed_at_ms=ev.computed_at_ms).strip())
                     elif isinstance(ev, DisplayEvent) and ev.kind == "chart":
                         html = TEMPLATES.get_template("display_chart.html").render(
                             spec_json=json.dumps(ev.spec), **_table_display_urls(ev.result_table)

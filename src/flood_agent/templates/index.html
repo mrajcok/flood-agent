@@ -15,6 +15,7 @@
   <script src="https://cdn.jsdelivr.net/npm/vega-lite@5.21.0"></script>
   <script src="https://cdn.jsdelivr.net/npm/vega-embed@6.26.0"></script>
   <script src="/static/chart.js?v={{ static_version('chart.js') }}"></script>
+  <script src="/static/refresh.js?v={{ static_version('refresh.js') }}"></script>
   <script src="/static/table_name.js?v={{ static_version('table_name.js') }}"></script>
   <style>
     html, body { height: 100%; }
@@ -177,6 +178,10 @@
     .table-name .refresh { font: inherit; font-size: .85rem; margin-left: .4rem; padding: .05rem .6rem; border: 1px solid #c4c9d4; border-radius: .4rem; background: #fff; color: #333; cursor: pointer; }
     .table-name .refresh:hover:not(:disabled) { background: #f2f4f8; }
     .table-name .refresh:disabled { cursor: progress; color: #6b7280; }
+    .count-display .refresh { font: inherit; font-size: .85rem; margin-left: .4rem; padding: .05rem .6rem; border: 1px solid #c4c9d4; border-radius: .4rem; background: #fff; color: #333; cursor: pointer; }
+    .count-display .refresh:hover:not(:disabled) { background: #f2f4f8; }
+    .count-display .refresh:disabled { cursor: progress; color: #6b7280; }
+    .count-display .refresh-error { margin-left: .4rem; }
     .table-name .as-of { margin-left: .4rem; font-size: .8rem; color: #6b7280; white-space: nowrap; }
     .table-name .refresh-error { margin-left: .4rem; }
     .table-name .copy:hover { background: #dce7fb; }

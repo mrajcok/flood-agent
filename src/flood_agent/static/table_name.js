@@ -29,19 +29,12 @@ document.addEventListener("alpine:init", () => {
     async refresh() {
       if (this.refreshing) return;
       this.refreshing = true; this.refreshError = "";
-      try {
-        const r = await fetch(this.settingsUrl.replace(/\/settings$/, "/refresh"), { method: "POST" });
-        if (r.status === 410) return this.expire();
-        if (!r.ok) {
-          let detail = "";
-          try { detail = (await r.json()).detail; } catch (e) { /* not JSON */ }
-          this.refreshError = typeof detail === "string" && detail ? detail : "Could not refresh.";
-          return;
-        }
-        this.apply(await r.json());
-        this.$dispatch("table-refreshed");
-      } catch (e) { this.refreshError = "Could not refresh."; }
-      finally { this.refreshing = false; }
+      const r = await FloodRefresh.post(this.settingsUrl.replace(/\/settings$/, "/refresh"));
+      this.refreshing = false;
+      if (r.status === 410) return this.expire();
+      if (!r.ok) { this.refreshError = r.error; return; }
+      this.apply(r.body);
+      this.$dispatch("table-refreshed");
     },
     // The Retention choices: the deployment's Result Table default, the Saved Table default, a week and a year.
     get presets() {

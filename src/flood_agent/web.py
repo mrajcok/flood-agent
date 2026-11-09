@@ -354,7 +354,8 @@ def create_app(
                         yield _sse("text", f'<span class="md-delta">{escape(ev.text)}</span>')  # markdown.js renders it
                     elif isinstance(ev, CountEvent):
                         yield _sse("display", TEMPLATES.get_template("display_count.html").render(
-                            title=ev.title, value=ev.value, computed_at_ms=ev.computed_at_ms).strip())
+                            title=ev.title, value=ev.value, computed_at_ms=ev.computed_at_ms,
+                            display_id=ev.display_id).strip())
                     elif isinstance(ev, DisplayEvent) and ev.kind == "chart":
                         html = TEMPLATES.get_template("display_chart.html").render(
                             spec_json=json.dumps(ev.spec), **_table_display_urls(ev.result_table)
@@ -439,6 +440,20 @@ def create_app(
             raise HTTPException(422, str(e))
         info = queries.describe_results_table(agent.config.results_db, table.name) or {}
         return {**table.to_json(), **info, "truncated_to": table.truncated_to}
+
+    @app.post("/api/displays/{display_id}/refresh")
+    def refresh_count_display(display_id: int):
+        """Refresh a Count Display: run its stored count query again and overwrite the number and "as of"
+        time. Plain HTTP, never an MCP tool; the LLM is not involved. 404 unknown, 409 already refreshing,
+        422 the query failed (the old number is then kept). Returns {value, computed_at_ms}."""
+        try:
+            return agent.refresh_count(display_id)
+        except KeyError:
+            raise HTTPException(404, "unknown count")
+        except RefreshInProgress as e:
+            raise HTTPException(409, str(e))
+        except RefreshFailed as e:
+            raise HTTPException(422, str(e))
 
     @app.post("/api/results/{result_table}/settings")
     def result_table_settings(

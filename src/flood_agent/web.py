@@ -19,14 +19,18 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from flood_agent import dev_tools, lookup_tables
+from flood_agent import dev_tools, lookup_tables, queries
 from flood_agent.agent import (
     NO_MODEL,
     Agent,
     Conversation,
+    CountEvent,
     DisplayEvent,
     FlagEvent,
     LlmCallStarted,
+    NotRefreshable,
+    RefreshFailed,
+    RefreshInProgress,
     TablesChoice,
     TextDelta,
     TraceLive,
@@ -38,6 +42,7 @@ from flood_agent.catalog import TableExpired
 from flood_agent.context_usage import context_usage
 from flood_agent.lookup_tables import InvalidLookupTable
 from flood_agent.queries import InvalidSort
+from flood_agent.store import COUNT_KIND
 from flood_agent.trace import context_tokens, short_model, split_system_prompt
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -96,6 +101,15 @@ def create_app(
         # Any endpoint reading Result Table rows (rows, PSV, chart rows) gets a clear 410.
         return JSONResponse({"detail": "This result has expired and been deleted. Ask again to regenerate it."}, 410)
 
+    @app.exception_handler(RefreshInProgress)
+    def refresh_in_progress_handler(request: Request, exc: RefreshInProgress):
+        return JSONResponse({"detail": str(exc)}, 409)
+
+    @app.exception_handler(NotRefreshable)
+    @app.exception_handler(RefreshFailed)
+    def refresh_failed_handler(request: Request, exc: NotRefreshable | RefreshFailed):
+        return JSONResponse({"detail": str(exc)}, 422)
+
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     pending: dict[str, tuple[Conversation, str, int, str, str | None]] = {}
 
@@ -150,11 +164,13 @@ def create_app(
     def history(conversation_id: str) -> list[dict]:
         items = []
         transcript = agent.store.transcript(conversation_id)
-        shown = {i["result_table"] for i in transcript if i["type"] == "display"}
+        shown = {i["result_table"] for i in transcript if i["type"] == "display" and i["result_table"]}
         expired = shown - agent.tables.live_among(shown)
         prompt_at = None  # where the current turn's prompt is in `items`
         for item in transcript:
-            if item["type"] == "display" and item["kind"] == "chart":
+            if item["type"] == "display" and item["kind"] == COUNT_KIND:
+                items.append(item)
+            elif item["type"] == "display" and item["kind"] == "chart":
                 spec = resolve_chart_data(item["spec"], item["result_table"])
                 items.append({
                     **item, **_table_display_urls(item["result_table"]), "spec_json": json.dumps(spec),
@@ -346,6 +362,10 @@ def create_app(
                 async for ev in agent.run_turn(conversation, message, max_result_rows, chosen_model, chosen_effort, turn_key=turn_id):
                     if isinstance(ev, TextDelta):
                         yield _sse("text", f'<span class="md-delta">{escape(ev.text)}</span>')  # markdown.js renders it
+                    elif isinstance(ev, CountEvent):
+                        yield _sse("display", TEMPLATES.get_template("display_count.html").render(
+                            title=ev.title, value=ev.value, computed_at_ms=ev.computed_at_ms,
+                            display_id=ev.display_id).strip())
                     elif isinstance(ev, DisplayEvent) and ev.kind == "chart":
                         html = TEMPLATES.get_template("display_chart.html").render(
                             spec_json=json.dumps(ev.spec), **_table_display_urls(ev.result_table)
@@ -413,6 +433,29 @@ def create_app(
             return agent.tables[result_table].to_json()
         except KeyError:
             raise HTTPException(404, "unknown result table")
+
+    @app.post("/api/results/{result_table}/refresh")
+    def refresh_result_table(result_table: str):
+        """Refresh a Result or Saved Table: run its stored query again and replace it under the same name.
+        Plain HTTP, never an MCP tool; the LLM is not involved. 404 unknown, 410 expired, 409 already
+        refreshing, 422 not refreshable or the query failed (the table is then unchanged). Returns the
+        refreshed table's metadata."""
+        try:
+            table = agent.refresh_table(result_table)
+        except KeyError:
+            raise HTTPException(404, "unknown result table")
+        info = queries.describe_results_table(agent.config.results_db, table.name) or {}
+        return {**table.to_json(), **info, "truncated_to": table.truncated_to}
+
+    @app.post("/api/displays/{display_id}/refresh")
+    def refresh_count_display(display_id: int):
+        """Refresh a Count Display: run its stored count query again and overwrite the number and "as of"
+        time. Plain HTTP, never an MCP tool; the LLM is not involved. 404 unknown, 409 already refreshing,
+        422 the query failed (the old number is then kept). Returns {value, computed_at_ms}."""
+        try:
+            return agent.refresh_count(display_id)
+        except KeyError:
+            raise HTTPException(404, "unknown Count Display")
 
     @app.post("/api/results/{result_table}/settings")
     def result_table_settings(

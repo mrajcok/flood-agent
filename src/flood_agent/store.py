@@ -22,6 +22,8 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+COUNT_KIND = "count"  # the kind of a Count Display, among table and chart Displays
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY,
@@ -163,12 +165,15 @@ class ConversationStore:
             conversation_id,
         )
 
-    def add_step(self, conversation_id: str, turn_id: int, items: list[tuple[dict, list[tuple]]]) -> list[int]:
+    def add_step(
+        self, conversation_id: str, turn_id: int, items: list[tuple[dict, list[tuple]]]
+    ) -> tuple[list[int], list[list[int]]]:
         """Persist one LLM step atomically: each (message, displays) in order, where a display is
         (kind, result_table, definition) attached after that message. Either all rows are saved
         or none, so history never holds an assistant tool_calls message without its tool results.
-        Returns the message ids."""
+        Returns the message ids and, per message, the ids of the displays saved after it."""
         ids = []
+        display_ids: list[list[int]] = []
         with closing(self._connect()) as con, con:
             for message, displays in items:
                 mid = con.execute(
@@ -176,14 +181,32 @@ class ConversationStore:
                     (conversation_id, turn_id, json.dumps(message)),
                 ).lastrowid
                 ids.append(mid)
+                display_ids.append([])
                 for kind, table, definition in displays:
-                    con.execute(
+                    cur = con.execute(
                         "INSERT INTO displays(conversation_id, turn_id, after_message_id, kind, result_table,"
                         " definition) VALUES (?,?,?,?,?,?)",
                         (conversation_id, turn_id, mid, kind, table, json.dumps(definition)),
                     )
+                    display_ids[-1].append(int(cur.lastrowid or 0))
             con.execute("UPDATE conversations SET last_activity_at=? WHERE id=?", (self._now(), conversation_id))
-        return ids
+        return ids, display_ids
+
+    def count_display(self, display_id: int) -> dict | None:
+        """A Count Display's saved definition ({title, value, sql, computed_at_ms}), or None if there is
+        no Count Display with that id."""
+        with closing(self._connect()) as con:
+            row = con.execute("SELECT definition FROM displays WHERE id=? AND kind=?", (display_id, COUNT_KIND)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def update_count(self, display_id: int, value: int, computed_at_ms: int) -> None:
+        """Overwrite a Count Display's number and "as of" time (a Refresh). KeyError if it no longer exists."""
+        with closing(self._connect()) as con, con:
+            row = con.execute("SELECT definition FROM displays WHERE id=? AND kind=?", (display_id, COUNT_KIND)).fetchone()
+            if row is None:
+                raise KeyError(display_id)
+            definition = {**json.loads(row[0]), "value": value, "computed_at_ms": computed_at_ms}
+            con.execute("UPDATE displays SET definition=? WHERE id=?", (json.dumps(definition), display_id))
 
     @staticmethod
     def follow_rename(con: sqlite3.Connection, old: str, new: str) -> None:
@@ -223,7 +246,8 @@ class ConversationStore:
             out.append({"type": "message", "turn_id": m["turn_id"], "message": json.loads(m["body"])})
             for d in displays:
                 if d["after_message_id"] == m["id"]:
-                    out.append({"type": "display", "kind": d["kind"], "result_table": d["result_table"],
+                    out.append({"type": "display", "display_id": d["id"], "kind": d["kind"],
+                                "result_table": d["result_table"],
                                 **json.loads(d["definition"])})
             if m["id"] in trace_after:
                 out.append({"type": "trace", "trace": trace_after[m["id"]]})

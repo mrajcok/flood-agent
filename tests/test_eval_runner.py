@@ -187,7 +187,7 @@ COUNT_Q = Question(
 
 
 def count(sql, call_id="c1"):
-    return [tool_call("run_count_query", call_id, sql=sql)]
+    return [tool_call("run_count_query", call_id, sql=sql, title="T")]
 
 
 async def test_a_right_run_count_query_answer_is_correct_without_a_result_table(

@@ -70,7 +70,12 @@
     return "expires in " + [d && d + "d", h && h + "h"].filter(Boolean).join(" ");
   }
 
-  const api = { isNumericColumn, formatBytes, formatTime, formatEnum, formatFlags, formatCell, formatRetention, formatExpiresIn };
+  // The time a table's rows are from, in the viewer's time zone, e.g. "as of 2:05 PM".
+  function formatAsOf(ms) {
+    return "as of " + new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+
+  const api = { formatAsOf, isNumericColumn, formatBytes, formatTime, formatEnum, formatFlags, formatCell, formatRetention, formatExpiresIn };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.FloodFormat = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

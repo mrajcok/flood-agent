@@ -1,7 +1,10 @@
 <div class="table-name" x-data="tableName()" data-settings-url="{{ settings_url }}" x-show="name && !gone" x-cloak>
   <button type="button" class="name" x-show="!editing" @click="edit()" title="Click to rename this table (its SQL name) or change how long it is kept" x-text="name"></button>
   <button type="button" class="copy" x-show="!editing" @click="insertIntoChat(name)" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into the chat'">&#x29C9;</button>
+  <button type="button" class="refresh" x-show="!editing && refreshable" @click="refresh()" :disabled="refreshing" :aria-busy="refreshing" title="Run this table's query again and replace its rows" x-text="refreshing ? 'Refreshing...' : 'Refresh'">Refresh</button>
   <span class="expires" x-show="!editing && expiresIn" :title="'Retention: ' + retention" x-text="expiresIn"></span>
+  <span class="as-of" x-show="!editing && asOf" x-text="asOf"></span>
+  <span class="refresh-error err" role="alert" x-show="refreshError" x-text="refreshError"></span>
   <form class="editor" x-show="editing" @submit.prevent="save()" @keydown.escape="editing = false">
     <input type="text" x-ref="nameInput" x-model="draft" @input="renamed()" maxlength="60" required aria-label="Table name (SQL)">
     <label>Keep for

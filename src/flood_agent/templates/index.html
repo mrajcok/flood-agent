@@ -15,6 +15,7 @@
   <script src="https://cdn.jsdelivr.net/npm/vega-lite@5.21.0"></script>
   <script src="https://cdn.jsdelivr.net/npm/vega-embed@6.26.0"></script>
   <script src="/static/chart.js?v={{ static_version('chart.js') }}"></script>
+  <script src="/static/refresh.js?v={{ static_version('refresh.js') }}"></script>
   <script src="/static/table_name.js?v={{ static_version('table_name.js') }}"></script>
   <style>
     html, body { height: 100%; }
@@ -23,7 +24,7 @@
     .topbar { flex: none; display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
     .topbar h1 { margin: .6rem 0; }
     .controls { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
-    /* View toggles: sliders that hide traces, live traces and table names. On = shown. */
+    /* View toggles: sliders that hide traces, live traces and table info. On = shown. */
     .hide-traces details.trace, .hide-traces .live-trace, .hide-live .live-trace, .hide-tables .table-name { display: none !important; }
     .view-switch { display: inline-flex; align-items: center; gap: .4rem; font-size: .9rem; cursor: pointer; user-select: none; }
     .view-switch input { appearance: none; width: 2rem; height: 1.1rem; border-radius: 999px; background: #c5cbd8; position: relative; margin: 0; cursor: pointer; transition: background var(--fade, .2s); }
@@ -174,6 +175,11 @@
     .table-name .name:hover { background: #eef3fd; }
     .table-name .copy { background: none; border: 0; color: #4a6fd3; cursor: pointer; font-size: 1rem; line-height: 1; padding: .15rem .3rem; border-radius: .3rem; }
     .table-name .expires { margin-left: .4rem; font-size: .8rem; color: #6b7280; white-space: nowrap; }
+    .table-name .refresh, .count-display .refresh { font: inherit; font-size: .85rem; margin-left: .4rem; padding: .05rem .6rem; border: 1px solid #c4c9d4; border-radius: .4rem; background: #fff; color: #333; cursor: pointer; }
+    .table-name .refresh:hover:not(:disabled), .count-display .refresh:hover:not(:disabled) { background: #f2f4f8; }
+    .table-name .refresh:disabled, .count-display .refresh:disabled { cursor: progress; color: #6b7280; }
+    .table-name .as-of { margin-left: .4rem; font-size: .8rem; color: #6b7280; white-space: nowrap; }
+    .table-name .refresh-error, .count-display .refresh-error { margin-left: .4rem; }
     .table-name .copy:hover { background: #dce7fb; }
     .table-name .copy:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
     .table-name .editor { display: flex; flex-direction: row; gap: .5rem; align-items: center; flex-wrap: wrap; }  /* row: also in the Tables viewer, where "dialog form" stacks */
@@ -299,7 +305,7 @@
     {% endif %}
     <label class="view-switch"><input type="checkbox" x-model="show.traces"> Traces</label>
     <label class="view-switch"><input type="checkbox" x-model="show.live" :disabled="!show.traces"> Live traces</label>
-    <label class="view-switch"><input type="checkbox" x-model="show.tables"> Table names</label>
+    <label class="view-switch"><input type="checkbox" x-model="show.tables"> Table info</label>
     <button type="button" class="toggle-all" x-data="{ anyOpen: true }"
             x-init="const refresh = () => { anyOpen = !!document.querySelector('details.turn[open]') };
                     new MutationObserver(refresh).observe(document.getElementById('chat'), { childList: true, subtree: true, attributes: true, attributeFilter: ['open'] });
@@ -320,6 +326,8 @@
       {% elif item.type == "flags" %}{% with flags=item.flags %}{% include "flag_note.html" %}{% endwith %}
       {% elif item.type == "trace" %}{% with trace=item.trace %}{% include "trace.html" %}{% endwith %}
       {% elif item.type == "display" and item.expired %}<p class="expired"><em>expired</em> (this result has been deleted)</p>
+      {% elif item.type == "display" and item.kind == "count" %}
+        {% with title=item.title, value=item.value, computed_at_ms=item.computed_at_ms, display_id=item.display_id %}{% include "display_count.html" %}{% endwith %}
       {% elif item.type == "display" and item.kind == "table" %}
         {% with rows_url=item.rows_url, psv_url=item.psv_url, settings_url=item.settings_url, result_table=item.result_table, columns=item.columns %}{% include "display_table.html" %}{% endwith %}
       {% elif item.type == "display" and item.kind == "chart" %}

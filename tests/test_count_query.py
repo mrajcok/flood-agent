@@ -44,7 +44,7 @@ async def test_agent_turn_gives_llm_the_count_and_creates_no_result_table(make_a
     from flood_agent.llm import TextChunk
 
     llm = ScriptedLLM(
-        [tool_call("run_count_query", sql="SELECT COUNT(*) FROM flows")], [TextChunk("There are 3 flows.")]
+        [tool_call("run_count_query", sql="SELECT COUNT(*) FROM flows", title="T")], [TextChunk("There are 3 flows.")]
     )
     agent = await make_agent(llm)
     events = await collect(agent, "how many flows?")
@@ -56,7 +56,7 @@ async def test_agent_turn_gives_llm_the_count_and_creates_no_result_table(make_a
 async def test_failed_count_queries_count_toward_the_retry_limit(make_agent):
     from conftest import ScriptedLLM, collect, text_of, tool_call
 
-    bad = [[tool_call("run_count_query", call_id=f"c{i}", sql="SELECT sip FROM flows")] for i in range(3)]
+    bad = [[tool_call("run_count_query", call_id=f"c{i}", sql="SELECT sip FROM flows", title="T")] for i in range(3)]
     llm = ScriptedLLM(*bad, [])
     text = text_of(await collect(await make_agent(llm), "q"))
     assert "couldn't build" in text.lower()
@@ -70,6 +70,6 @@ async def test_large_count_stated_in_reply_is_not_flagged(make_agent):
     from flood_agent.llm import TextChunk
 
     cross = "SELECT COUNT(*) FROM " + ", ".join(f"flows t{i}" for i in range(9))  # 3**9 = 19683
-    llm = ScriptedLLM([tool_call("run_count_query", sql=cross)], [TextChunk("There are 19,683 rows.")])
+    llm = ScriptedLLM([tool_call("run_count_query", sql=cross, title="T")], [TextChunk("There are 19,683 rows.")])
     events = await collect(await make_agent(llm), "how many?")
     assert not any(type(e).__name__ == "FlagEvent" for e in events)

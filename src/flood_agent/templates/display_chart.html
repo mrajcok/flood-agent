@@ -1,11 +1,14 @@
 <div class="display chart" data-spec="{{ spec_json }}"
+     @table-refreshed="render()"
      x-data="{ view: null, error: false, zoomable: false,
-               async init() {
+               init() { this.render(); },
+               async render() {  /* also after a Refresh of the table: vega reloads the data URL */
                  try {
+                   if (this.view) { this.view.finalize(); this.view = null; }
                    const spec = JSON.parse($el.dataset.spec);
                    this.zoomable = chartIsZoomable(spec);
                    const res = await vegaEmbed($refs.target, chartEmbedSpec(spec), { actions: false });  /* static/chart.js */
-                   this.view = res.view;
+                   this.view = res.view; this.error = false;
                  } catch (e) { this.error = true; }
                },
                destroy() { if (this.view) { this.view.finalize(); this.view = null; } } }">

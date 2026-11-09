@@ -1,0 +1,6 @@
+<p class="count-display"{% if display_id %} data-display-id="{{ display_id }}"{% endif %} x-data="{ value: {{ value }}, asOfMs: {{ computed_at_ms }}, refreshing: false, refreshError: '',
+  async refresh() {
+    const r = await FloodRefresh.run(this, '/api/displays/{{ display_id }}/refresh');
+    if (!r || !r.ok) return;
+    this.value = r.body.value; this.asOfMs = r.body.computed_at_ms;
+  } }"><span class="count-title">{{ title }}</span> <strong class="count-value" x-text="value.toLocaleString('en-US')">{{ "{:,}".format(value) }}</strong> <span class="as-of" data-as-of-ms="{{ computed_at_ms }}" x-text="FloodFormat.formatAsOf(asOfMs)"></span>{% if display_id %}<button type="button" class="refresh" @click="refresh()" :disabled="refreshing" :aria-busy="refreshing" title="Run this count's query again" x-text="refreshing ? 'Refreshing...' : 'Refresh'">Refresh</button> <span class="refresh-error err" role="alert" x-show="refreshError" x-text="refreshError"></span>{% endif %}</p>

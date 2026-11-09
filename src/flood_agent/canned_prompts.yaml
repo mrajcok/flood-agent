@@ -32,6 +32,7 @@
         - name: run_count_query
           args:
             sql: SELECT COUNT(*) FROM flows
+            title: Total flows
     - text: "There are {count} flows in total."
   expect:
     displays: []
@@ -214,6 +215,7 @@
         - name: run_count_query
           args:
             sql: SELECT COUNT(*) FROM flows
+            title: Total flows
     - text: "There are {count} flows in total."
   expect:
     displays: []

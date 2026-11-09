@@ -111,3 +111,18 @@ def test_the_table_info_line_hides_the_refresh_control_with_the_rest(build_agent
     expect(page.get_by_role("button", name="Refresh")).to_be_visible()
     page.evaluate("document.body.classList.add('hide-tables')")
     expect(page.get_by_role("button", name="Refresh")).to_be_hidden()
+
+
+def test_the_truncated_notice_follows_a_refresh(build_agent, live_page, monkeypatch):
+    agent, _, page, _ = ask_for_recent_table(build_agent, live_page, monkeypatch)
+    badge = page.locator(".display .badge-truncated")
+    expect(page.locator(".display tbody tr")).to_have_count(2)
+    expect(badge).to_be_hidden()
+    with closing(sqlite3.connect(agent.tables.path)) as con, con:
+        con.execute("UPDATE result_tables SET max_rows=1")  # the next run is cut to one row
+
+    page.locator(".display .table-name").get_by_role("button", name="Refresh").click()
+
+    expect(page.locator(".display tbody tr")).to_have_count(1)
+    expect(badge).to_be_visible()
+    expect(badge).to_have_text("truncated to 1")

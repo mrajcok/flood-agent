@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS result_tables (
   truncated_to INTEGER,
   retention_ms INTEGER NOT NULL,
   sql TEXT,
-  max_rows INTEGER
+  max_rows INTEGER,
+  refreshed_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS lookup_tables (
   name TEXT PRIMARY KEY,
@@ -105,6 +106,12 @@ class Owned(NamedTuple):
 
     result: list[Table]
     saved: list[Table]
+
+
+def _as_of(row: sqlite3.Row) -> int:
+    """When a table's rows are from: its last Refresh, else its creation. Retention counts from here.
+    `created_at` itself never changes, so the order tables are listed in (and the system prompt) is stable."""
+    return row["refreshed_at"] if row["refreshed_at"] is not None else row["created_at"]
 
 
 def _now() -> int:
@@ -210,14 +217,14 @@ class CatalogView:
             kind="result" if table_names.is_result_table_name(row["name"]) else "saved",
             conversation_id=row["conversation_id"], turn_id=row["turn_id"], title=row["title"],
             columns=json.loads(row["columns"]), request=row["request"], truncated_to=row["truncated_to"],
-            retention_ms=row["retention_ms"], expires_in_ms=row["created_at"] + row["retention_ms"] - self._now(),
-            as_of_ms=row["created_at"], sql=row["sql"], max_rows=row["max_rows"],
+            retention_ms=row["retention_ms"], expires_in_ms=_as_of(row) + row["retention_ms"] - self._now(),
+            as_of_ms=_as_of(row), sql=row["sql"], max_rows=row["max_rows"],
             policy=self.policy,
         )
 
     @staticmethod
     def _is_live(row: sqlite3.Row, now: int) -> bool:
-        return not row["expired"] and row["created_at"] + row["retention_ms"] > now
+        return not row["expired"] and _as_of(row) + row["retention_ms"] > now
 
     def __getitem__(self, name: str) -> Table:
         """The live Result or Saved Table `name` (any case). KeyError if no such table is registered;
@@ -303,7 +310,7 @@ class Catalog(CatalogView):
         with closing(self._connect()) as con, con:
             con.executescript(SCHEMA)
             have = {r["name"] for r in con.execute("PRAGMA table_info(result_tables)")}
-            for column, type_ in (("sql", "TEXT"), ("max_rows", "INTEGER")):  # added for Refresh (ADR 0006)
+            for column, type_ in (("sql", "TEXT"), ("max_rows", "INTEGER"), ("refreshed_at", "INTEGER")):  # for Refresh (ADR 0006)
                 if column not in have:
                     con.execute(f"ALTER TABLE result_tables ADD COLUMN {column} {type_}")
 
@@ -325,12 +332,20 @@ class Catalog(CatalogView):
 
     def record_refresh(self, name: str, columns: list[dict], truncated_to: int | None) -> Table:
         """Record that live table `name` now holds fresh rows: its "as of" time is now, its columns and
-        truncation are the new ones, and Retention restarts (its length is kept)."""
-        table = self[name]
+        truncation are the new ones, and Retention restarts (its length is kept). Returns the table as it
+        was before, so a Refresh that then fails can `restore_refresh` it. `TableExpired` if it is not live."""
+        before = self[name]
+        self._write_refresh(before.name, self._now(), columns, truncated_to)
+        return before
+
+    def restore_refresh(self, before: Table) -> None:
+        """Put back what `record_refresh` changed, given the table it returned. Needs no liveness check."""
+        self._write_refresh(before.name, before.as_of_ms, before.columns, before.truncated_to)
+
+    def _write_refresh(self, name: str, as_of_ms: int, columns: list[dict], truncated_to: int | None) -> None:
         with closing(self._connect()) as con, con:
-            con.execute("UPDATE result_tables SET created_at=?, columns=?, truncated_to=? WHERE name=?",
-                        (self._now(), json.dumps(columns), truncated_to, table.name))
-        return self[name]
+            con.execute("UPDATE result_tables SET refreshed_at=?, columns=?, truncated_to=? WHERE name=?",
+                        (as_of_ms, json.dumps(columns), truncated_to, name))
 
     def _drop_physical(self, names: Iterable[str]) -> None:
         names = list(names)
@@ -468,9 +483,9 @@ class Catalog(CatalogView):
         # The generated name holds local time (queries.py), so compare on that basis.
         cutoff = datetime.fromtimestamp(now / 1000) - ORPHAN_AGE
         with closing(self._connect()) as app, closing(self._connect_results()) as results:
-            rows = app.execute("SELECT name, created_at, retention_ms, expired FROM result_tables").fetchall()
+            rows = app.execute("SELECT * FROM result_tables").fetchall()
             registered = {r["name"] for r in rows}
-            due = [r["name"] for r in rows if not r["expired"] and r["created_at"] + r["retention_ms"] <= now]
+            due = [r["name"] for r in rows if not r["expired"] and _as_of(r) + r["retention_ms"] <= now]
             physical = [r[0] for r in results.execute("SELECT name FROM sqlite_master WHERE type='table'")]
             orphans = [n for n in physical if table_names.GENERATED_RE.fullmatch(n) and n not in registered
                        and (_name_time(n) or cutoff) < cutoff]

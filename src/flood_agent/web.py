@@ -42,6 +42,7 @@ from flood_agent.catalog import TableExpired
 from flood_agent.context_usage import context_usage
 from flood_agent.lookup_tables import InvalidLookupTable
 from flood_agent.queries import InvalidSort
+from flood_agent.store import COUNT_KIND
 from flood_agent.trace import context_tokens, short_model, split_system_prompt
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -99,6 +100,15 @@ def create_app(
     def expired_handler(request: Request, exc: TableExpired):
         # Any endpoint reading Result Table rows (rows, PSV, chart rows) gets a clear 410.
         return JSONResponse({"detail": "This result has expired and been deleted. Ask again to regenerate it."}, 410)
+
+    @app.exception_handler(RefreshInProgress)
+    def refresh_in_progress_handler(request: Request, exc: RefreshInProgress):
+        return JSONResponse({"detail": str(exc)}, 409)
+
+    @app.exception_handler(NotRefreshable)
+    @app.exception_handler(RefreshFailed)
+    def refresh_failed_handler(request: Request, exc: NotRefreshable | RefreshFailed):
+        return JSONResponse({"detail": str(exc)}, 422)
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     pending: dict[str, tuple[Conversation, str, int, str, str | None]] = {}
@@ -158,7 +168,7 @@ def create_app(
         expired = shown - agent.tables.live_among(shown)
         prompt_at = None  # where the current turn's prompt is in `items`
         for item in transcript:
-            if item["type"] == "display" and item["kind"] == "count":
+            if item["type"] == "display" and item["kind"] == COUNT_KIND:
                 items.append(item)
             elif item["type"] == "display" and item["kind"] == "chart":
                 spec = resolve_chart_data(item["spec"], item["result_table"])
@@ -434,10 +444,6 @@ def create_app(
             table = agent.refresh_table(result_table)
         except KeyError:
             raise HTTPException(404, "unknown result table")
-        except RefreshInProgress as e:
-            raise HTTPException(409, str(e))
-        except (NotRefreshable, RefreshFailed) as e:
-            raise HTTPException(422, str(e))
         info = queries.describe_results_table(agent.config.results_db, table.name) or {}
         return {**table.to_json(), **info, "truncated_to": table.truncated_to}
 
@@ -449,11 +455,7 @@ def create_app(
         try:
             return agent.refresh_count(display_id)
         except KeyError:
-            raise HTTPException(404, "unknown count")
-        except RefreshInProgress as e:
-            raise HTTPException(409, str(e))
-        except RefreshFailed as e:
-            raise HTTPException(422, str(e))
+            raise HTTPException(404, "unknown Count Display")
 
     @app.post("/api/results/{result_table}/settings")
     def result_table_settings(

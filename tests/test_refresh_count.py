@@ -123,3 +123,16 @@ def test_the_llm_is_told_nothing_and_its_earlier_text_is_left_alone(build_agent,
     refresh(client, display_id)
 
     assert len(llm.calls) == calls and agent.store.messages(cid) == messages
+
+
+def test_a_conversation_deleted_mid_refresh_is_not_found(build_agent, web_client, monkeypatch):
+    client, agent, _, _, cid, display_id = ask(build_agent, web_client)
+    real = queries.run_count_query
+
+    def delete_then_run(*args, **kwargs):
+        agent.store.delete_conversation(cid)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(queries, "run_count_query", delete_then_run)
+    r = refresh(client, display_id)
+    assert r.status_code == 404 and r.json()["detail"] == "unknown Count Display"

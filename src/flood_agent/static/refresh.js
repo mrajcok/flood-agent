@@ -1,6 +1,16 @@
 // Shared by every Refresh control (a table's name line, a Count Display): POST to the refresh URL and
 // return { ok, status, body, error }, where `error` is the plain message to show next to the control.
 window.FloodRefresh = {
+  // The flow both controls share: `state` is the Alpine component with `refreshing` and `refreshError`.
+  // Does nothing (returns null) if a Refresh is already running; otherwise returns post()'s result.
+  async run(state, url) {
+    if (state.refreshing) return null;
+    state.refreshing = true; state.refreshError = "";
+    const r = await this.post(url);
+    state.refreshing = false;
+    if (!r.ok && r.status !== 410) state.refreshError = r.error;
+    return r;
+  },
   async post(url) {
     try {
       const r = await fetch(url, { method: "POST" });

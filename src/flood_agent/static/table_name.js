@@ -27,12 +27,10 @@ document.addEventListener("alpine:init", () => {
     get asOf() { return this.refreshable && this.asOfMs !== null ? FloodFormat.formatAsOf(this.asOfMs) : ""; },
     // Refresh: run the table's stored query again (no LLM) and tell the Display around it to reload its rows.
     async refresh() {
-      if (this.refreshing) return;
-      this.refreshing = true; this.refreshError = "";
-      const r = await FloodRefresh.post(this.settingsUrl.replace(/\/settings$/, "/refresh"));
-      this.refreshing = false;
+      const r = await FloodRefresh.run(this, this.settingsUrl.replace(/\/settings$/, "/refresh"));
+      if (!r) return;
       if (r.status === 410) return this.expire();
-      if (!r.ok) { this.refreshError = r.error; return; }
+      if (!r.ok) return;
       this.apply(r.body);
       this.$dispatch("table-refreshed");
     },

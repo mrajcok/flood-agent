@@ -9,9 +9,10 @@ import logging
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncIterator, Callable, Literal
+from typing import AsyncIterator, Callable, Iterator, Literal
 
 from mcp import StdioServerParameters
 from mcp.types import TextContent
@@ -23,7 +24,7 @@ from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
 from flood_agent.mcp_protocol import QUERY_TOOLS
 from flood_agent.mcp_server import ServerSettings
 from flood_agent.semantic_layer import SemanticLayer
-from flood_agent.store import ConversationStore
+from flood_agent.store import COUNT_KIND, ConversationStore
 from flood_agent.trace import TraceBuilder
 
 log = logging.getLogger("uvicorn.error")  # the app's terminal log
@@ -292,7 +293,7 @@ class Agent:
         self._turn_tasks: set[asyncio.Task] = set()
         self._keyed_turns: dict[str, asyncio.Task] = {}  # running turns by the key `run_turn` was given
         self._stopped_turns: set[asyncio.Task] = set()  # turns `stop_turn` cancelled
-        self._refreshing: set[str] = set()  # tables being refreshed now
+        self._refreshing: set[tuple[str, str | int]] = set()  # ("table", name) or ("count", id) being refreshed now
         self._refreshing_lock = threading.Lock()
         self.tables.sweep()
 
@@ -423,13 +424,9 @@ class Agent:
         `RefreshInProgress` if it is already being refreshed, `RefreshFailed` (with a plain message) if the
         query is rejected or fails. A plain call, not an MCP tool: no rows reach the LLM (ADR 0001)."""
         table = self.tables[name]
-        if not table.refreshable or table.sql is None or table.max_rows is None:
+        if table.sql is None or table.max_rows is None:
             raise NotRefreshable(f"{table.name} has no stored query, so it cannot be refreshed.")
-        with self._refreshing_lock:
-            if table.name in self._refreshing:
-                raise RefreshInProgress(f"{table.name} is already being refreshed.")
-            self._refreshing.add(table.name)
-        try:
+        with self._refresh_guard(("table", table.name), table.name):
             result = queries.run_query(
                 self.config.telemetry_db, self.config.results_db, table.sql, self.config.query_timeout_s,
                 table.max_rows, self.tables.readable(), table.title,
@@ -437,15 +434,32 @@ class Agent:
             if not result["success"]:
                 raise RefreshFailed(self._refresh_error(table.name, result))
             temp = result["result_table"]
+            before = None
             try:
+                # Catalog first: it is the one step that can be undone, and it refuses a table a sweep has
+                # expired. Then the swap, which is atomic.
+                before = self.tables.record_refresh(table.name, result["columns"], result.get("truncated_to"))
                 queries.swap_table(self.config.results_db, temp, table.name)
-                return self.tables.record_refresh(table.name, result["columns"], result.get("truncated_to"))
+                return self.tables[table.name]
             except BaseException:
+                if before is not None:
+                    self.tables.restore_refresh(before)
                 queries.drop_table(self.config.results_db, temp)
+                self.tables[table.name]  # a sweep dropped the table meanwhile: TableExpired, the plain answer
                 raise
+
+    @contextmanager
+    def _refresh_guard(self, key: tuple[str, str | int], label: str) -> Iterator[None]:
+        """Allow one Refresh at a time per `key`; `RefreshInProgress` (naming `label`) for a second."""
+        with self._refreshing_lock:
+            if key in self._refreshing:
+                raise RefreshInProgress(f"{label} is already being refreshed.")
+            self._refreshing.add(key)
+        try:
+            yield
         finally:
             with self._refreshing_lock:
-                self._refreshing.discard(table.name)
+                self._refreshing.discard(key)
 
     @staticmethod
     def _refresh_error(what: str, result: dict) -> str:
@@ -465,24 +479,17 @@ class Agent:
         definition = self.store.count_display(display_id)
         if definition is None:
             raise KeyError(display_id)
-        key = f"count:{display_id}"
-        with self._refreshing_lock:
-            if key in self._refreshing:
-                raise RefreshInProgress("This count is already being refreshed.")
-            self._refreshing.add(key)
-        try:
+        label = f'Count Display "{definition["title"]}"'
+        with self._refresh_guard(("count", display_id), label):
             result = queries.run_count_query(
                 self.config.telemetry_db, self.config.results_db, definition["sql"], self.config.query_timeout_s,
                 self.tables.readable(),
             )
             if not result["success"]:
-                raise RefreshFailed(self._refresh_error(key, result))
+                raise RefreshFailed(self._refresh_error(label, result))
             computed_at_ms = self.config.clock()
             self.store.update_count(display_id, result["count"], computed_at_ms)
             return {"value": result["count"], "computed_at_ms": computed_at_ms}
-        finally:
-            with self._refreshing_lock:
-                self._refreshing.discard(key)
 
     def iter_all_rows(self, result_table: str):
         """Internal data path for PSV export of the full Result Table. Not an LLM tool."""
@@ -650,7 +657,9 @@ class Agent:
             # step's calls have been answered, so a failure partway never leaves history with
             # an unanswered tool_call.
             items: list[tuple[dict, list[tuple]]] = [(assistant, [])]
-            counts: list[tuple[int, CountEvent]] = []  # (index in items, event): emitted once saved, with its id
+            # The step's Display events in call order, sent once the step is saved (a Count Display needs its
+            # id): (event, index in items of the message its Display is saved after).
+            step_displays: list[tuple[DisplayEvent | CountEvent, int]] = []
             for c in calls:
                 call_started = time.monotonic()
                 content, args, executed_sql, failed = await self._run_tool(
@@ -659,17 +668,19 @@ class Agent:
                 failed_attempts += failed
                 trace.tool_call(c.name, args, content, call_started, executed_sql)
                 self._trace_result_table(trace, content)
-                displays = await self._prepare_displays(conversation, content, args, queue, trace)
+                displays, events = self._prepare_displays(conversation, content, args, trace)
+                step_displays += [(e, len(items)) for e in events]
                 count = self._count_display(c.name, content, args)
                 if count:
-                    displays.append(("count", None, {"title": count.title, "value": count.value, "sql": count.sql,
+                    displays.append((COUNT_KIND, None, {"title": count.title, "value": count.value, "sql": count.sql,
                                                      "computed_at_ms": count.computed_at_ms}))
-                    counts.append((len(items), count))
+                    step_displays.append((count, len(items)))
                 items.append(({"role": "tool", "tool_call_id": c.id, "content": content}, displays))
             _, display_ids = self.store.add_step(conversation.id, turn_id, items)
-            for index, count in counts:
-                count.display_id = display_ids[index][-1]
-                await queue.put(count)
+            for event, index in step_displays:
+                if isinstance(event, CountEvent):
+                    event.display_id = display_ids[index][-1]  # a call makes one Display: its count is the last
+                await queue.put(event)
             conversation.messages.extend(m for m, _ in items)
             live.open = False
             if not calls:
@@ -815,22 +826,21 @@ class Agent:
         conversation.messages.append(message)
         return self.store.add_message(conversation.id, turn_id, message)
 
-    async def _prepare_displays(
-        self, conversation: Conversation, tool_content: str, args: dict, queue: asyncio.Queue,
-        trace: TraceBuilder,
-    ) -> list[tuple]:
-        """Emit any Display to the user, and return the Display
-        definitions [(kind, result_table, definition)] to persist with the tool message."""
+    def _prepare_displays(
+        self, conversation: Conversation, tool_content: str, args: dict, trace: TraceBuilder,
+    ) -> tuple[list[tuple], list[DisplayEvent]]:
+        """The Display a tool call made: the definitions [(kind, result_table, definition)] to persist with
+        the tool message, and the events to send the user once the step is saved."""
         assert conversation.id is not None  # run_turn persists the Conversation first
         try:
             payload = json.loads(tool_content)
         except ValueError:
-            return []
+            return [], []
         if not isinstance(payload, dict):
-            return []
+            return [], []
         display = payload.get("display")
         if not display:
-            return []
+            return [], []
         table = display["result_table"]
         # Any live Result Table may be shown (ADR 0003); the Display is saved with this
         # Conversation, but the table stays owned by the one that created it.
@@ -839,12 +849,12 @@ class Agent:
             source = display["spec"]
             resolved = resolve_chart_data(source, table)
             trace.add("chart_spec", result_table=table, source_spec=source, spec=resolved)
-            await queue.put(DisplayEvent("chart", table, spec=resolved, source_spec=source))
-            return [("chart", table, {"spec": source})] if live else []
+            event = DisplayEvent("chart", table, spec=resolved, source_spec=source)
+            return ([("chart", table, {"spec": source})] if live else []), [event]
         if not live:
-            return []
-        await queue.put(DisplayEvent(display["kind"], table, display["columns"]))
-        return [(display["kind"], table, {"columns": display["columns"]})]
+            return [], []
+        return ([(display["kind"], table, {"columns": display["columns"]})],
+                [DisplayEvent(display["kind"], table, display["columns"])])
 
     def _count_display(self, tool: str, content: str, args: dict) -> CountEvent | None:
         """A successful run_count_query makes a Count Display (shown once it is saved). It has no result

@@ -657,7 +657,9 @@ class Agent:
             # step's calls have been answered, so a failure partway never leaves history with
             # an unanswered tool_call.
             items: list[tuple[dict, list[tuple]]] = [(assistant, [])]
-            counts: list[tuple[int, CountEvent]] = []  # (index in items, event): emitted once saved, with its id
+            # The step's Display events in call order, sent once the step is saved (a Count Display needs its
+            # id): (event, index in items of the message its Display is saved after).
+            shown: list[tuple[DisplayEvent | CountEvent, int]] = []
             for c in calls:
                 call_started = time.monotonic()
                 content, args, executed_sql, failed = await self._run_tool(
@@ -666,17 +668,19 @@ class Agent:
                 failed_attempts += failed
                 trace.tool_call(c.name, args, content, call_started, executed_sql)
                 self._trace_result_table(trace, content)
-                displays = await self._prepare_displays(conversation, content, args, queue, trace)
+                displays, events = self._prepare_displays(conversation, content, args, trace)
+                shown += [(e, len(items)) for e in events]
                 count = self._count_display(c.name, content, args)
                 if count:
                     displays.append(("count", None, {"title": count.title, "value": count.value, "sql": count.sql,
                                                      "computed_at_ms": count.computed_at_ms}))
-                    counts.append((len(items), count))
+                    shown.append((count, len(items)))
                 items.append(({"role": "tool", "tool_call_id": c.id, "content": content}, displays))
             _, display_ids = self.store.add_step(conversation.id, turn_id, items)
-            for index, count in counts:
-                count.display_id = display_ids[index][-1]
-                await queue.put(count)
+            for event, index in shown:
+                if isinstance(event, CountEvent):
+                    event.display_id = display_ids[index][-1]  # a call makes one Display: its count is the last
+                await queue.put(event)
             conversation.messages.extend(m for m, _ in items)
             live.open = False
             if not calls:
@@ -822,22 +826,21 @@ class Agent:
         conversation.messages.append(message)
         return self.store.add_message(conversation.id, turn_id, message)
 
-    async def _prepare_displays(
-        self, conversation: Conversation, tool_content: str, args: dict, queue: asyncio.Queue,
-        trace: TraceBuilder,
-    ) -> list[tuple]:
-        """Emit any Display to the user, and return the Display
-        definitions [(kind, result_table, definition)] to persist with the tool message."""
+    def _prepare_displays(
+        self, conversation: Conversation, tool_content: str, args: dict, trace: TraceBuilder,
+    ) -> tuple[list[tuple], list[DisplayEvent]]:
+        """The Display a tool call made: the definitions [(kind, result_table, definition)] to persist with
+        the tool message, and the events to send the user once the step is saved."""
         assert conversation.id is not None  # run_turn persists the Conversation first
         try:
             payload = json.loads(tool_content)
         except ValueError:
-            return []
+            return [], []
         if not isinstance(payload, dict):
-            return []
+            return [], []
         display = payload.get("display")
         if not display:
-            return []
+            return [], []
         table = display["result_table"]
         # Any live Result Table may be shown (ADR 0003); the Display is saved with this
         # Conversation, but the table stays owned by the one that created it.
@@ -846,12 +849,12 @@ class Agent:
             source = display["spec"]
             resolved = resolve_chart_data(source, table)
             trace.add("chart_spec", result_table=table, source_spec=source, spec=resolved)
-            await queue.put(DisplayEvent("chart", table, spec=resolved, source_spec=source))
-            return [("chart", table, {"spec": source})] if live else []
+            event = DisplayEvent("chart", table, spec=resolved, source_spec=source)
+            return ([("chart", table, {"spec": source})] if live else []), [event]
         if not live:
-            return []
-        await queue.put(DisplayEvent(display["kind"], table, display["columns"]))
-        return [(display["kind"], table, {"columns": display["columns"]})]
+            return [], []
+        return ([(display["kind"], table, {"columns": display["columns"]})],
+                [DisplayEvent(display["kind"], table, display["columns"])])
 
     def _count_display(self, tool: str, content: str, args: dict) -> CountEvent | None:
         """A successful run_count_query makes a Count Display (shown once it is saved). It has no result

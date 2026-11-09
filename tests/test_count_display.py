@@ -7,7 +7,7 @@ from contextlib import closing
 
 from conftest import Clock, ScriptedLLM, collect, last_tool_result, tool_call
 
-from flood_agent.agent import CountEvent, TextDelta
+from flood_agent.agent import CountEvent, DisplayEvent, TextDelta
 from flood_agent.llm import TextChunk
 
 COUNT = "SELECT COUNT(*) FROM flows"
@@ -76,3 +76,22 @@ def test_deleting_the_conversation_deletes_its_count_displays(build_agent, web_c
     client.post(f"/c/{cid}/delete", data={"tables": "delete_rt"}, follow_redirects=False)
     with closing(sqlite3.connect(agent.config.app_db)) as con:
         assert con.execute("SELECT COUNT(*) FROM displays WHERE kind='count'").fetchone() == (0,)
+
+
+async def test_a_mixed_step_shows_its_displays_in_call_order_live_and_after_a_reload(make_agent):
+    llm = ScriptedLLM(
+        [tool_call("run_query", call_id="q", sql="SELECT sip FROM flows", title="Sources")],
+        lambda msgs: [tool_call("run_count_query", call_id="a", sql=COUNT, title="All flows"),
+                      tool_call("show_table", call_id="b", result_table=last_tool_result(msgs)["result_table"]),
+                      tool_call("run_count_query", call_id="c", sql=COUNT, title="Again")],
+        [TextChunk("done")],
+    )
+    agent = await make_agent(llm)
+
+    events = await collect(agent, "show me")
+
+    live = ["count" if isinstance(e, CountEvent) else e.kind for e in events if isinstance(e, (CountEvent, DisplayEvent))]
+    (cid,) = [c["id"] for c in agent.store.list_conversations()]
+    reloaded = [i["kind"] for i in agent.store.transcript(cid) if i["type"] == "display"]
+    assert reloaded == ["count", "table", "count"]
+    assert live == reloaded

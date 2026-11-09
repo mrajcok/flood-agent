@@ -36,7 +36,7 @@ def refresh(client, display_id):
 
 def shown(client, cid):
     page = client.get(f"/c/{cid}").text
-    value = re.search(r'class="count-value">([\d,]+)<', page).group(1)
+    value = re.search(r'class="count-value"[^>]*>([\d,]+)<', page).group(1)
     return int(value.replace(",", "")), int(re.search(r'data-as-of-ms="(\d+)"', page).group(1))
 
 

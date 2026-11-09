@@ -186,7 +186,7 @@ class ConversationStore:
                         " definition) VALUES (?,?,?,?,?,?)",
                         (conversation_id, turn_id, mid, kind, table, json.dumps(definition)),
                     )
-                    display_ids[-1].append(cur.lastrowid)
+                    display_ids[-1].append(int(cur.lastrowid or 0))
             con.execute("UPDATE conversations SET last_activity_at=? WHERE id=?", (self._now(), conversation_id))
         return ids, display_ids
 

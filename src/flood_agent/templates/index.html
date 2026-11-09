@@ -23,7 +23,7 @@
     .topbar { flex: none; display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
     .topbar h1 { margin: .6rem 0; }
     .controls { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
-    /* View toggles: sliders that hide traces, live traces and table names. On = shown. */
+    /* View toggles: sliders that hide traces, live traces and table info. On = shown. */
     .hide-traces details.trace, .hide-traces .live-trace, .hide-live .live-trace, .hide-tables .table-name { display: none !important; }
     .view-switch { display: inline-flex; align-items: center; gap: .4rem; font-size: .9rem; cursor: pointer; user-select: none; }
     .view-switch input { appearance: none; width: 2rem; height: 1.1rem; border-radius: 999px; background: #c5cbd8; position: relative; margin: 0; cursor: pointer; transition: background var(--fade, .2s); }
@@ -299,7 +299,7 @@
     {% endif %}
     <label class="view-switch"><input type="checkbox" x-model="show.traces"> Traces</label>
     <label class="view-switch"><input type="checkbox" x-model="show.live" :disabled="!show.traces"> Live traces</label>
-    <label class="view-switch"><input type="checkbox" x-model="show.tables"> Table names</label>
+    <label class="view-switch"><input type="checkbox" x-model="show.tables"> Table info</label>
     <button type="button" class="toggle-all" x-data="{ anyOpen: true }"
             x-init="const refresh = () => { anyOpen = !!document.querySelector('details.turn[open]') };
                     new MutationObserver(refresh).observe(document.getElementById('chat'), { childList: true, subtree: true, attributes: true, attributeFilter: ['open'] });

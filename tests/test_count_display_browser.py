@@ -28,6 +28,6 @@ def test_count_display_shows_title_number_and_as_of_in_reply_order_and_survives_
     text = reply.inner_text()
     assert text.index("Counting.") < text.index("All flows") < text.index("Done counting.")
 
-    page.goto(page.locator("aside a[href^=\"/c/\"]").first.get_attribute("href"))
+    page.goto(page.url.rstrip("/").split("/c/")[0] + page.locator("aside a[href^=\"/c/\"]").first.get_attribute("href"))
     page.locator(".count-display").wait_for()
     expect(page.locator(".count-display .count-value")).to_have_text("3")

@@ -9,9 +9,10 @@ import logging
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncIterator, Callable, Literal
+from typing import AsyncIterator, Callable, Iterator, Literal
 
 from mcp import StdioServerParameters
 from mcp.types import TextContent
@@ -292,7 +293,7 @@ class Agent:
         self._turn_tasks: set[asyncio.Task] = set()
         self._keyed_turns: dict[str, asyncio.Task] = {}  # running turns by the key `run_turn` was given
         self._stopped_turns: set[asyncio.Task] = set()  # turns `stop_turn` cancelled
-        self._refreshing: set[str] = set()  # tables being refreshed now
+        self._refreshing: set[tuple[str, str | int]] = set()  # ("table", name) or ("count", id) being refreshed now
         self._refreshing_lock = threading.Lock()
         self.tables.sweep()
 
@@ -423,13 +424,9 @@ class Agent:
         `RefreshInProgress` if it is already being refreshed, `RefreshFailed` (with a plain message) if the
         query is rejected or fails. A plain call, not an MCP tool: no rows reach the LLM (ADR 0001)."""
         table = self.tables[name]
-        if not table.refreshable or table.sql is None or table.max_rows is None:
+        if table.sql is None or table.max_rows is None:
             raise NotRefreshable(f"{table.name} has no stored query, so it cannot be refreshed.")
-        with self._refreshing_lock:
-            if table.name in self._refreshing:
-                raise RefreshInProgress(f"{table.name} is already being refreshed.")
-            self._refreshing.add(table.name)
-        try:
+        with self._refresh_guard(("table", table.name), table.name):
             result = queries.run_query(
                 self.config.telemetry_db, self.config.results_db, table.sql, self.config.query_timeout_s,
                 table.max_rows, self.tables.readable(), table.title,
@@ -450,9 +447,19 @@ class Agent:
                 queries.drop_table(self.config.results_db, temp)
                 self.tables[table.name]  # a sweep dropped the table meanwhile: TableExpired, the plain answer
                 raise
+
+    @contextmanager
+    def _refresh_guard(self, key: tuple[str, str | int], label: str) -> Iterator[None]:
+        """Allow one Refresh at a time per `key`; `RefreshInProgress` (naming `label`) for a second."""
+        with self._refreshing_lock:
+            if key in self._refreshing:
+                raise RefreshInProgress(f"{label} is already being refreshed.")
+            self._refreshing.add(key)
+        try:
+            yield
         finally:
             with self._refreshing_lock:
-                self._refreshing.discard(table.name)
+                self._refreshing.discard(key)
 
     @staticmethod
     def _refresh_error(what: str, result: dict) -> str:
@@ -472,24 +479,17 @@ class Agent:
         definition = self.store.count_display(display_id)
         if definition is None:
             raise KeyError(display_id)
-        key = f"count:{display_id}"
-        with self._refreshing_lock:
-            if key in self._refreshing:
-                raise RefreshInProgress("This count is already being refreshed.")
-            self._refreshing.add(key)
-        try:
+        label = f'Count Display "{definition["title"]}"'
+        with self._refresh_guard(("count", display_id), label):
             result = queries.run_count_query(
                 self.config.telemetry_db, self.config.results_db, definition["sql"], self.config.query_timeout_s,
                 self.tables.readable(),
             )
             if not result["success"]:
-                raise RefreshFailed(self._refresh_error(key, result))
+                raise RefreshFailed(self._refresh_error(label, result))
             computed_at_ms = self.config.clock()
             self.store.update_count(display_id, result["count"], computed_at_ms)
             return {"value": result["count"], "computed_at_ms": computed_at_ms}
-        finally:
-            with self._refreshing_lock:
-                self._refreshing.discard(key)
 
     def iter_all_rows(self, result_table: str):
         """Internal data path for PSV export of the full Result Table. Not an LLM tool."""

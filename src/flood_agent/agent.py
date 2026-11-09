@@ -137,6 +137,7 @@ class CountEvent:
     value: int
     sql: str
     computed_at_ms: int
+    display_id: int | None = None  # the saved Display, which a Refresh names
 
 
 @dataclass
@@ -434,11 +435,7 @@ class Agent:
                 table.max_rows, self.tables.readable(), table.title,
             )
             if not result["success"]:
-                log.warning("refresh of %s failed: %s", table.name, result.get("raw_error") or result["error"])
-                error = result["error"]
-                if error == queries.ACCESS_DENIED or "no such table" in error:  # a table it read has expired
-                    error = "A table this query reads has expired or been deleted. Ask again to regenerate it."
-                raise RefreshFailed(error)
+                raise RefreshFailed(self._refresh_error(table.name, result))
             temp = result["result_table"]
             try:
                 queries.swap_table(self.config.results_db, temp, table.name)
@@ -449,6 +446,43 @@ class Agent:
         finally:
             with self._refreshing_lock:
                 self._refreshing.discard(table.name)
+
+    @staticmethod
+    def _refresh_error(what: str, result: dict) -> str:
+        """Log a failed Refresh query and return the plain message to show: the sanitised error the LLM path
+        uses, with a table that has expired since put in words."""
+        log.warning("refresh of %s failed: %s", what, result.get("raw_error") or result["error"])
+        error = result["error"]
+        if error == queries.ACCESS_DENIED or "no such table" in error:  # a table it read has expired
+            error = "A table this query reads has expired or been deleted. Ask again to regenerate it."
+        return error
+
+    def refresh_count(self, display_id: int) -> dict:
+        """Refresh a Count Display: run its stored count query again, without the LLM, under the same checks
+        and timeout as the original, and overwrite its number and "as of" time. Returns the new
+        {"value", "computed_at_ms"}. KeyError if unknown, `RefreshInProgress` if already refreshing,
+        `RefreshFailed` (plain message) if the query fails, in which case the old number is kept."""
+        definition = self.store.count_display(display_id)
+        if definition is None:
+            raise KeyError(display_id)
+        key = f"count:{display_id}"
+        with self._refreshing_lock:
+            if key in self._refreshing:
+                raise RefreshInProgress("This count is already being refreshed.")
+            self._refreshing.add(key)
+        try:
+            result = queries.run_count_query(
+                self.config.telemetry_db, self.config.results_db, definition["sql"], self.config.query_timeout_s,
+                self.tables.readable(),
+            )
+            if not result["success"]:
+                raise RefreshFailed(self._refresh_error(key, result))
+            computed_at_ms = self.config.clock()
+            self.store.update_count(display_id, result["count"], computed_at_ms)
+            return {"value": result["count"], "computed_at_ms": computed_at_ms}
+        finally:
+            with self._refreshing_lock:
+                self._refreshing.discard(key)
 
     def iter_all_rows(self, result_table: str):
         """Internal data path for PSV export of the full Result Table. Not an LLM tool."""
@@ -616,6 +650,7 @@ class Agent:
             # step's calls have been answered, so a failure partway never leaves history with
             # an unanswered tool_call.
             items: list[tuple[dict, list[tuple]]] = [(assistant, [])]
+            counts: list[tuple[int, CountEvent]] = []  # (index in items, event): emitted once saved, with its id
             for c in calls:
                 call_started = time.monotonic()
                 content, args, executed_sql, failed = await self._run_tool(
@@ -624,11 +659,17 @@ class Agent:
                 failed_attempts += failed
                 trace.tool_call(c.name, args, content, call_started, executed_sql)
                 self._trace_result_table(trace, content)
-                displays = await self._prepare_displays(
-                    conversation, content, args, queue, trace
-                ) + await self._prepare_count_display(c.name, content, args, queue)
+                displays = await self._prepare_displays(conversation, content, args, queue, trace)
+                count = self._count_display(c.name, content, args)
+                if count:
+                    displays.append(("count", None, {"title": count.title, "value": count.value, "sql": count.sql,
+                                                     "computed_at_ms": count.computed_at_ms}))
+                    counts.append((len(items), count))
                 items.append(({"role": "tool", "tool_call_id": c.id, "content": content}, displays))
-            self.store.add_step(conversation.id, turn_id, items)
+            _, display_ids = self.store.add_step(conversation.id, turn_id, items)
+            for index, count in counts:
+                count.display_id = display_ids[index][-1]
+                await queue.put(count)
             conversation.messages.extend(m for m, _ in items)
             live.open = False
             if not calls:
@@ -805,19 +846,16 @@ class Agent:
         await queue.put(DisplayEvent(display["kind"], table, display["columns"]))
         return [(display["kind"], table, {"columns": display["columns"]})]
 
-    async def _prepare_count_display(self, tool: str, content: str, args: dict, queue: asyncio.Queue) -> list[tuple]:
-        """A successful run_count_query makes a Count Display: emit it and return its definition to persist with
-        the tool message. It has no result table (so no Retention) and lives and dies with its Conversation."""
+    def _count_display(self, tool: str, content: str, args: dict) -> CountEvent | None:
+        """A successful run_count_query makes a Count Display (shown once it is saved). It has no result
+        table (so no Retention) and lives and dies with its Conversation."""
         if tool != "run_count_query":
-            return []
+            return None
         try:
             payload = json.loads(content)
         except ValueError:
-            return []
+            return None
         if not isinstance(payload, dict) or not payload.get("success") or not isinstance(payload.get("count"), int):
-            return []
+            return None
         title = args.get("title")
-        event = CountEvent(title if isinstance(title, str) else "", payload["count"], args["sql"], self.config.clock())
-        await queue.put(event)
-        return [("count", None, {"title": event.title, "value": event.value, "sql": event.sql,
-                                 "computed_at_ms": event.computed_at_ms})]
+        return CountEvent(title if isinstance(title, str) else "", payload["count"], args["sql"], self.config.clock())

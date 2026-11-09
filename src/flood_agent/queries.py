@@ -9,7 +9,7 @@ import os
 import re
 import sqlite3
 import time
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -25,6 +25,29 @@ def rename_table(results_db: Path, old: str, new: str) -> None:
             raise ValueError(f"A table named {new} already exists.")
         con.execute(f"ALTER TABLE {table_names.quote(old)} RENAME TO {table_names.quote(new)}")
         con.commit()
+    finally:
+        con.close()
+
+
+def drop_table(results_db: Path, name: str) -> None:
+    """Drop a table in the results database if it is there."""
+    with closing(sqlite3.connect(results_db)) as con, con:
+        con.execute(f"DROP TABLE IF EXISTS {table_names.quote(name)}")
+
+
+def swap_table(results_db: Path, temp: str, name: str) -> None:
+    """Replace table `name` with `temp` (which takes the name) in one transaction, so a reader sees the
+    old rows or the new, never a missing or half-written table. On error nothing changes."""
+    con = sqlite3.connect(results_db, isolation_level=None, timeout=10)  # autocommit: the BEGIN below is ours
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            con.execute(f"DROP TABLE {table_names.quote(name)}")
+            con.execute(f"ALTER TABLE {table_names.quote(temp)} RENAME TO {table_names.quote(name)}")
+        except BaseException:
+            con.execute("ROLLBACK")
+            raise
+        con.execute("COMMIT")
     finally:
         con.close()
 
@@ -141,6 +164,9 @@ _DENIAL_RE = re.compile(r"is prohibited|not authorized", re.I)
 _QUALIFIED_RE = re.compile(r"\b(?:results|main|temp)\.\w+(?:\.\w+)?", re.I)
 
 
+ACCESS_DENIED = "Access to a table or column was denied."
+
+
 def sanitize_error(message: str) -> str:
     """Strip quoted literals and numbers from an SQLite error before it reaches the LLM.
 
@@ -148,7 +174,7 @@ def sanitize_error(message: str) -> str:
     replaced wholesale so no table or column name from a denied read (possibly another
     Conversation's) reaches the LLM; any other database-qualified reference is redacted."""
     if _DENIAL_RE.search(message):
-        return "Access to a table or column was denied."
+        return ACCESS_DENIED
     message = _QUALIFIED_RE.sub("<table>", message)
     message = re.sub(r"'[^']*'?|\"[^\"]*\"?|`[^`]*`?", "<literal>", message)
     return re.sub(r"(?<![A-Za-z_])\d+(\.\d+)*", "<n>", message)

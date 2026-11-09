@@ -1,5 +1,5 @@
 <div class="display" data-rows-url="{{ rows_url }}" data-psv-url="{{ psv_url }}"
-     @table-renamed="follow($event.detail.old, $event.detail.name)" @table-expired="expired = true; loaded = false"
+     @table-renamed="follow($event.detail.old, $event.detail.name)" @table-expired="expired = true; loaded = false" @table-refreshed="page = 1; load()"
      x-data="{ urls: {},
                follow(old, name) {
                  // A rename (in the name header) changes the table's name in every URL; pages, sorting and PSV use the new one.

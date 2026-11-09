@@ -3,12 +3,13 @@
 //
 // It loads its own settings from data-settings-url. After a rename it dispatches `table-renamed`
 // ({ old, name }) so the Display around it can follow the new name in its URLs; if the table has
-// expired it dispatches `table-expired` and hides.
+// expired it dispatches `table-expired` and hides. A Refresh dispatches `table-refreshed` so the Display reloads.
 document.addEventListener("alpine:init", () => {
   Alpine.data("tableName", () => ({
     settingsUrl: "", name: "", retentionDays: 0, expiresInMs: null, gone: false,
     editing: false, draft: "", choice: "", custom: 0, saveError: "",
     originalChoice: "", retentionTouched: false,
+    refreshable: false, asOfMs: null, refreshing: false, refreshError: "",
     policy: { result_days: 0, saved_days: 0, max_days: 0 },  // the server's Retention policy, set by apply()
 
     async init() {
@@ -21,7 +22,26 @@ document.addEventListener("alpine:init", () => {
     },
     apply(settings) {
       this.name = settings.name; this.retentionDays = settings.retention_days; this.expiresInMs = settings.expires_in_ms;
-      this.policy = settings.policy;
+      this.policy = settings.policy; this.refreshable = !!settings.refreshable; this.asOfMs = settings.as_of_ms;
+    },
+    get asOf() { return this.refreshable && this.asOfMs !== null ? FloodFormat.formatAsOf(this.asOfMs) : ""; },
+    // Refresh: run the table's stored query again (no LLM) and tell the Display around it to reload its rows.
+    async refresh() {
+      if (this.refreshing) return;
+      this.refreshing = true; this.refreshError = "";
+      try {
+        const r = await fetch(this.settingsUrl.replace(/\/settings$/, "/refresh"), { method: "POST" });
+        if (r.status === 410) return this.expire();
+        if (!r.ok) {
+          let detail = "";
+          try { detail = (await r.json()).detail; } catch (e) { /* not JSON */ }
+          this.refreshError = typeof detail === "string" && detail ? detail : "Could not refresh.";
+          return;
+        }
+        this.apply(await r.json());
+        this.$dispatch("table-refreshed");
+      } catch (e) { this.refreshError = "Could not refresh."; }
+      finally { this.refreshing = false; }
     },
     // The Retention choices: the deployment's Result Table default, the Saved Table default, a week and a year.
     get presets() {

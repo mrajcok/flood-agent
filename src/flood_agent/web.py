@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from flood_agent import dev_tools, lookup_tables
+from flood_agent import dev_tools, lookup_tables, queries
 from flood_agent.agent import (
     NO_MODEL,
     Agent,
@@ -27,6 +27,9 @@ from flood_agent.agent import (
     DisplayEvent,
     FlagEvent,
     LlmCallStarted,
+    NotRefreshable,
+    RefreshFailed,
+    RefreshInProgress,
     TablesChoice,
     TextDelta,
     TraceLive,
@@ -413,6 +416,23 @@ def create_app(
             return agent.tables[result_table].to_json()
         except KeyError:
             raise HTTPException(404, "unknown result table")
+
+    @app.post("/api/results/{result_table}/refresh")
+    def refresh_result_table(result_table: str):
+        """Refresh a Result or Saved Table: run its stored query again and replace it under the same name.
+        Plain HTTP, never an MCP tool; the LLM is not involved. 404 unknown, 410 expired, 409 already
+        refreshing, 422 not refreshable or the query failed (the table is then unchanged). Returns the
+        refreshed table's metadata."""
+        try:
+            table = agent.refresh_table(result_table)
+        except KeyError:
+            raise HTTPException(404, "unknown result table")
+        except RefreshInProgress as e:
+            raise HTTPException(409, str(e))
+        except (NotRefreshable, RefreshFailed) as e:
+            raise HTTPException(422, str(e))
+        info = queries.describe_results_table(agent.config.results_db, table.name) or {}
+        return {**table.to_json(), **info, "truncated_to": table.truncated_to}
 
     @app.post("/api/results/{result_table}/settings")
     def result_table_settings(

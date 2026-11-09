@@ -325,10 +325,27 @@
             this.stopping = true;
             fetch('/chat/stop/' + encodeURIComponent(this.turnId), { method: 'POST' }).catch(() => {});
           },
+          hpos: 0, draft: '',
+          recall(e) {
+            /* Up/Down on the first/last line walk through this conversation's earlier prompts; Down past the newest restores the draft. */
+            const box = e.target, up = e.key === 'ArrowUp';
+            if (box.selectionStart !== box.selectionEnd) return;
+            const past = [...document.querySelectorAll('details.turn > summary.user > span:first-child')].map(el => el.textContent);
+            let to;
+            if (up) { if (box.value.slice(0, box.selectionStart).includes('\n') || this.hpos >= past.length) return; to = this.hpos + 1; }
+            else { if (!this.hpos || box.value.slice(box.selectionEnd).includes('\n')) return; to = this.hpos - 1; }
+            if (!this.hpos) this.draft = box.value;
+            const text = to ? past[past.length - to] : this.draft;
+            e.preventDefault();
+            box.select();
+            if (text) document.execCommand('insertText', false, text); else document.execCommand('delete');
+            this.hpos = to;
+          },
           kill: '',
           readline(e) {
             /* Bash/readline editing keys. Ctrl-W is the browser's (it closes the tab), so it is left alone. */
             if (e.isComposing || e.metaKey || e.shiftKey) return;
+            if (!e.ctrlKey && !e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) return this.recall(e);
             const box = e.target, v = box.value, a = box.selectionStart, z = box.selectionEnd;
             const word = /\w/, code = e.code;
             const back = () => { let i = a; while (i > 0 && !word.test(v[i - 1])) i--; while (i > 0 && word.test(v[i - 1])) i--; return i; };
@@ -382,7 +399,7 @@
           const box = $refs.message;
           box.style.height = 'auto';
           box.style.height = box.scrollHeight + box.offsetHeight - box.clientHeight + 'px';
-        } }" @keydown.window="interrupt($event)" @reset="$nextTick(() => { grow(); $refs.message.focus(); })">
+        } }" @keydown.window="interrupt($event)" @reset="hpos = 0; $nextTick(() => { grow(); $refs.message.focus(); })">
     <input type="hidden" id="conversation_id" name="conversation_id" value="{{ current_id or '' }}">
     <div class="chat-box">
       <textarea name="message" x-ref="message" rows="1" data-placeholder="{{ prompt_hint }}" placeholder="{{ canned_hint if starts_canned else prompt_hint }}"{% if starts_canned %} disabled{% endif %} autocomplete="off" required

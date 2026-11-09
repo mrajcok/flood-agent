@@ -1,7 +1,7 @@
 # work items
 - tests are taking too long to run. We need a way for you to only run targeted tests after a change, instead of running all tests.
 
-- ability to update a query if has a "in the last 4 hours" kind of time range
+- ability to update a query if has a "in the last 4 hours" kind of time range. Maybe a "Update query" button that re-runs any queries in the conversation that have relative time ranges? Maybe each prompt/turn should also have an "update query" button or "re-run query" or "refresh"
 - Per J Legg, how can I add workflows to this agent?
   Maybe a "Create workflow" button that opens a dialog with a prompt area and a "Save" button. The prompt area is the same as the main prompt area, but it is saved to a new workflow file in `workflows/` instead of being sent to the LLM. The workflow file is a YAML file with a `prompt` field and an optional `description` field. The workflow can be selected from a dropdown in the main prompt area, and it will replace the current prompt with the workflow's prompt. The workflow can also be edited or deleted from the dropdown.
   The workflow should specify the model, reasoning effort and max query rows.

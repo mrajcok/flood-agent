@@ -332,12 +332,20 @@ class Catalog(CatalogView):
 
     def record_refresh(self, name: str, columns: list[dict], truncated_to: int | None) -> Table:
         """Record that live table `name` now holds fresh rows: its "as of" time is now, its columns and
-        truncation are the new ones, and Retention restarts (its length is kept)."""
-        table = self[name]
+        truncation are the new ones, and Retention restarts (its length is kept). Returns the table as it
+        was before, so a Refresh that then fails can `restore_refresh` it. `TableExpired` if it is not live."""
+        before = self[name]
+        self._write_refresh(before.name, self._now(), columns, truncated_to)
+        return before
+
+    def restore_refresh(self, before: Table) -> None:
+        """Put back what `record_refresh` changed, given the table it returned. Needs no liveness check."""
+        self._write_refresh(before.name, before.as_of_ms, before.columns, before.truncated_to)
+
+    def _write_refresh(self, name: str, as_of_ms: int, columns: list[dict], truncated_to: int | None) -> None:
         with closing(self._connect()) as con, con:
             con.execute("UPDATE result_tables SET refreshed_at=?, columns=?, truncated_to=? WHERE name=?",
-                        (self._now(), json.dumps(columns), truncated_to, table.name))
-        return self[name]
+                        (as_of_ms, json.dumps(columns), truncated_to, name))
 
     def _drop_physical(self, names: Iterable[str]) -> None:
         names = list(names)

@@ -219,3 +219,39 @@ def test_refreshing_a_table_leaves_the_system_prompt_byte_identical(build_agent,
     assert refresh(client, first).status_code == 200
     assert [t.name for t in agent.tables.tables_of(cid)] == [first, second]
     assert agent.semantic_layer.system_prompt(agent.tables.tables_of(cid)) == before
+
+
+def test_a_sweep_dropping_the_table_mid_refresh_gives_the_plain_expired_answer(build_agent, web_client, monkeypatch):
+    client, agent, clock, _, (name,) = ask(build_agent, web_client, RECENT)
+    normal = client.post(f"/api/results/{name}/refresh")  # baseline shape of an expired answer, below
+    assert normal.status_code == 200
+    real = queries.run_query
+
+    def sweep_during(*args, **kwargs):
+        result = real(*args, **kwargs)
+        clock.ms += 2 * DAY
+        agent.tables.sweep()  # the table's Retention is over: its rows are dropped
+        return result
+
+    monkeypatch.setattr(queries, "run_query", sweep_during)
+    r = refresh(client, name)
+    assert r.status_code == 410 and "expired" in r.json()["detail"].lower()
+    assert result_tables_in_results_db(agent) == []  # no temporary table is left behind
+
+
+def test_a_failed_swap_leaves_the_catalog_columns_as_they_were(build_agent, web_client, monkeypatch):
+    client, agent, clock, _, (name,) = ask(build_agent, web_client, RECENT)
+    before = agent.tables[name]
+    clock.ms += HOUR
+
+    def broken(*args, **kwargs):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(queries, "swap_table", broken)
+    try:
+        refresh(client, name)
+    except sqlite3.OperationalError:
+        pass
+    after = agent.tables[name]
+    assert (after.columns, after.as_of_ms, after.truncated_to) == (before.columns, before.as_of_ms, before.truncated_to)
+    assert result_tables_in_results_db(agent) == [name]

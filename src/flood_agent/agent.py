@@ -437,11 +437,18 @@ class Agent:
             if not result["success"]:
                 raise RefreshFailed(self._refresh_error(table.name, result))
             temp = result["result_table"]
+            before = None
             try:
+                # Catalog first: it is the one step that can be undone, and it refuses a table a sweep has
+                # expired. Then the swap, which is atomic.
+                before = self.tables.record_refresh(table.name, result["columns"], result.get("truncated_to"))
                 queries.swap_table(self.config.results_db, temp, table.name)
-                return self.tables.record_refresh(table.name, result["columns"], result.get("truncated_to"))
+                return self.tables[table.name]
             except BaseException:
+                if before is not None:
+                    self.tables.restore_refresh(before)
                 queries.drop_table(self.config.results_db, temp)
+                self.tables[table.name]  # a sweep dropped the table meanwhile: TableExpired, the plain answer
                 raise
         finally:
             with self._refreshing_lock:

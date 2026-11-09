@@ -198,9 +198,11 @@ class ConversationStore:
         return json.loads(row[0]) if row else None
 
     def update_count(self, display_id: int, value: int, computed_at_ms: int) -> None:
-        """Overwrite a Count Display's number and "as of" time (a Refresh)."""
+        """Overwrite a Count Display's number and "as of" time (a Refresh). KeyError if it no longer exists."""
         with closing(self._connect()) as con, con:
             row = con.execute("SELECT definition FROM displays WHERE id=? AND kind='count'", (display_id,)).fetchone()
+            if row is None:
+                raise KeyError(display_id)
             definition = {**json.loads(row[0]), "value": value, "computed_at_ms": computed_at_ms}
             con.execute("UPDATE displays SET definition=? WHERE id=?", (json.dumps(definition), display_id))
 

@@ -449,7 +449,7 @@ def create_app(
         try:
             return agent.refresh_count(display_id)
         except KeyError:
-            raise HTTPException(404, "unknown count")
+            raise HTTPException(404, "unknown Count Display")
         except RefreshInProgress as e:
             raise HTTPException(409, str(e))
         except RefreshFailed as e:

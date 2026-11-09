@@ -54,6 +54,10 @@ _Avoid_: TTL (in user-facing text)
 The record of every table a user can query (Telemetry Database tables, Result Tables, Saved Tables, Lookup Tables), with each one's kind and Retention. It is the only authority on whether a table is live, and on the rules for naming, renaming and deleting tables. Table names ignore case, and are kept in lower case.
 _Avoid_: Registry, table manager
 
+**Refresh**:
+Running a Result Table's, Saved Table's or Count Display's stored query again, without the LLM, and replacing the old result with the new one under the same name. The user refreshes each table or count individually; there is no refresh-all. A refreshed table's Retention starts again.
+_Avoid_: Re-run, update, reload
+
 **Query Metadata**:
 What the LLM is told about a Result Table after a query runs: success or failure, column names and types, row count, and a value-free error message.
 _Avoid_: Query result, response
@@ -80,6 +84,10 @@ _Avoid_: Debug log, details
 **Display**:
 A table or chart the Agent renders for the user from a Result Table or Saved Table.
 _Avoid_: Widget, view, output
+
+**Count Display**:
+A single number from a count query, shown to the user with its title, the time it was computed and a Refresh control. It is saved with its Conversation and has no Retention.
+_Avoid_: Count result, metric
 
 ## Fake Mode
 

@@ -100,12 +100,12 @@ async def test_only_run_query_show_table_and_show_chart_are_llm_tools(make_agent
     assert sorted(llm.tools_seen_names) == ["describe_table", "run_count_query", "run_query", "show_chart", "show_table"]
 
 
-async def test_system_prompt_contains_semantic_layer_and_now(make_agent):
+async def test_system_prompt_contains_semantic_layer_and_the_now_function(make_agent):
     llm = ScriptedLLM([TextChunk("hi")])
-    await collect(await make_agent(llm, clock=lambda: 1_600_000_080_000), "hello")
+    await collect(await make_agent(llm), "hello")
     system = llm.calls[0][0]
     assert system["role"] == "system"
-    assert "etime" in system["content"] and "1600000080000" in system["content"]
+    assert "etime" in system["content"] and "now()" in system["content"]
 
 
 async def test_second_turn_keeps_conversation_history(make_agent):

@@ -5,6 +5,7 @@ writable results database that is ATTACHed to the (read-only) telemetry connecti
 """
 
 import ipaddress
+import os
 import re
 import sqlite3
 import time
@@ -118,6 +119,13 @@ def validate_select(sql: str) -> str:
     return sql
 
 
+def now_ms() -> int:
+    """The SQL function now(): the current time in epoch ms. FIXED_NOW_MS (set by the eval runner)
+    pins it, so a question about "the last hour" has one answer from run to run."""
+    fixed = os.environ.get("FIXED_NOW_MS")
+    return int(fixed) if fixed else int(time.time() * 1000)
+
+
 def in_cidr(ip, cidr):
     """SQLite UDF: 1 if IPv4 `ip` is inside `cidr`, else 0 (NULL/invalid input -> NULL).
     Needs an Ocient mapping when the Telemetry Database moves there."""
@@ -184,6 +192,7 @@ def open_connection(
     con = sqlite3.connect(f"file:{telemetry_db}?mode=ro", uri=True)
     con.execute("ATTACH DATABASE ? AS results", (f"file:{results_db}?mode=rwc",))
     con.create_function("in_cidr", 2, in_cidr, deterministic=True)
+    con.create_function("now", 0, now_ms)
     con.set_authorizer(_authorizer(allowed_tables))
     return con
 

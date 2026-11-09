@@ -45,6 +45,7 @@ class AgentConfig:
     max_failed_attempts: int
     max_llm_steps: int
     clock: Callable[[], int] = lambda: int(time.time() * 1000)  # epoch ms; injectable for tests
+    fixed_now_ms: int | None = None  # pins SQL now() in the MCP server process (evals); None is the wall clock
 
     def spec_of(self, model_id: str) -> ModelSpec | None:
         """The curated model with this id; None for an id outside the list (NO_MODEL included)."""
@@ -323,6 +324,7 @@ class Agent:
             query_timeout_s=self.config.query_timeout_s,
             chart_row_cap=self.config.chart_row_cap,
             telemetry_tables=tuple(self.semantic_layer.table_names()),
+            fixed_now_ms=self.config.fixed_now_ms,
         )
 
     def _server_params(self) -> StdioServerParameters:
@@ -511,7 +513,7 @@ class Agent:
         tools = connection.tools
         failed_attempts = 0
         for call_number in range(1, self.config.max_llm_steps + 1):
-            system_prompt = self.semantic_layer.system_prompt(self.tables.tables_of(conversation.id), self.config.clock())
+            system_prompt = self.semantic_layer.system_prompt(self.tables.tables_of(conversation.id))
             messages = [{"role": "system", "content": system_prompt}]
             messages += conversation.messages
             text, calls, usage = "", [], None

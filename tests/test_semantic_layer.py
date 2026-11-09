@@ -17,9 +17,3 @@ def test_the_system_prompt_asks_for_thousands_separators_in_stated_counts():
     prompt = SemanticLayer(REAL).system_prompt()
     assert "thousands separators" in prompt and "17,392" in prompt
 
-
-def test_the_system_prompt_gives_the_current_time_not_the_end_of_the_data():
-    now = 1_800_000_123_456  # 2027-01-15 08:02:03 UTC
-    prompt = SemanticLayer(REAL).system_prompt(now_ms=now)
-    assert "2027-01-15 08:02 UTC" in prompt and str(now // 60_000 * 60_000) in prompt
-    assert "window_end" not in prompt and "wall clock" not in prompt

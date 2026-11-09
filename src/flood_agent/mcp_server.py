@@ -43,6 +43,7 @@ class ServerSettings:
     query_timeout_s: float
     chart_row_cap: int
     telemetry_tables: tuple[str, ...] = ()  # Telemetry Database table names, static, from the Semantic Layer
+    fixed_now_ms: int | None = None  # pins SQL now() (evals); None is the wall clock
 
     def to_env(self) -> dict[str, str]:
         env = {
@@ -54,6 +55,8 @@ class ServerSettings:
         }
         if self.app_db is not None:
             env["APP_DB"] = str(self.app_db)
+        if self.fixed_now_ms is not None:
+            env["FIXED_NOW_MS"] = str(self.fixed_now_ms)
         return env
 
     @classmethod
@@ -65,6 +68,7 @@ class ServerSettings:
             query_timeout_s=float(env["QUERY_TIMEOUT_S"]),
             chart_row_cap=int(env["CHART_ROW_CAP"]),
             telemetry_tables=tuple(json.loads(env.get("TELEMETRY_TABLES", "[]"))),
+            fixed_now_ms=int(env["FIXED_NOW_MS"]) if env.get("FIXED_NOW_MS") else None,
         )
 
 

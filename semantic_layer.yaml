@@ -25,6 +25,13 @@ tables:
       bytes: {type: INTEGER, unit: bytes, description: Total bytes in the flow, example: 1500}
       pkts: {type: INTEGER, unit: packets, description: Total packets in the flow, example: 3}
 functions:
+  now:
+    signature: now()
+    description: >-
+      The current time in epoch ms UTC, the same unit as stime and etime. Use it for every relative
+      time range ("last 2 hours"): WHERE etime >= now() - 2 * 3600 * 1000. It is a SQLite UDF;
+      in Ocient, now() returns a timestamp and needs converting to epoch ms.
+    example: "etime >= now() - 3600 * 1000"
   in_cidr:
     signature: in_cidr(ip, cidr)
     description: >-

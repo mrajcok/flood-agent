@@ -1,7 +1,5 @@
 """The Semantic Layer: a hand-authored YAML file rendered into the system prompt."""
 
-import time
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -56,8 +54,10 @@ counts). Rules:
   table or chart instead. Any IP address or large number in your reply that is not in the
   user's messages, the Semantic Layer or Query Metadata, or a run_count_query count is flagged to the user as unverified.
 - Filter time ranges on the Time Key column (etime), never on stime.
-- Resolve relative time phrases ("last hour", "yesterday", "past 15 minutes") against
-  "now", the current time given below. When you mention a time to
+- Resolve relative time phrases ("last hour", "yesterday", "past 15 minutes") with the SQL
+  function now() (epoch ms), e.g. `etime >= now() - 2 * 3600 * 1000`. You are not told the
+  current time and cannot know it: never write an absolute timestamp for a relative phrase.
+  When you mention a time to
   the user, write it as a UTC date and time (e.g. 2026-01-07 23:00 UTC), not epoch ms.
 - Map protocol names and TCP flag names to values using the enums in the Semantic Layer
   (tcp_flags is a bitmask: test with `tcp_flags & 2 != 0`).
@@ -99,13 +99,11 @@ class SemanticLayer:
     def render(self) -> str:
         return yaml.safe_dump(self.data, sort_keys=False)
 
-    def system_prompt(self, result_tables: "list[Table] | None" = None, now_ms: int | None = None) -> str:
-        """`now_ms` is the current time in epoch ms (the wall clock when None), given to the LLM to the minute."""
-        minute = (int(time.time() * 1000) if now_ms is None else now_ms) // 60_000 * 60_000
-        utc = datetime.fromtimestamp(minute / 1000, UTC).strftime("%Y-%m-%d %H:%M UTC")
+    def system_prompt(self, result_tables: "list[Table] | None" = None) -> str:
+        """Everything before the Result Tables section is the same on every turn, so the LLM can cache it."""
         return (
             f"{SYSTEM_INSTRUCTIONS}\n"
-            f"The current time is {utc} (epoch ms {minute}); treat 'now' as that.\n\n"
+            "\n"
             f"# Semantic Layer\n{self.render()}"
             f"{self.render_result_tables(result_tables or [])}"
         )

@@ -100,6 +100,15 @@ def create_app(
         # Any endpoint reading Result Table rows (rows, PSV, chart rows) gets a clear 410.
         return JSONResponse({"detail": "This result has expired and been deleted. Ask again to regenerate it."}, 410)
 
+    @app.exception_handler(RefreshInProgress)
+    def refresh_in_progress_handler(request: Request, exc: RefreshInProgress):
+        return JSONResponse({"detail": str(exc)}, 409)
+
+    @app.exception_handler(NotRefreshable)
+    @app.exception_handler(RefreshFailed)
+    def refresh_failed_handler(request: Request, exc: NotRefreshable | RefreshFailed):
+        return JSONResponse({"detail": str(exc)}, 422)
+
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     pending: dict[str, tuple[Conversation, str, int, str, str | None]] = {}
 
@@ -434,10 +443,6 @@ def create_app(
             table = agent.refresh_table(result_table)
         except KeyError:
             raise HTTPException(404, "unknown result table")
-        except RefreshInProgress as e:
-            raise HTTPException(409, str(e))
-        except (NotRefreshable, RefreshFailed) as e:
-            raise HTTPException(422, str(e))
         info = queries.describe_results_table(agent.config.results_db, table.name) or {}
         return {**table.to_json(), **info, "truncated_to": table.truncated_to}
 
@@ -450,10 +455,6 @@ def create_app(
             return agent.refresh_count(display_id)
         except KeyError:
             raise HTTPException(404, "unknown Count Display")
-        except RefreshInProgress as e:
-            raise HTTPException(409, str(e))
-        except RefreshFailed as e:
-            raise HTTPException(422, str(e))
 
     @app.post("/api/results/{result_table}/settings")
     def result_table_settings(

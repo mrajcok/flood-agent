@@ -1,4 +1,4 @@
-"""The Traces / Live traces / Table names sliders along the top, driven in headless system Chrome."""
+"""The Traces / Live traces / Table info sliders along the top, driven in headless system Chrome."""
 
 import re
 
@@ -16,7 +16,7 @@ def ask_for_a_table(page):
 def test_the_sliders_start_on_and_traces_off_hides_every_trace_and_greys_live_traces(build_agent, live_page):
     page = live_page(agent=build_agent(ScriptedLLM(*table_script())))
     ask_for_a_table(page)
-    traces, live, names = (page.get_by_label(n, exact=True) for n in ("Traces", "Live traces", "Table names"))
+    traces, live, names = (page.get_by_label(n, exact=True) for n in ("Traces", "Live traces", "Table info"))
     for s in (traces, live, names):
         expect(s).to_be_checked()
     expect(page.locator("details.trace").first).to_be_visible()
@@ -28,11 +28,20 @@ def test_the_sliders_start_on_and_traces_off_hides_every_trace_and_greys_live_tr
     expect(live).to_be_enabled()
 
 
-def test_table_names_off_hides_the_name_line_but_not_the_table(build_agent, live_page):
+def test_table_info_off_hides_the_name_line_but_not_the_table(build_agent, live_page):
     page = live_page(agent=build_agent(ScriptedLLM(*table_script())))
     ask_for_a_table(page)
-    page.get_by_label("Table names").uncheck()
+    page.get_by_label("Table info").uncheck()
     expect(page.locator(".display table").first).to_be_visible()
+    expect(page.locator(".table-name").first).to_be_hidden()
+
+
+def test_a_table_names_choice_saved_before_the_rename_still_hides_the_line(build_agent, live_page):
+    page = live_page(agent=build_agent(ScriptedLLM(*table_script())))
+    page.evaluate("localStorage.setItem('viewToggles', JSON.stringify({tables: false}))")
+    page.reload()
+    ask_for_a_table(page)
+    expect(page.get_by_label("Table info")).not_to_be_checked()
     expect(page.locator(".table-name").first).to_be_hidden()
 
 
@@ -46,9 +55,9 @@ def test_live_traces_off_hides_the_live_trace_of_a_running_turn(live_page):
 
 def test_the_choices_survive_a_reload(live_page):
     page = live_page()
-    page.get_by_label("Table names").uncheck()
+    page.get_by_label("Table info").uncheck()
     page.reload()
-    expect(page.get_by_label("Table names")).not_to_be_checked()
+    expect(page.get_by_label("Table info")).not_to_be_checked()
     assert page.evaluate("document.body.classList.contains('hide-tables')")
 
 

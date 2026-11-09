@@ -24,7 +24,9 @@ uv run python -m flood_agent                    # http://127.0.0.1:8000
 ```
 
 To restart automatically when the code, templates, Semantic Layer or `.env` change, run
-`uv run flood-agent-dev` instead (same settings).
+`uv run flood-agent-dev` instead (same settings). It also adds a **Shift data to now** button that moves
+the Telemetry Database's timestamps so its latest record is the current time (the generated data is a
+fixed week, and "the last hour" means the real last hour).
 Reload the page after a restart.
 
 ### Fake Mode ("No model")

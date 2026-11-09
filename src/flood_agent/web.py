@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from flood_agent import lookup_tables
+from flood_agent import dev_tools, lookup_tables
 from flood_agent.agent import (
     NO_MODEL,
     Agent,
@@ -77,9 +77,12 @@ def _table_display_urls(result_table: str) -> dict:
 NEEDS_KEY = "needs OPENROUTER_API_KEY"
 
 
-def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_key: bool = True) -> FastAPI:
+def create_app(
+    agent: Agent, picker: list[PickerEntry] | None = None, has_api_key: bool = True, dev: bool = False
+) -> FastAPI:
     """The Model dropdown lists the curated models, disabled when `has_api_key` is False, then "No model"
-    (Fake Mode, always selectable). The `picker` Canned Prompts show on the page only while it is selected."""
+    (Fake Mode, always selectable). The `picker` Canned Prompts show on the page only while it is selected.
+    `dev` (set by flood-agent-dev only) adds the button and endpoint that shift the Telemetry Database to now."""
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # One long-lived MCP server for the app; a server that can't start fails app startup.
@@ -99,7 +102,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
     def sidebar(current: str | None) -> dict:
         return {
             "conversations": agent.store.list_conversations(), "current_id": current,
-            "picker": picker or [],
+            "picker": picker or [], "dev": dev,
         }
 
     models = [{"id": m.id, "label": m.label, "disabled": not has_api_key, "efforts": m.efforts,
@@ -239,6 +242,13 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, has_api_ke
             raise HTTPException(422, "a conversation name cannot be blank")
         agent.store.rename_conversation(conversation_id, title)
         return RedirectResponse(f"/c/{conversation_id}", status_code=303)
+
+    if dev:
+        @app.post("/api/dev/shift-timestamps")
+        def shift_timestamps():
+            """Move the Telemetry Database's timestamps so its latest record is the current time."""
+            delta = dev_tools.shift_to_now(agent.config.telemetry_db, agent.semantic_layer, agent.config.clock())
+            return {"delta_ms": delta}
 
     @app.post("/api/lookup-tables")
     def add_lookup_table(name: str = Form(""), rows: str = Form(""), overwrite: str = Form("")):

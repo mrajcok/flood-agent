@@ -13,7 +13,6 @@ from flood_agent import queries
 
 LAYER = """\
 dialect: sqlite
-window_end: 1600000100000
 tables:
   flows:
     columns:

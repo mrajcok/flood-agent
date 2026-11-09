@@ -53,8 +53,6 @@ FLOWS = [
 
 TEST_SEMANTIC_LAYER = """\
 dialect: sqlite
-window_start: 1600000000000
-window_end: 1600000100000
 time_key: etime
 tables:
   flows:

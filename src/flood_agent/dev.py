@@ -30,7 +30,7 @@ def serve() -> None:
     os.setpgrp()
     from flood_agent.__main__ import main as run_app
 
-    run_app()
+    run_app(dev=True)
 
 
 def main() -> None:

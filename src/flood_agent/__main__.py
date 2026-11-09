@@ -35,18 +35,18 @@ def log_config() -> dict:
     return config
 
 
-def build_app(settings: Settings | None = None):
+def build_app(settings: Settings | None = None, dev: bool = False):
     settings = settings or Settings()  # pyright: ignore[reportCallIssue]  # pydantic-settings fills fields from env/TOML
     config = settings.agent_config()
     config.results_db.parent.mkdir(parents=True, exist_ok=True)
     picker = picker_entries(load_canned_prompts())
     has_api_key = settings.openrouter_api_key is not None
-    return create_app(Agent(config, settings.client_factory()), picker=picker, has_api_key=has_api_key)
+    return create_app(Agent(config, settings.client_factory()), picker=picker, has_api_key=has_api_key, dev=dev)
 
 
-def main() -> None:
+def main(dev: bool = False) -> None:
     settings = Settings()  # pyright: ignore[reportCallIssue]  # pydantic-settings fills fields from env/TOML
-    uvicorn.run(build_app(settings), host=settings.host, port=settings.port, log_config=log_config())
+    uvicorn.run(build_app(settings, dev=dev), host=settings.host, port=settings.port, log_config=log_config())
 
 
 if __name__ == "__main__":

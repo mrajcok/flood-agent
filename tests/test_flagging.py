@@ -39,12 +39,14 @@ async def test_values_the_llm_legitimately_knows_are_not_flagged(make_agent):
         [tool_call("run_query", sql=SQL + " LIMIT 1000000", title="t")],
         lambda msgs: [TextChunk(
             "You asked about 198.51.100.7 and 3 Gbps. "  # user message
-            "Example source 192.0.2.1, window_end 1600000100000, window 1,600,000,100,000. "  # Semantic Layer
+            "Example source 192.0.2.1, now 1600000080000, window 1,600,000,080,000. "  # system prompt (current time)
             f"The query returned {last_tool_result(msgs)['row_count']} rows; "  # Query Metadata
-            "I filtered on etime < 1600000100000 and limit 1,000,000."  # own SQL
+            "I filtered on etime < 1600000080000 and limit 1,000,000."  # own SQL
         )],
     )
-    events = await collect(await make_agent(llm), "Look at 198.51.100.7 around 3 Gbps")
+    events = await collect(
+        await make_agent(llm, clock=lambda: 1_600_000_080_000), "Look at 198.51.100.7 around 3 Gbps"
+    )
     assert flags_of(events) == []
     assert trace_flags(events) == []
 

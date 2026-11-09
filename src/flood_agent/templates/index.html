@@ -282,6 +282,21 @@
           const c = document.body.classList;
           c.toggle('hide-traces', !this.show.traces); c.toggle('hide-live', !this.show.live); c.toggle('hide-tables', !this.show.tables);
         } }">
+    {% if dev %}
+    <span class="dev-shift" x-data="{ busy: false, msg: '',
+          async shift() {
+            this.busy = true; this.msg = '';
+            try {
+              const r = await fetch('/api/dev/shift-timestamps', { method: 'POST' });
+              const d = await r.json();
+              this.msg = r.ok ? 'Data shifted ' + (d.delta_ms / 86400000).toFixed(2) + ' days; its latest record is now.' : (d.detail || 'Could not shift the data.');
+            } catch (e) { this.msg = 'Could not shift the data.'; }
+            this.busy = false;
+          } }">
+      <button type="button" class="toggle-all" :disabled="busy" @click="shift()" title="Dev mode: move all timestamps so the latest record is the current time">Shift data to now</button>
+      <small role="status" x-show="msg" x-text="msg" x-cloak></small>
+    </span>
+    {% endif %}
     <label class="view-switch"><input type="checkbox" x-model="show.traces"> Traces</label>
     <label class="view-switch"><input type="checkbox" x-model="show.live" :disabled="!show.traces"> Live traces</label>
     <label class="view-switch"><input type="checkbox" x-model="show.tables"> Table names</label>

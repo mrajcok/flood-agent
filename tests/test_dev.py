@@ -46,9 +46,17 @@ def test_the_app_child_runs_in_its_own_process_group():
     itself: a child left in that group is interrupted twice and prints a traceback."""
     code = (
         "import os, flood_agent.__main__ as app, flood_agent.dev as dev\n"
-        "app.main = lambda: print(os.getpgrp() == os.getpid())\n"
+        "app.main = lambda dev: print(os.getpgrp() == os.getpid())\n"
         "dev.serve()\n"
     )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=30)
+
+    assert result.stdout.strip() == "True", result.stderr
+
+
+def test_the_app_child_runs_in_dev_mode():
+    """Only flood-agent-dev offers the Shift data to now button."""
+    code = "import flood_agent.__main__ as app, flood_agent.dev as dev\napp.main = lambda dev: print(dev)\ndev.serve()\n"
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=30)
 
     assert result.stdout.strip() == "True", result.stderr

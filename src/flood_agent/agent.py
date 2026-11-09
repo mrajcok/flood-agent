@@ -5,7 +5,9 @@ The HTTP/SSE layer is a thin adapter over `Agent.run_turn`. The LLM client is in
 
 import asyncio
 import json
+import logging
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,7 +17,7 @@ from mcp import StdioServerParameters
 from mcp.types import TextContent
 
 from flood_agent import flagging, queries
-from flood_agent.catalog import Catalog
+from flood_agent.catalog import Catalog, Table
 from flood_agent.llm import LLMClient, LLMError, ModelSpec, TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
 from flood_agent.mcp_protocol import QUERY_TOOLS
@@ -23,6 +25,21 @@ from flood_agent.mcp_server import ServerSettings
 from flood_agent.semantic_layer import SemanticLayer
 from flood_agent.store import ConversationStore
 from flood_agent.trace import TraceBuilder
+
+log = logging.getLogger("uvicorn.error")  # the app's terminal log
+
+
+class NotRefreshable(Exception):
+    """The table has no stored query, so Refresh cannot run it."""
+
+
+class RefreshInProgress(Exception):
+    """The table is already being refreshed."""
+
+
+class RefreshFailed(Exception):
+    """A Refresh did not complete; the message is plain text safe to show the user."""
+
 
 # Whether deleting a Conversation or exchange also drops its live Result Tables (those still named
 # rt_*). Its Saved Tables are always kept (ADR 0004).
@@ -263,6 +280,8 @@ class Agent:
         self._turn_tasks: set[asyncio.Task] = set()
         self._keyed_turns: dict[str, asyncio.Task] = {}  # running turns by the key `run_turn` was given
         self._stopped_turns: set[asyncio.Task] = set()  # turns `stop_turn` cancelled
+        self._refreshing: set[str] = set()  # tables being refreshed now
+        self._refreshing_lock = threading.Lock()
         self.tables.sweep()
 
     def create_conversation(self) -> str:
@@ -382,6 +401,43 @@ class Agent:
         data["truncated_to"] = table.truncated_to
         data.update(table.to_json())
         return data
+
+    def refresh_table(self, name: str) -> Table:
+        """Refresh a live Result or Saved Table: run its stored query again, without the LLM, and replace
+        it under the same name (ADR 0006). The new rows are built under a temporary name and swapped in,
+        so any failure leaves the table, its rows and its catalog row as they were.
+
+        KeyError if unknown, `TableExpired` if no longer live, `NotRefreshable` if it has no stored query,
+        `RefreshInProgress` if it is already being refreshed, `RefreshFailed` (with a plain message) if the
+        query is rejected or fails. A plain call, not an MCP tool: no rows reach the LLM (ADR 0001)."""
+        table = self.tables[name]
+        if not table.refreshable or table.sql is None or table.max_rows is None:
+            raise NotRefreshable(f"{table.name} has no stored query, so it cannot be refreshed.")
+        with self._refreshing_lock:
+            if table.name in self._refreshing:
+                raise RefreshInProgress(f"{table.name} is already being refreshed.")
+            self._refreshing.add(table.name)
+        try:
+            result = queries.run_query(
+                self.config.telemetry_db, self.config.results_db, table.sql, self.config.query_timeout_s,
+                table.max_rows, self.tables.readable(), table.title,
+            )
+            if not result["success"]:
+                log.warning("refresh of %s failed: %s", table.name, result.get("raw_error") or result["error"])
+                error = result["error"]
+                if error == queries.ACCESS_DENIED or "no such table" in error:  # a table it read has expired
+                    error = "A table this query reads has expired or been deleted. Ask again to regenerate it."
+                raise RefreshFailed(error)
+            temp = result["result_table"]
+            try:
+                queries.swap_table(self.config.results_db, temp, table.name)
+                return self.tables.record_refresh(table.name, result["columns"], result.get("truncated_to"))
+            except BaseException:
+                queries.drop_table(self.config.results_db, temp)
+                raise
+        finally:
+            with self._refreshing_lock:
+                self._refreshing.discard(table.name)
 
     def iter_all_rows(self, result_table: str):
         """Internal data path for PSV export of the full Result Table. Not an LLM tool."""
@@ -610,7 +666,7 @@ class Agent:
                 try:
                     # Straight after the call returns, before any other await, so a turn stopped here
                     # still has its table registered (and so listed and swept).
-                    self._register_result_table(conversation_id, turn_id, content, args, request)
+                    self._register_result_table(conversation_id, turn_id, content, args, request, max_result_rows)
                 except Exception as e:  # the tool ran; only recording its table failed
                     trace.add("registration_error", name=c.name, detail=f"{type(e).__name__}: {e}")
                     return _fail("The query ran but its Result Table could not be recorded. Try again."), args, None, 1
@@ -649,7 +705,9 @@ class Agent:
             trace.add("flag", **item)
         await queue.put(FlagEvent([i["token"] for i in items], items))
 
-    def _register_result_table(self, conversation_id: str, turn_id: int, content: str, args: dict, request: str) -> None:
+    def _register_result_table(
+        self, conversation_id: str, turn_id: int, content: str, args: dict, request: str, max_result_rows: int
+    ) -> None:
         """Record the Result Table a successful query tool call made, with the turn that made it."""
         try:
             payload = json.loads(content)
@@ -659,7 +717,7 @@ class Agent:
             title = args.get("title", "")
             self.tables.register(
                 payload["result_table"], conversation_id, turn_id, title if isinstance(title, str) else "",
-                payload.get("columns", []), request, payload.get("truncated_to"),
+                payload.get("columns", []), request, payload.get("truncated_to"), args.get("sql"), max_result_rows,
             )
 
     @staticmethod

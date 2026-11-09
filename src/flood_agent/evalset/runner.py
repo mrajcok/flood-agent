@@ -31,6 +31,7 @@ from flood_agent.config import Settings
 from flood_agent.evalset.client import UsageMeter
 from flood_agent.evalset.compare import DEFAULT_TOLERANCE, Comparison, compare
 from flood_agent.evalset.golden import Question, load_golden, run_reference
+from flood_agent.generator import END_MS
 from flood_agent.llm import OpenRouterClient
 
 # Row cap for eval runs (the UI picker is the only other source of a cap); large so no golden answer is truncated.
@@ -113,7 +114,8 @@ async def _run_question(model, q, ref, telemetry_db, semantic_layer, client_fact
     llm = UsageMeter(client_factory(model, q.id))
     agent = Agent(
         replace(Settings.from_defaults().agent_config(), telemetry_db=telemetry_db, results_db=results_db,
-                semantic_layer=semantic_layer, model=model, app_db=app_db),
+                semantic_layer=semantic_layer, model=model, app_db=app_db,
+                clock=lambda: END_MS),  # "now" is the end of the data, so "the last hour" has one answer
         lambda _model: llm,
     )
     retries, error, trace = 0, None, None
@@ -212,7 +214,7 @@ def render_json(summary: dict, results: list[QuestionResult]) -> str:
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="Run the golden set against OpenRouter models.")
     p.add_argument("--db", help="generated Telemetry Database (seed 1); default: the telemetry_db setting")
-    p.add_argument("--semantic-layer", help="must carry the same window as --db; default: the semantic_layer setting")
+    p.add_argument("--semantic-layer", help="default: the semantic_layer setting")
     p.add_argument("--models", nargs="+", default=CANDIDATE_MODELS)
     p.add_argument("--questions", nargs="+", help="only these question ids")
     p.add_argument("--out", default="eval-report", help="writes <out>.md and <out>.json")

@@ -511,7 +511,7 @@ class Agent:
         tools = connection.tools
         failed_attempts = 0
         for call_number in range(1, self.config.max_llm_steps + 1):
-            system_prompt = self.semantic_layer.system_prompt(self.tables.tables_of(conversation.id))
+            system_prompt = self.semantic_layer.system_prompt(self.tables.tables_of(conversation.id), self.config.clock())
             messages = [{"role": "system", "content": system_prompt}]
             messages += conversation.messages
             text, calls, usage = "", [], None

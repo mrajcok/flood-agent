@@ -2,8 +2,8 @@
 
     python -m flood_agent.generator [data/telemetry.db] [--seed N] [--scale F]
 
-The generator is the single writer of ``window_start``/``window_end`` in the
-Semantic Layer. Attack parameters are returned and written to
+The data starts at START_MS; the dev server can shift it to end at the current time
+(``dev_tools.shift_to_now``). Attack parameters are returned and written to
 ``<db>.attacks.json`` for the eval set.
 """
 
@@ -11,7 +11,6 @@ import argparse
 import json
 import math
 import random
-import re
 import sqlite3
 from pathlib import Path
 
@@ -19,6 +18,7 @@ START_MS = 1767225600000  # 2026-01-01T00:00:00Z
 DAYS = 7
 MIN_MS = 60_000
 TOTAL_MINUTES = DAYS * 24 * 60
+END_MS = START_MS + DAYS * 86_400_000  # the end of the generated data; the eval runner's fixed "now"
 BASE_PER_MIN = 190.0  # mean baseline Flow Records per minute at scale 1.0
 
 SCHEMA = """
@@ -65,7 +65,7 @@ def _flow(sip, dip, sport, dport, proto, flags, circuit, etime, dur, nbytes, pkt
     return (sip, dip, sport, dport, proto, flags, circuit, etime - dur, etime, nbytes, pkts)
 
 
-def generate(db_path, semantic_layer_path, seed: int = 1, scale: float = 1.0) -> list[dict]:
+def generate(db_path, seed: int = 1, scale: float = 1.0) -> list[dict]:
     """Build the Telemetry Database; return the injected attack records."""
     db_path = Path(db_path)
     rng = random.Random(seed)
@@ -147,30 +147,18 @@ def generate(db_path, semantic_layer_path, seed: int = 1, scale: float = 1.0) ->
     con.commit()
     con.close()
 
-    _write_window(Path(semantic_layer_path), START_MS, START_MS + DAYS * 86_400_000)
     out = list(attacks.values())
     Path(str(db_path) + ".attacks.json").write_text(json.dumps(out, indent=2) + "\n")
     return out
 
 
-def _write_window(path: Path, start: int, end: int) -> None:
-    """Rewrite only the two window lines so the hand-authored YAML is otherwise untouched."""
-    text = path.read_text()
-    for key, val in (("window_start", start), ("window_end", end)):
-        text, n = re.subn(rf"^{key}:.*$", f"{key}: {val}", text, flags=re.M)
-        if n != 1:
-            raise ValueError(f"{path}: expected exactly one top-level {key}")
-    path.write_text(text)
-
-
 def main(argv=None) -> None:
     p = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     p.add_argument("db", nargs="?", default="data/telemetry.db")
-    p.add_argument("--semantic-layer", default="semantic_layer.yaml")
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--scale", type=float, default=1.0)
     a = p.parse_args(argv)
-    attacks = generate(a.db, a.semantic_layer, seed=a.seed, scale=a.scale)
+    attacks = generate(a.db, seed=a.seed, scale=a.scale)
     print(f"wrote {a.db}; attacks: " + ", ".join(f"{x['type']} ({x['flow_count']} flows)" for x in attacks))
 
 

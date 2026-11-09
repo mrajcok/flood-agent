@@ -33,7 +33,7 @@ def generated_once(cache_root: Path) -> Path:
     if not done.is_dir():
         work = Path(tempfile.mkdtemp(dir=cache_root))
         shutil.copy(REAL_SL, work / "semantic_layer.yaml")
-        generate(work / "telemetry.db", work / "semantic_layer.yaml", seed=SEED, scale=SCALE)
+        generate(work / "telemetry.db", seed=SEED, scale=SCALE)
         try:
             os.rename(work, done)  # atomic; fails if another worker got there first
         except OSError:

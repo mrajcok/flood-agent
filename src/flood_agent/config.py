@@ -63,7 +63,7 @@ class Settings(BaseSettings):
         description="Conversations, messages, Displays and Traces."
     )
     semantic_layer: Path = Field(
-        description="Hand-authored Semantic Layer (the generator also writes window_start/window_end into it)."
+        description="Hand-authored Semantic Layer."
     )
     result_ttl_hours: float = Field(
         gt=0, description="Result Tables are deleted this many hours after they are created."

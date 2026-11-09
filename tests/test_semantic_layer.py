@@ -10,9 +10,16 @@ def test_shipped_semantic_layer_declares_dialect_time_key_and_column_examples():
     assert sl.data["dialect"] == "sqlite" and sl.data["time_key"] == "etime"
     for name, col in sl.data["tables"]["flows"]["columns"].items():
         assert "example" in col, name
-    assert str(sl.window_end) in sl.system_prompt()
+    assert "window_end" not in sl.data and "window_start" not in sl.data
 
 
 def test_the_system_prompt_asks_for_thousands_separators_in_stated_counts():
     prompt = SemanticLayer(REAL).system_prompt()
     assert "thousands separators" in prompt and "17,392" in prompt
+
+
+def test_the_system_prompt_gives_the_current_time_not_the_end_of_the_data():
+    now = 1_800_000_123_456  # 2027-01-15 08:02:03 UTC
+    prompt = SemanticLayer(REAL).system_prompt(now_ms=now)
+    assert "2027-01-15 08:02 UTC" in prompt and str(now // 60_000 * 60_000) in prompt
+    assert "window_end" not in prompt and "wall clock" not in prompt

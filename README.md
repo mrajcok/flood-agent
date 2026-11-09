@@ -13,7 +13,7 @@ Requires [uv](https://docs.astral.sh/uv/) (Python 3.11+; the MCP SDK is pinned t
 ```
 uv sync
 uv run python -m flood_agent.generator data/telemetry.db   # 7 days, ~2M Flow Records, 3 injected attacks;
-                                                              # also writes the window into semantic_layer.yaml and data/telemetry.db.attacks.json
+                                                              # also writes data/telemetry.db.attacks.json
 ```
 
 ## Run

@@ -35,10 +35,9 @@ async def test_system_prompt_carries_full_semantic_layer_and_no_telemetry(real_l
     system = llm.calls[0][0]
     assert system["role"] == "system"
     prompt = system["content"]
-    window_end = str(SemanticLayer(REAL).window_end)
-    # dialect, Time Key rule, "now" = window_end, relative phrases
+    # dialect, Time Key rule, the current time, relative phrases
     assert "sqlite" in prompt and "etime" in prompt
-    assert window_end in prompt and "last hour" in prompt
+    assert "current time" in prompt and "last hour" in prompt
     # enums so names map to values
     for needle in ("TCP", "UDP", "ICMP", "SYN", "ACK", "FIN", "RST", "PSH", "URG"):
         assert needle in prompt
@@ -71,4 +70,4 @@ def test_shipped_layer_shape_is_stable_for_table_formatting_and_generator():
     assert cols["proto"]["enum"] == {6: "TCP", 17: "UDP", 1: "ICMP"}
     assert cols["tcp_flags"]["enum_bits"][2] == "SYN"
     assert cols["bytes"]["unit"] == "bytes" and cols["etime"]["unit"] == "epoch ms UTC"
-    assert "window_start" in data and "window_end" in data
+    assert "window_start" not in data and "window_end" not in data

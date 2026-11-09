@@ -1,6 +1,5 @@
 # work items
 - tests are taking too long to run. We need a way for you to only run targeted tests after a change, instead of running all tests.
-- do we have an ADR about not modifying the system prompt so that we're able to cache tokens?
 - Per J Legg, how can I add workflows to this agent?
   Maybe a "Create workflow" button that opens a dialog with a prompt area and a "Save" button. The prompt area is the same as the main prompt area, but it is saved to a new workflow file in `workflows/` instead of being sent to the LLM. The workflow file is a YAML file with a `prompt` field and an optional `description` field. The workflow can be selected from a dropdown in the main prompt area, and it will replace the current prompt with the workflow's prompt. The workflow can also be edited or deleted from the dropdown.
   The workflow should specify the model, reasoning effort and max query rows.

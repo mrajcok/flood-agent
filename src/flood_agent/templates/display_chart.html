@@ -1,6 +1,6 @@
 <div class="display chart" data-spec="{{ spec_json }}"
-     @table-refreshed="render()"
-     x-data="{ view: null, error: false, zoomable: false,
+     @table-refreshed="render()" @table-expired="expired = true"
+     x-data="{ view: null, error: false, zoomable: false, expired: false,
                init() { this.render(); },
                async render() {  /* also after a Refresh of the table: vega reloads the data URL */
                  try {
@@ -13,7 +13,8 @@
                },
                destroy() { if (this.view) { this.view.finalize(); this.view = null; } } }">
   {% if settings_url %}{% with in_chart = true %}{% include "table_name.html" %}{% endwith %}{% endif %}
-  <p x-show="error" x-cloak>Could not render chart.</p>
-  <div x-ref="target" style="width:100%"></div>
-  <p class="chart-hint" x-show="zoomable && !error" x-cloak>Ctrl+scroll to zoom, drag to pan, double-click to reset</p>
+  <p x-show="expired" x-cloak><em>expired</em> (this result has been deleted)</p>
+  <p x-show="error && !expired" x-cloak>Could not render chart.</p>
+  <div x-ref="target" style="width:100%" x-show="!expired"></div>
+  <p class="chart-hint" x-show="zoomable && !error && !expired" x-cloak>Ctrl+scroll to zoom, drag to pan, double-click to reset</p>
 </div>

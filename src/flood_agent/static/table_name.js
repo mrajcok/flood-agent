@@ -1,5 +1,5 @@
 // The table name header over a table or chart Display (templates/table_name.html): the Result Table's
-// name (click to rename it or change its Retention), a copy icon, and the time left before it expires.
+// name, icons to edit (rename it or change its Retention), copy, view (charts), delete and refresh it, and the time left before it expires.
 //
 // It loads its own settings from data-settings-url. After a rename it dispatches `table-renamed`
 // ({ old, name }) so the Display around it can follow the new name in its URLs; if the table has
@@ -7,7 +7,7 @@
 document.addEventListener("alpine:init", () => {
   Alpine.data("tableName", () => ({
     settingsUrl: "", name: "", retentionDays: 0, expiresInMs: null, gone: false,
-    editing: false, draft: "", choice: "", custom: 0, saveError: "",
+    editing: false, confirming: false, draft: "", choice: "", custom: 0, saveError: "",
     originalChoice: "", retentionTouched: false,
     refreshable: false, asOfMs: null, refreshing: false, refreshError: "",
     policy: { result_days: 0, saved_days: 0, max_days: 0 },  // the server's Retention policy, set by apply()
@@ -33,6 +33,16 @@ document.addEventListener("alpine:init", () => {
       if (!r.ok) return;
       this.apply(r.body);
       this.$dispatch("table-refreshed");
+    },
+    // Delete the table (as the Tables dialog does, after the inline confirmation) and show the Display as deleted.
+    async remove() {
+      this.refreshError = "";
+      try {
+        const r = await fetch("/api/tables/" + encodeURIComponent(this.name), { method: "DELETE" });
+        if (!r.ok && r.status !== 404) throw new Error(r.status);
+        this.confirming = false;
+        this.expire();
+      } catch (e) { this.confirming = false; this.refreshError = "Could not delete " + this.name + ". Try again."; }
     },
     // The Retention choices: the deployment's Result Table default, the Saved Table default, a week and a year.
     get presets() {

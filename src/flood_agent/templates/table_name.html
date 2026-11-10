@@ -1,8 +1,16 @@
 <div class="table-name" x-data="tableName()" data-settings-url="{{ settings_url }}" x-show="name && !gone" x-cloak>
-  <button type="button" class="name" x-show="!editing" @click="edit()" title="Click to rename this table (its SQL name) or change how long it is kept" x-text="name"></button>
-  <button type="button" class="copy" x-show="!editing" @click="insertIntoChat(name)" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into the chat'">&#x29C9;</button>
-  {% if in_chart %}<button type="button" class="view" x-show="!editing" @click="$dispatch('view-table', name)" :title="'Show ' + name + ' in a dialog'">View</button>{% endif %}
-  <button type="button" class="refresh" x-show="!editing && refreshable" @click="refresh()" :disabled="refreshing" :aria-busy="refreshing" title="Run this table's query again and replace its rows" x-text="refreshing ? 'Refreshing...' : 'Refresh'">Refresh</button>
+  <span class="name" x-show="!editing" x-text="name"></span>
+  <span class="icons" x-show="!editing && !confirming">
+    <button type="button" class="edit" @click="edit()" :aria-label="'Edit ' + name" title="Rename this table (its SQL name) or change how long it is kept">&#x270E;&#xFE0E;</button>
+    <button type="button" class="copy" @click="insertIntoChat(name)" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into the chat'">&#x29C9;</button>
+    {% if in_chart %}<button type="button" class="view" @click="$dispatch('view-table', name)" :aria-label="'View ' + name" :title="'Show ' + name + ' in a dialog'">&#x25A6;&#xFE0E;</button>{% endif %}
+    <button type="button" class="delete" @click="confirming = true" :aria-label="'Delete ' + name" :title="'Delete ' + name">&#x1F5D1;&#xFE0E;</button>
+    <button type="button" class="refresh" x-show="refreshable" @click="refresh()" :disabled="refreshing" :aria-busy="refreshing" aria-label="Refresh" :title="refreshing ? 'Refreshing...' : 'Run this table\'s query again and replace its rows'" :class="{ busy: refreshing }">&#x21BB;&#xFE0E;</button>
+  </span>
+  <span class="confirm" x-show="confirming && !editing" x-cloak>Delete <code x-text="name"></code>?
+    <button type="button" class="danger" @click="remove()">Delete</button>
+    <button type="button" @click="confirming = false">Cancel</button>
+  </span>
   <span class="expires" x-show="!editing && expiresIn" :title="'Retention: ' + retention" x-text="expiresIn"></span>
   <span class="as-of" x-show="!editing && asOf" x-text="asOf"></span>
   <span class="refresh-error err" role="alert" x-show="refreshError" x-text="refreshError"></span>

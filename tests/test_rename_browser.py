@@ -20,7 +20,7 @@ def ask_for_a_table(build_agent, live_page, days=None):
 
 
 def edit(page, table):
-    page.locator(".table-name .name").click()
+    page.locator(".table-name .edit").click()
     return page.get_by_label("Table name (SQL)"), page.get_by_label("Retention", exact=True)
 
 
@@ -83,7 +83,7 @@ def test_the_copy_icon_next_to_the_table_name_inserts_it_into_the_chat_like_the_
     expect(chat).to_have_value(f"count {table} rows")
     expect(chat).to_be_focused()
 
-    page.locator(".table-name .name").click()  # rename it: the icon copies the new name
+    page.locator(".table-name .edit").click()  # rename it: the icon copies the new name
     page.get_by_label("Table name (SQL)").fill("victims")
     page.get_by_role("button", name="Save").click()
     chat.fill("")
@@ -91,10 +91,10 @@ def test_the_copy_icon_next_to_the_table_name_inserts_it_into_the_chat_like_the_
     expect(chat).to_have_value("victims")
 
 
-def test_the_table_name_has_the_same_pointer_cursor_as_the_copy_icon(build_agent, live_page):
+def test_the_edit_icon_has_the_same_pointer_cursor_as_the_copy_icon(build_agent, live_page):
     _, page, _ = ask_for_a_table(build_agent, live_page)
     cursor = "e => getComputedStyle(e).cursor"
-    assert page.locator(".table-name .name").evaluate(cursor) == page.locator(".table-name .copy").evaluate(cursor) == "pointer"
+    assert page.locator(".table-name .edit").evaluate(cursor) == page.locator(".table-name .copy").evaluate(cursor) == "pointer"
 
 
 def test_the_form_shows_the_deployments_retention_policy(build_agent, live_page):

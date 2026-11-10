@@ -12,6 +12,5 @@
 - run /improve-codebase-architecture with Opus high
 
 # maybe
-- add a view button to the results table when it is above a chart. Open a dialog to show it.
 - validate against the Vega-Lite v5 JSON schema in show_chart. This catches every structural mistake, but it adds a dependency and a large schema file.
 - ability to paste an image into the prompt and have it be processed by the LLM.

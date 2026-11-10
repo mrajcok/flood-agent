@@ -93,7 +93,7 @@
        copy(name) {
          this.$refs.dialog.close();  /* first: a modal dialog keeps focus from the chat box */
          insertIntoChat(name);
-       } }">
+       } }" @view-table.window="view($event.detail)">
     <button type="button" class="sidebar-action" @click="open = true; load()">Tables</button>
     <dialog x-ref="dialog" aria-labelledby="show-tables-title" x-effect="open ? $el.showModal() : $el.open && $el.close()" @close="open = false" @click="closeIfOutside($event)">
       <h3 id="show-tables-title">Tables you can query</h3>

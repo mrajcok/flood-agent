@@ -4,6 +4,7 @@ The HTTP/SSE layer is a thin adapter over `Agent.run_turn`. The LLM client is in
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import sys
@@ -18,14 +19,16 @@ from mcp import StdioServerParameters
 from mcp.types import TextContent
 
 from flood_agent import flagging, queries
-from flood_agent.catalog import Catalog, ConversationTurn, Owner, Table
+from flood_agent.catalog import Catalog, CellRun, ConversationTurn, Owner, Table
 from flood_agent.llm import LLMClient, LLMError, ModelSpec, TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
 from flood_agent.mcp_protocol import QUERY_TOOLS
 from flood_agent.mcp_server import ServerSettings
+from flood_agent.notebooks import DEFAULT_MAX_ROWS, NotebookStore
 from flood_agent.semantic_layer import SemanticLayer
 from flood_agent.store import COUNT_KIND, ConversationStore
-from flood_agent.trace import TraceBuilder
+from flood_agent.trace import TraceBuilder, context_tokens
+from flood_agent.upgrade import drop_pre_notebook_data
 
 log = logging.getLogger("uvicorn.error")  # the app's terminal log
 
@@ -36,6 +39,10 @@ class NotRefreshable(Exception):
 
 class RefreshInProgress(Exception):
     """The table is already being refreshed."""
+
+
+class NotebookBusy(Exception):
+    """A cell in this notebook is already running; only one runs at a time."""
 
 
 class RefreshFailed(Exception):
@@ -124,6 +131,26 @@ class _TurnSink:
 
     def save_trace(self, trace: dict) -> None:
         self.store.save_trace(self.turn_id, trace)
+
+
+class _CellSink:
+    """Stores an AI Cell's Run in the NotebookStore."""
+
+    def __init__(self, store: NotebookStore, notebook_id: str, cell_id: str, run_id: str):
+        self.store, self.run_id = store, run_id
+        self.owner = CellRun(cell_id, run_id)
+        self.key = cell_id
+        self.session_id = f"notebook-{notebook_id}"  # one cache for every cell of a notebook
+
+    def record(self, history: list[dict], message: dict) -> int:
+        history.append(message)
+        return self.store.add_message(self.run_id, message)
+
+    def add_step(self, items):
+        return self.store.add_step(self.run_id, items)
+
+    def save_trace(self, trace: dict) -> None:
+        self.store.save_trace(self.run_id, trace, context_tokens(trace))
 
 
 DAY_MS = 24 * 3600 * 1000
@@ -319,7 +346,9 @@ class Agent:
         self.config = config
         self.client_for = client_for
         self.semantic_layer = SemanticLayer(config.semantic_layer)
+        drop_pre_notebook_data(config.app_db, config.results_db)  # before anything creates the new schema
         self.store = ConversationStore(config.app_db, config.clock)
+        self.notebooks = NotebookStore(config.app_db, config.clock)
         self.tables = Catalog(
             config.app_db, config.clock, config.result_ttl_ms, telemetry_tables=self.semantic_layer.table_names(),
             results_db=config.results_db, on_rename=self.store.follow_rename,
@@ -329,6 +358,7 @@ class Agent:
         self._turn_tasks: set[asyncio.Task] = set()
         self._keyed_turns: dict[str, asyncio.Task] = {}  # running turns by the key `run_turn` was given
         self._stopped_turns: set[asyncio.Task] = set()  # turns `stop_turn` cancelled
+        self._running_cells: dict[str, str] = {}  # notebook id -> the cell running in it now
         self._refreshing: set[tuple[str, str | int]] = set()  # ("table", name) or ("count", id) being refreshed now
         self._refreshing_lock = threading.Lock()
         self.tables.sweep()
@@ -403,6 +433,112 @@ class Agent:
     def _transport(self) -> Transport:
         """How a new connection reaches its server: a stdio subprocess (tests swap in an in-process one)."""
         return stdio_transport(self._server_params())
+
+    # --- Notebooks (AI Cells only so far) ---------------------------------------------------------------
+
+    def create_notebook(self, title: str | None = None) -> str:
+        """Persist a new, empty Notebook ("Notebook N" by default) and return its id."""
+        self.tables.sweep()
+        return self.notebooks.create_notebook(title)
+
+    def add_ai_cell(
+        self, notebook_id: str, prompt: str = "", model: str | None = None, effort: str | None = None,
+        max_rows: int = DEFAULT_MAX_ROWS, after: str | None = None,
+    ) -> str:
+        """Add an AI Cell (after cell `after`, or at the end) whose Draft holds its prompt and settings."""
+        return self.notebooks.add_ai_cell(
+            notebook_id, {"prompt": prompt, "model": model, "effort": effort, "max_rows": max_rows}, after)
+
+    async def run_cell(self, notebook_id: str, cell_id: str) -> AsyncIterator[Event]:
+        """Run an AI Cell, with the settings in its Draft, and stream its events (`start()` first).
+
+        It is sent the system prompt, then the AI Cells above it in order (each as its latest Run stored it:
+        prompt, answer, tool calls and results), then its own prompt; cells below are never sent. Its Run
+        replaces the cell's earlier one. `NotebookBusy` if a cell of this notebook is already running,
+        KeyError if the cell is not in the notebook."""
+        if self._connection is None:
+            raise RuntimeError("Agent not started: call `await agent.start()` or use `async with agent`")
+        cell = self.notebooks.cell(cell_id)
+        if cell["notebook_id"] != notebook_id:
+            raise KeyError(cell_id)
+        if notebook_id in self._running_cells:
+            raise NotebookBusy("A cell in this notebook is already running.")
+        self._running_cells[notebook_id] = cell_id
+        try:
+            task, queue, release = self._start_cell_run(notebook_id, cell)
+        except BaseException:
+            del self._running_cells[notebook_id]
+            raise
+        try:
+            async for item in self._consume(task, queue):
+                yield item
+        finally:
+            release()  # now, not whenever the task's done callback gets its turn
+
+    def _start_cell_run(
+        self, notebook_id: str, cell: dict,
+    ) -> tuple[asyncio.Task, _TurnQueue, Callable[[], None]]:
+        cell_id, draft = cell["id"], cell["draft"]
+        history: list[dict] = []
+        above: list[tuple[str, str]] = []  # (cell id, run id) of each AI Cell above that has run
+        for other in self.notebooks.cells(notebook_id):
+            if other["id"] == cell_id:
+                break
+            if other["run"]:
+                history += repair_history(other["run"]["messages"])
+                above.append((other["id"], other["run"]["id"]))
+        fingerprint = hashlib.sha256(json.dumps(history, sort_keys=True).encode()).hexdigest()
+        settings = {"model": draft.get("model") or self.config.model, "effort": draft.get("effort"),
+                    "max_rows": draft.get("max_rows") or DEFAULT_MAX_ROWS}
+        run_id = self.notebooks.start_run(cell_id, draft["prompt"], settings, fingerprint)
+        sink = _CellSink(self.notebooks, notebook_id, cell_id, run_id)
+
+        def prompt_tables() -> list[Table]:
+            tables = [t for c, r in above for t in self.tables.tables_of_run(c, r)]
+            tables += self.tables.tables_of_run(cell_id, run_id)
+            return sorted(tables, key=lambda t: (t.created_at_ms, t.name))
+
+        queue = _TurnQueue()
+        task = asyncio.create_task(self._produce_cell(
+            history, prompt_tables, sink, draft["prompt"], queue, settings))
+        self._turn_tasks.add(task)
+        task.add_done_callback(self._turn_tasks.discard)
+        self._keyed_turns[cell_id] = task
+
+        def release(_t: asyncio.Task | None = None) -> None:
+            """The cell is no longer running: free the notebook, and close a Run the task could not."""
+            if self._keyed_turns.get(cell_id) is task:
+                del self._keyed_turns[cell_id]
+            if self._running_cells.get(notebook_id) == cell_id:
+                del self._running_cells[notebook_id]
+            if task.done() and self.notebooks.status_of(run_id) == "running":  # cancelled or crashed first
+                self.notebooks.finish_run(run_id, "stopped" if task in self._stopped_turns else "failed")
+        task.add_done_callback(release)
+        return task, queue, release
+
+    async def _produce_cell(
+        self, history: list[dict], prompt_tables: Callable[[], list[Table]], sink: _CellSink, prompt: str,
+        queue: _TurnQueue, settings: dict,
+    ):
+        def end(trace: dict) -> TraceReady:
+            kinds = {e["kind"] for e in trace["entries"]}
+            self.notebooks.finish_run(sink.run_id, "stopped" if "stopped" in kinds else "failed" if "error" in kinds else "ok")
+            return TraceReady(trace)
+
+        try:
+            sink.record(history, {"role": "user", "content": prompt})
+            await self._exchange(history, prompt_tables, sink, prompt, queue, settings["max_rows"],
+                                 settings["model"], settings["effort"], end=end)
+            await queue.put(TurnEnd())
+        except asyncio.CancelledError:
+            raise
+        except BaseException as e:  # surfaced to the consumer
+            await queue.put(e)
+
+    def stop_cell(self, cell_id: str) -> bool:
+        """Stop a running cell now. What it had streamed is kept and its Run is recorded as stopped.
+        False if the cell is not running."""
+        return self.stop_turn(cell_id)
 
     def open_conversation(self, conversation_id: str) -> Conversation:
         """Load a saved Conversation (KeyError if unknown)."""
@@ -557,6 +693,13 @@ class Agent:
         if turn_key is not None:
             self._keyed_turns[turn_key] = task
             task.add_done_callback(lambda _t: self._keyed_turns.pop(turn_key, None))
+        async for item in self._consume(task, queue):
+            yield item
+
+    @staticmethod
+    async def _consume(task: asyncio.Task, queue: _TurnQueue) -> AsyncIterator[Event]:
+        """Yield a producer task's events until its end. If the consumer stops early, the task is cancelled
+        and awaited."""
         finished = False
         try:
             while True:

@@ -12,13 +12,13 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncIterator, Callable, Iterator, Literal
+from typing import AsyncIterator, Callable, Iterator, Literal, Protocol
 
 from mcp import StdioServerParameters
 from mcp.types import TextContent
 
 from flood_agent import flagging, queries
-from flood_agent.catalog import Catalog, Table
+from flood_agent.catalog import Catalog, ConversationTurn, Owner, Table
 from flood_agent.llm import LLMClient, LLMError, ModelSpec, TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
 from flood_agent.mcp_protocol import QUERY_TOOLS
@@ -88,6 +88,42 @@ class Conversation:
 
     id: str | None = None
     messages: list[dict] = field(default_factory=list)
+
+
+class ExchangeSink(Protocol):
+    """Where one LLM exchange is stored: its messages, Displays and Trace, and the owner its Result Tables
+    are recorded against. A Conversation turn is one; an AI Cell's Run will be another."""
+
+    @property
+    def owner(self) -> Owner: ...
+    @property
+    def key(self) -> str: ...  # names the exchange to the MCP server (a Conversation id for a turn)
+    @property
+    def session_id(self) -> str: ...  # lets OpenRouter route every step of the exchange to one cache
+
+    def record(self, history: list[dict], message: dict) -> int: ...
+    def add_step(self, items: list[tuple[dict, list[tuple]]]) -> tuple[list[int], list[list[int]]]: ...
+    def save_trace(self, trace: dict) -> None: ...
+
+
+class _TurnSink:
+    """Stores a Conversation turn in the ConversationStore."""
+
+    def __init__(self, store: ConversationStore, conversation_id: str, turn_id: int):
+        self.store, self.turn_id = store, turn_id
+        self.owner = ConversationTurn(conversation_id, turn_id)
+        self.key = conversation_id
+        self.session_id = f"conversation-{conversation_id}"
+
+    def record(self, history: list[dict], message: dict) -> int:
+        history.append(message)
+        return self.store.add_message(self.owner.conversation_id, self.turn_id, message)
+
+    def add_step(self, items):
+        return self.store.add_step(self.owner.conversation_id, self.turn_id, items)
+
+    def save_trace(self, trace: dict) -> None:
+        self.store.save_trace(self.turn_id, trace)
 
 
 DAY_MS = 24 * 3600 * 1000
@@ -566,23 +602,36 @@ class Agent:
         if conversation.id is None:
             conversation.id = self.create_conversation()
         turn_id = self.store.start_turn(conversation.id, user_message)
-        self._record(conversation, turn_id, {"role": "user", "content": user_message})
+        sink = _TurnSink(self.store, conversation.id, turn_id)
+        sink.record(conversation.messages, {"role": "user", "content": user_message})
+        await self._exchange(
+            conversation.messages, lambda: self.tables.tables_of(sink.key), sink, user_message, queue, max_result_rows,
+            model, effort, end=lambda trace: TraceReady(trace, turn_id),
+        )
+
+    async def _exchange(
+        self, history: list[dict], prompt_tables: Callable[[], list[Table]], sink: ExchangeSink, request: str,
+        queue: _TurnQueue, max_result_rows: int, model: str, effort: str | None, end: Callable[[dict], object],
+    ):
+        """The one path an LLM exchange runs through: `history` (already ending in the user's message, extended
+        in place), `prompt_tables` (the Result Tables the system prompt lists, asked before every step), and
+        `sink` (where messages, Displays, Trace and new Result Tables are recorded, whatever owns them)."""
         trace = TraceBuilder(model, on_add=lambda entry: queue.put_nowait(TraceLive(entry)))
         live = _LiveStep()
         try:
-            await self._converse(conversation, turn_id, user_message, trace, queue, max_result_rows, model, effort, live)
+            await self._converse(history, prompt_tables, sink, request, trace, queue, max_result_rows, model, effort, live)
         except asyncio.CancelledError:
             if asyncio.current_task() not in self._stopped_turns:  # the client left or the app is closing
-                self.store.save_trace(turn_id, trace.finish())
+                sink.save_trace(trace.finish())
                 raise
-            self._record_stop(conversation, turn_id, live, trace, queue)
+            self._record_stop(history, sink, live, trace, queue)
         except Exception as e:
-            await self._fail_turn(conversation, turn_id, trace, queue, e)
+            await self._fail_turn(history, sink, trace, queue, e)
         finished = trace.finish()
-        self.store.save_trace(turn_id, finished)
-        await queue.put(TraceReady(finished, turn_id))
+        sink.save_trace(finished)
+        await queue.put(end(finished))
 
-    def _record_stop(self, conversation, turn_id, live: _LiveStep, trace: TraceBuilder, queue: _TurnQueue) -> None:
+    def _record_stop(self, history, sink: ExchangeSink, live: _LiveStep, trace: TraceBuilder, queue: _TurnQueue) -> None:
         """The user stopped the turn: keep the text of the step in progress, and say so, in the page,
         the history and the Trace. A step cut off before its tool calls were answered keeps only its text."""
         partial = live.text if live.open else ""
@@ -590,10 +639,10 @@ class Agent:
             trace.llm_step(live.system_prompt, live.text, [], None, live.started)
         trace.add("stopped")
         message = (partial.rstrip() + "\n\n" if partial.strip() else "") + STOPPED_NOTE
-        self._record(conversation, turn_id, {"role": "assistant", "content": message})
+        sink.record(history, {"role": "assistant", "content": message})
         queue.put_nowait(TextDelta(queue.paragraph_break() + STOPPED_NOTE))
 
-    async def _fail_turn(self, conversation, turn_id, trace: TraceBuilder, queue: _TurnQueue, error: BaseException) -> None:
+    async def _fail_turn(self, history, sink: ExchangeSink, trace: TraceBuilder, queue: _TurnQueue, error: BaseException) -> None:
         """A turn failed partway: tell the user, record it in the Trace and in the history."""
         error = _unwrap(error)
         detail = f"{type(error).__name__}: {error}"
@@ -602,28 +651,27 @@ class Agent:
         else:
             message = f"Sorry, something went wrong while handling that request ({type(error).__name__}). Please try again."
         trace.add("error", message=message, detail=detail)
-        self._record(conversation, turn_id, {"role": "assistant", "content": message})
+        sink.record(history, {"role": "assistant", "content": message})
         await queue.put_notice(message)
         await queue.put(TurnError(message, detail))
 
     async def _converse(
-        self, conversation, turn_id, user_message, trace: TraceBuilder, queue: _TurnQueue, max_result_rows: int,
-        model: str, effort: str | None = None, live: _LiveStep | None = None,
+        self, history: list[dict], prompt_tables: Callable[[], list[Table]], sink: ExchangeSink, user_message: str,
+        trace: TraceBuilder, queue: _TurnQueue, max_result_rows: int, model: str, effort: str | None = None, live: _LiveStep | None = None,
     ):
         live = live or _LiveStep()
         llm = self.client_for(model)
         spec = self.config.spec_of(model)
         # Only a non-default Effort is sent; the default sends nothing extra.
         reasoning = {"effort": effort} if effort and spec and effort != spec.default_effort else None
-        # Lets OpenRouter route every step of this conversation to one cache (the client decides per model).
-        session_id = f"conversation-{conversation.id}"
+        session_id = sink.session_id  # the client decides per model whether to send it
         connection = await self._ensure_connection()
         tools = connection.tools
         failed_attempts = 0
         for call_number in range(1, self.config.max_llm_steps + 1):
-            system_prompt = self.semantic_layer.system_prompt(self.tables.tables_of(conversation.id))
+            system_prompt = self.semantic_layer.system_prompt(prompt_tables())
             messages = [{"role": "system", "content": system_prompt}]
-            messages += conversation.messages
+            messages += history
             text, calls, usage = "", [], None
             step_started = time.monotonic()
             live.text, live.system_prompt, live.started, live.in_trace, live.open = "", system_prompt, step_started, False, True
@@ -663,12 +711,12 @@ class Agent:
             for c in calls:
                 call_started = time.monotonic()
                 content, args, executed_sql, failed = await self._run_tool(
-                    connection, c, queue, trace, conversation.id, turn_id, user_message, max_result_rows
+                    connection, c, queue, trace, sink, user_message, max_result_rows
                 )
                 failed_attempts += failed
                 trace.tool_call(c.name, args, content, call_started, executed_sql)
                 self._trace_result_table(trace, content)
-                displays, events = self._prepare_displays(conversation, content, args, trace)
+                displays, events = self._prepare_displays(content, args, trace)
                 step_displays += [(e, len(items)) for e in events]
                 count = self._count_display(c.name, content, args)
                 if count:
@@ -676,29 +724,29 @@ class Agent:
                                                      "computed_at_ms": count.computed_at_ms}))
                     step_displays.append((count, len(items)))
                 items.append(({"role": "tool", "tool_call_id": c.id, "content": content}, displays))
-            _, display_ids = self.store.add_step(conversation.id, turn_id, items)
+            _, display_ids = sink.add_step(items)
             for event, index in step_displays:
                 if isinstance(event, CountEvent):
                     event.display_id = display_ids[index][-1]  # a call makes one Display: its count is the last
                 await queue.put(event)
-            conversation.messages.extend(m for m, _ in items)
+            history.extend(m for m, _ in items)
             live.open = False
             if not calls:
                 break
             if failed_attempts >= self.config.max_failed_attempts:
-                await self._end_with_notice(conversation, turn_id, GIVE_UP_MESSAGE, queue)
+                await self._end_with_notice(history, sink, GIVE_UP_MESSAGE, queue)
                 break
         else:
             trace.add("step_limit", max_steps=self.config.max_llm_steps)
-            await self._end_with_notice(conversation, turn_id, STEP_LIMIT_MESSAGE, queue)
+            await self._end_with_notice(history, sink, STEP_LIMIT_MESSAGE, queue)
 
-    async def _end_with_notice(self, conversation, turn_id, message: str, queue: _TurnQueue) -> None:
-        self._record(conversation, turn_id, {"role": "assistant", "content": message})
+    async def _end_with_notice(self, history: list[dict], sink: ExchangeSink, message: str, queue: _TurnQueue) -> None:
+        sink.record(history, {"role": "assistant", "content": message})
         await queue.put_notice(message)
 
     async def _run_tool(
         self, connection: McpConnection, c: ToolCallChunk, queue: asyncio.Queue, trace: TraceBuilder,
-        conversation_id: str, turn_id: int, request: str, max_result_rows: int,
+        sink: ExchangeSink, request: str, max_result_rows: int,
     ) -> tuple[str, dict, str | None, int]:
         """Execute one LLM tool call. Returns (content, args, executed_sql, failed 0/1).
 
@@ -721,7 +769,7 @@ class Agent:
             else:
                 args = parsed
                 try:
-                    result = await connection.call_tool(c.name, args, conversation_id, max_result_rows)
+                    result = await connection.call_tool(c.name, args, sink.key, max_result_rows)
                 except Exception as e:  # a broken tool call must not corrupt or abort the turn
                     trace.add("tool_error", name=c.name, detail=f"{type(_unwrap(e)).__name__}: {_unwrap(e)}")
                     return _fail("The tool failed to run. Try again."), args, None, 1
@@ -729,7 +777,7 @@ class Agent:
                 try:
                     # Straight after the call returns, before any other await, so a turn stopped here
                     # still has its table registered (and so listed and swept).
-                    self._register_result_table(conversation_id, turn_id, content, args, request, max_result_rows)
+                    self._register_result_table(sink.owner, content, args, request, max_result_rows)
                 except Exception as e:  # the tool ran; only recording its table failed
                     trace.add("registration_error", name=c.name, detail=f"{type(e).__name__}: {e}")
                     return _fail("The query ran but its Result Table could not be recorded. Try again."), args, None, 1
@@ -769,17 +817,17 @@ class Agent:
         await queue.put(FlagEvent([i["token"] for i in items], items))
 
     def _register_result_table(
-        self, conversation_id: str, turn_id: int, content: str, args: dict, request: str, max_result_rows: int
+        self, owner: Owner, content: str, args: dict, request: str, max_result_rows: int
     ) -> None:
-        """Record the Result Table a successful query tool call made, with the turn that made it."""
+        """Record the Result Table a successful query tool call made, with the owner that made it."""
         try:
             payload = json.loads(content)
         except ValueError:
             return
         if isinstance(payload, dict) and payload.get("success") and payload.get("result_table") and "display" not in payload:
             title = args.get("title", "")
-            self.tables.register(
-                payload["result_table"], conversation_id, turn_id, title if isinstance(title, str) else "",
+            self.tables.register_for(
+                owner, payload["result_table"], title if isinstance(title, str) else "",
                 payload.get("columns", []), request, payload.get("truncated_to"), args.get("sql"), max_result_rows,
             )
 
@@ -821,17 +869,11 @@ class Agent:
             trace.add("query_error", sql=args.get("sql"), raw_error=raw, sanitized_error=meta.get("error"))
         return json.dumps(meta), 1
 
-    def _record(self, conversation: Conversation, turn_id: int, message: dict) -> int:
-        assert conversation.id is not None  # run_turn persists the Conversation first
-        conversation.messages.append(message)
-        return self.store.add_message(conversation.id, turn_id, message)
-
     def _prepare_displays(
-        self, conversation: Conversation, tool_content: str, args: dict, trace: TraceBuilder,
+        self, tool_content: str, args: dict, trace: TraceBuilder,
     ) -> tuple[list[tuple], list[DisplayEvent]]:
         """The Display a tool call made: the definitions [(kind, result_table, definition)] to persist with
         the tool message, and the events to send the user once the step is saved."""
-        assert conversation.id is not None  # run_turn persists the Conversation first
         try:
             payload = json.loads(tool_content)
         except ValueError:

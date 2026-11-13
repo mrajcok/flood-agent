@@ -344,6 +344,8 @@
   <div class="layout">
   <div class="scroll-y" id="history-area">{% include "sidebar.html" %}</div>
   <main>
+  {% set variant = request.query_params.get("variant") if dev else None %}
+  {% if variant in ["A", "B", "C"] %}{% include "prototype_cells.html" %}{% else %}
   <div class="scroll-y" id="prompt-area">
   <div id="chat">
     {% set turn = namespace(open=false) %}
@@ -584,6 +586,7 @@
       </span>
     </div>
   </div>
+  {% endif %}
   </main>
   </div>
   <div class="toast" role="status" x-data="{ added: null, timer: null }" x-show="added" x-transition.opacity x-cloak

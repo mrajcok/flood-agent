@@ -20,8 +20,10 @@ from flood_agent import lookup_tables, queries, table_names
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS result_tables (
   name TEXT PRIMARY KEY,
-  conversation_id TEXT NOT NULL REFERENCES conversations(id),
-  turn_id INTEGER NOT NULL,
+  conversation_id TEXT REFERENCES conversations(id),
+  turn_id INTEGER,
+  cell_id TEXT,
+  run_id TEXT,
   created_at INTEGER NOT NULL,
   title TEXT NOT NULL DEFAULT '',
   columns TEXT NOT NULL DEFAULT '[]',
@@ -66,13 +68,32 @@ class TableExpired(Exception):
 
 
 @dataclass(frozen=True)
+class ConversationTurn:
+    """Who made a Result Table: one turn of a Conversation."""
+
+    conversation_id: str
+    turn_id: int
+
+
+@dataclass(frozen=True)
+class CellRun:
+    """Who made a Result Table: one Run of a notebook Cell."""
+
+    cell_id: str
+    run_id: str
+
+
+Owner = ConversationTurn | CellRun
+
+
+@dataclass(frozen=True)
 class Table:
     """A live Result Table or Saved Table, as the registry describes it (no row values)."""
 
     name: str
     kind: Literal["result", "saved"]
-    conversation_id: str
-    turn_id: int
+    conversation_id: str | None  # None for a table owned by a Cell Run
+    turn_id: int | None
     title: str
     columns: list[dict]
     request: str
@@ -83,6 +104,15 @@ class Table:
     sql: str | None = None  # the query that made it, for Refresh; None for a table made before that was recorded
     max_rows: int | None = None  # the row cap that query ran under
     policy: RetentionPolicy = field(default=RetentionPolicy(result_days=1), compare=False)  # the Catalog's rules
+    cell_id: str | None = None  # set (with run_id) instead of conversation_id and turn_id for a Cell Run's table
+    run_id: str | None = None
+
+    @property
+    def owner(self) -> Owner:
+        if self.cell_id is not None and self.run_id is not None:
+            return CellRun(self.cell_id, self.run_id)
+        assert self.conversation_id is not None and self.turn_id is not None
+        return ConversationTurn(self.conversation_id, self.turn_id)
 
     @property
     def retention_days(self) -> float:
@@ -219,7 +249,7 @@ class CatalogView:
             columns=json.loads(row["columns"]), request=row["request"], truncated_to=row["truncated_to"],
             retention_ms=row["retention_ms"], expires_in_ms=_as_of(row) + row["retention_ms"] - self._now(),
             as_of_ms=_as_of(row), sql=row["sql"], max_rows=row["max_rows"],
-            policy=self.policy,
+            policy=self.policy, cell_id=row["cell_id"], run_id=row["run_id"],
         )
 
     @staticmethod
@@ -263,6 +293,14 @@ class CatalogView:
         with closing(self._connect()) as con:
             rows = con.execute(
                 "SELECT * FROM result_tables WHERE conversation_id=? ORDER BY created_at, name", (conversation_id,))
+            return [self._table(r) for r in rows if self._is_live(r, now)]
+
+    def tables_of_run(self, cell_id: str, run_id: str) -> list[Table]:
+        """The live Result and Saved Tables a Cell Run made, in the order they were created."""
+        now = self._now()
+        with closing(self._connect()) as con:
+            rows = con.execute(
+                "SELECT * FROM result_tables WHERE cell_id=? AND run_id=? ORDER BY created_at, name", (cell_id, run_id))
             return [self._table(r) for r in rows if self._is_live(r, now)]
 
     def names(self) -> list[str]:
@@ -310,7 +348,9 @@ class Catalog(CatalogView):
         with closing(self._connect()) as con, con:
             con.executescript(SCHEMA)
             have = {r["name"] for r in con.execute("PRAGMA table_info(result_tables)")}
-            for column, type_ in (("sql", "TEXT"), ("max_rows", "INTEGER"), ("refreshed_at", "INTEGER")):  # for Refresh (ADR 0006)
+            for column, type_ in (
+                ("sql", "TEXT"), ("max_rows", "INTEGER"), ("refreshed_at", "INTEGER"), ("cell_id", "TEXT"), ("run_id", "TEXT"),
+            ):  # for Refresh (ADR 0006)
                 if column not in have:
                     con.execute(f"ALTER TABLE result_tables ADD COLUMN {column} {type_}")
 
@@ -318,17 +358,28 @@ class Catalog(CatalogView):
         self, name: str, conversation_id: str, turn_id: int, title: str = "", columns: list[dict] | None = None,
         request: str = "", truncated_to: int | None = None, sql: str | None = None, max_rows: int | None = None,
     ) -> None:
-        """Record a new Result Table made by `turn_id`, with the current default Retention. `sql` and
+        """Record a new Result Table made by Conversation turn `turn_id` (see `register_for`)."""
+        self.register_for(ConversationTurn(conversation_id, turn_id), name, title, columns, request, truncated_to, sql, max_rows)
+
+    def register_for(
+        self, owner: Owner, name: str, title: str = "", columns: list[dict] | None = None,
+        request: str = "", truncated_to: int | None = None, sql: str | None = None, max_rows: int | None = None,
+    ) -> None:
+        """Record a new Result Table made by `owner`, with the current default Retention. `sql` and
         `max_rows` (the query and the row cap it ran under) are what Refresh runs again."""
         now = self._now()
+        conversation_id, turn_id, cell_id, run_id = (
+            (owner.conversation_id, owner.turn_id, None, None) if isinstance(owner, ConversationTurn)
+            else (None, None, owner.cell_id, owner.run_id))
         with closing(self._connect()) as con, con:
             con.execute(
-                "INSERT OR IGNORE INTO result_tables(name, conversation_id, turn_id, created_at, title, columns,"
-                " request, truncated_to, retention_ms, sql, max_rows) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (canonical(name), conversation_id, turn_id, now, title, json.dumps(columns or []), request, truncated_to,
-                 self.default_retention_ms, sql, max_rows),
+                "INSERT OR IGNORE INTO result_tables(name, conversation_id, turn_id, cell_id, run_id, created_at, title,"
+                " columns, request, truncated_to, retention_ms, sql, max_rows) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (canonical(name), conversation_id, turn_id, cell_id, run_id, now, title, json.dumps(columns or []), request,
+                 truncated_to, self.default_retention_ms, sql, max_rows),
             )
-            con.execute("UPDATE conversations SET last_activity_at=? WHERE id=?", (now, conversation_id))
+            if conversation_id is not None:
+                con.execute("UPDATE conversations SET last_activity_at=? WHERE id=?", (now, conversation_id))
 
     def record_refresh(self, name: str, columns: list[dict], truncated_to: int | None) -> Table:
         """Record that live table `name` now holds fresh rows: its "as of" time is now, its columns and

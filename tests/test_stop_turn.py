@@ -133,7 +133,7 @@ async def test_a_registration_failure_is_not_reported_as_the_tool_failing(make_a
     def broken(*args, **kwargs):
         raise RuntimeError("catalog down")
 
-    agent.tables.register = broken
+    agent.tables.register_for = broken
     conversation = Conversation()
     async for ev in agent.run_turn(conversation, "ports please", 1000, turn_key="t1"):
         if isinstance(ev, TextDelta) and "Partial" in ev.text:

@@ -106,6 +106,7 @@ class Table:
     policy: RetentionPolicy = field(default=RetentionPolicy(result_days=1), compare=False)  # the Catalog's rules
     cell_id: str | None = None  # set (with run_id) instead of conversation_id and turn_id for a Cell Run's table
     run_id: str | None = None
+    created_at_ms: int = 0  # when it was registered; never changes (as_of_ms moves on a Refresh)
 
     @property
     def owner(self) -> Owner:
@@ -249,7 +250,7 @@ class CatalogView:
             columns=json.loads(row["columns"]), request=row["request"], truncated_to=row["truncated_to"],
             retention_ms=row["retention_ms"], expires_in_ms=_as_of(row) + row["retention_ms"] - self._now(),
             as_of_ms=_as_of(row), sql=row["sql"], max_rows=row["max_rows"],
-            policy=self.policy, cell_id=row["cell_id"], run_id=row["run_id"],
+            policy=self.policy, cell_id=row["cell_id"], run_id=row["run_id"], created_at_ms=row["created_at"],
         )
 
     @staticmethod

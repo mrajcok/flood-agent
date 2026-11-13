@@ -1,0 +1,182 @@
+{#- PROTOTYPE, throwaway (wayfinder ticket #95): where do an AI Cell's settings live?
+    Three variants of a mock notebook, switchable via ?variant=A|B|C on the real page (dev mode only).
+    Read-only: nothing here calls the backend. Model list and Canned Prompts are the real ones. -#}
+{% set canned_list = [] %}
+{% for c in picker %}{% set _ = canned_list.append(c.prompt) %}{% for f in c.follow_ups %}{% set _ = canned_list.append(f.prompt) %}{% endfor %}{% endfor %}
+<style>
+  .nb { padding-right: .5rem; }
+  .nb .cell { position: relative; margin: .9rem 0; border: 1px solid #dfe3ec; border-left: 4px solid #c5cbd8; border-radius: .6rem; padding: .6rem .8rem; background: #fff; }
+  .nb .cell.ai { border-left-color: #4a6fd3; }
+  .nb .cell.sql { border-left-color: #2e8b57; }
+  .nb .cell.md { border-left-color: #b4b8c2; }
+  .nb .cell.sel { box-shadow: 0 0 0 2px #4a6fd3; }
+  .nb .kind { font-size: .7rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #8a91a3; display: flex; gap: .6rem; align-items: center; }
+  .nb .kind .grow { flex: 1; }
+  .nb .kind button { font: inherit; text-transform: none; letter-spacing: 0; font-weight: 400; font-size: .85rem; }
+  .nb .run { border: 1px solid #4a6fd3; background: #4a6fd3; color: #fff; border-radius: .4rem; padding: .1rem .7rem; cursor: pointer; }
+  .nb .run:hover { background: #3b5cb8; }
+  .nb .prompt { margin: .4rem 0 .2rem; padding: .5rem .7rem; background: #e8f0fe; border-radius: .5rem; white-space: pre-wrap; }
+  .nb textarea { width: 100%; box-sizing: border-box; font: inherit; padding: .5rem .7rem; border: 1px solid #cfd5e2; border-radius: .5rem; resize: vertical; margin-top: .4rem; }
+  .nb .answer { margin: .5rem 0; line-height: 1.5; }
+  .nb .display { margin: .4rem 0; padding: .5rem; border: 1px dashed #c5cbd8; border-radius: .4rem; color: #6b7280; font-size: .85rem; }
+  .nb .traceline { font-size: .85rem; color: #6b7280; margin-top: .3rem; }
+  .nb .ranwith { display: inline-flex; gap: .4rem; align-items: center; font-size: .82rem; color: #4b5563; background: #f2f4f8; border-radius: 999px; padding: .1rem .6rem; }
+  .nb .ranwith.changed { background: #fff4dc; color: #8a5a00; }
+  .nb .sqlline { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .85rem; margin-top: .4rem; }
+  .nb .md-body h3 { margin: .2rem 0; font-size: 1.05rem; }
+  .nb .md-body p { margin: .2rem 0; color: #374151; }
+  .nb .stale { color: #8a5a00; font-size: .8rem; }
+  .nb .canned-pick { margin-top: .4rem; }
+  .nb .canned-pick select { width: 100%; font: inherit; padding: .4rem; border: 1px solid #cfd5e2; border-radius: .5rem; }
+  .nb .add { display: flex; gap: .5rem; justify-content: center; margin: .3rem 0 1rem; }
+  .nb .add button { font: inherit; font-size: .85rem; color: #2a4ba0; background: #eef3fd; border: 1px solid #b9c7e6; border-radius: 999px; padding: .15rem .8rem; cursor: pointer; }
+  .nb .chip { font: inherit; font-size: .82rem; color: #2a4ba0; background: #eef3fd; border: 1px solid #b9c7e6; border-radius: 999px; padding: .1rem .7rem; cursor: pointer; }
+  .nb .pop { position: absolute; right: .6rem; top: 2.2rem; z-index: 20; background: #fff; border: 1px solid #cfd5e2; border-radius: .8rem; box-shadow: 0 8px 24px rgba(30,40,80,.18); padding: .7rem; display: grid; gap: .4rem; min-width: 16rem; font-size: .9rem; }
+  .nb label.f { display: grid; grid-template-columns: 5.5rem 1fr; align-items: center; gap: .5rem; }
+  .nb select, .bar select, .nb input.rows, .bar input.rows { font: inherit; font-size: .88rem; padding: .15rem .3rem; border: 1px solid #cfd5e2; border-radius: .4rem; }
+  .nb .settings-row, .bar .settings-row { display: flex; flex-wrap: wrap; gap: .4rem .9rem; align-items: center; font-size: .88rem; color: #444; margin-top: .35rem; }
+  .bar { flex: none; border-top: 1px solid #dfe3ec; padding-top: .5rem; }
+  .bar .target { font-size: .82rem; color: #6b7280; margin-bottom: .2rem; }
+  .bar textarea { width: 100%; box-sizing: border-box; font: inherit; padding: .5rem .7rem; border: 1px solid #cfd5e2; border-radius: .6rem; }
+  .proto-state { font-size: .75rem; color: #6b7280; background: #fafbfc; border: 1px dashed #d6dae3; border-radius: .4rem; padding: .3rem .5rem; margin: .5rem 0 3.5rem; white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace; }
+  .proto-switch { position: fixed; right: 1rem; bottom: 1rem; z-index: 100; display: flex; align-items: center; gap: .6rem;
+                  background: #111827; color: #fff; border-radius: 999px; padding: .35rem .5rem; box-shadow: 0 6px 20px rgba(0,0,0,.35); font-size: .85rem; }
+  .proto-switch a { color: #fff; text-decoration: none; padding: .1rem .55rem; border-radius: 999px; background: #374151; }
+  .proto-switch a:hover { background: #4b5563; }
+</style>
+<div id="chat" hidden></div>
+<div x-data="{
+    variant: {{ variant | tojson | forceescape }},
+    models: {{ models | tojson | forceescape }},
+    noModel: {{ no_model | tojson | forceescape }},
+    canned: {{ canned_list | tojson | forceescape }},
+    last: { model: {{ default_model | tojson | forceescape }}, effort: '', rows: 10000 },
+    selected: 3,
+    popFor: null,
+    nextId: 10,
+    cells: [
+      { id: 1, kind: 'md', text: 'Investigate the spike on circuit A1B2C3D4E5F6' },
+      { id: 2, kind: 'sql', cols: 'circuit, sum(bytes) AS bytes', table: 'flows', tail: 'WHERE etime > now() - 3600 GROUP BY circuit', out: 'rt_20261113_101500 · 42 rows' },
+      { id: 3, kind: 'ai', prompt: 'Which source IPs sent the most bytes to circuit A1B2C3D4E5F6 in the last hour?', draft: null,
+        ran: { model: {{ (models | first).id | tojson | forceescape }}, effort: {{ ((models | first).default_effort or '') | tojson | forceescape }}, rows: 10000 },
+        set: { model: {{ (models | first).id | tojson | forceescape }}, effort: {{ ((models | first).default_effort or '') | tojson | forceescape }}, rows: 10000 },
+        answer: 'The top 10 sources are in the table below; 203.0.113.0/24 dominates.', stale: false },
+      { id: 4, kind: 'ai', prompt: '', draft: '', ran: null, set: null, answer: null, stale: false },
+    ],
+    label(id) { const m = this.models.find(m => m.id === id); return m ? m.label : id },
+    efforts(id) { const m = this.models.find(m => m.id === id); return (m && m.efforts) || [] },
+    fmt(s) { return s ? this.label(s.model) + (s.effort ? ' · ' + s.effort : '') + ' · ≤ ' + Number(s.rows).toLocaleString() + ' rows' : '' },
+    same(a, b) { return a && b && a.model === b.model && a.effort === b.effort && +a.rows === +b.rows },
+    init() { for (const c of this.cells) if (c.kind === 'ai' && !c.set) c.set = { ...this.last } },
+    addAi(at) { const c = { id: this.nextId++, kind: 'ai', prompt: '', draft: '', ran: null, set: { ...this.last }, answer: null, stale: false };
+                this.cells.splice(at, 0, c); this.selected = c.id; return c },
+    sel() { return this.cells.find(c => c.id === this.selected && c.kind === 'ai') },
+    run(c, settings, text) {
+      const s = { ...settings }; const p = (text ?? c.draft ?? c.prompt).trim();
+      if (!p) return;
+      c.prompt = p; c.draft = null; c.ran = s; c.set = { ...s }; this.last = { ...s };
+      c.answer = s.model === this.noModel ? '(Fake Mode) scripted answer to: ' + p : 'Pretend answer from ' + this.label(s.model) + '.';
+      const i = this.cells.indexOf(c); this.cells.slice(i + 1).forEach(x => { if (x.kind === 'ai' && x.ran) x.stale = true });
+    },
+    go(d) { const v = ['A','B','C']; const i = (v.indexOf(this.variant) + d + v.length) % v.length; const u = new URL(location); u.searchParams.set('variant', v[i]); location = u },
+  }" @keydown.window="if (!$event.target.closest('input,textarea,select,[contenteditable]')) { if ($event.key === 'ArrowLeft') go(-1); if ($event.key === 'ArrowRight') go(1) }"
+  style="display: contents">
+
+  {# ---------- the settings controls, shared by the variants that edit settings ---------- #}
+  <template x-if="false"></template>
+
+  <div class="scroll-y nb" id="prompt-area">
+    <template x-for="(c, i) in cells" :key="c.id">
+      <div>
+      <div class="cell" :class="[c.kind, variant === 'B' && c.id === selected ? 'sel' : '']" @click="if (variant === 'B' && c.kind === 'ai') selected = c.id">
+
+        {# Markdown and SQL cells look the same in every variant #}
+        <template x-if="c.kind === 'md'"><div><div class="kind">Markdown <span class="grow"></span><label style="text-transform:none;letter-spacing:0;font-weight:400"><input type="checkbox"> Send to AI</label></div>
+          <div class="md-body"><h3 x-text="c.text"></h3></div></div></template>
+        <template x-if="c.kind === 'sql'"><div><div class="kind">SQL <span class="grow"></span><button class="run" type="button">Run</button></div>
+          <div class="sqlline">SELECT <b x-text="c.cols"></b> FROM <b x-text="c.table"></b> <span x-text="c.tail"></span></div>
+          <div class="display" x-text="'table display: ' + c.out"></div></div></template>
+
+        <template x-if="c.kind === 'ai'"><div>
+          {# ===== Variant A: full settings strip inside every AI Cell ===== #}
+          <template x-if="variant === 'A'"><div>
+            <div class="kind">AI <span class="grow"></span>
+              <span class="stale" x-show="c.stale">cells above changed since this ran</span>
+              <button class="run" type="button" @click="run(c, c.set)" x-text="c.ran ? 'Run again' : 'Run'"></button></div>
+            <template x-if="c.set.model !== noModel"><textarea rows="2" placeholder="Write a prompt" x-model="c.draft" x-init="if (c.draft === null) c.draft = c.prompt"></textarea></template>
+            <template x-if="c.set.model === noModel"><div class="canned-pick"><select @change="run(c, c.set, $event.target.value)"><option value="">No model: pick a Canned Prompt to run…</option>
+              <template x-for="p in canned"><option :value="p" x-text="p"></option></template></select></div></template>
+            <div class="settings-row">
+              <select x-model="c.set.model" @change="c.set.effort = efforts(c.set.model)[0] || ''"><template x-for="m in models" :key="m.id"><option :value="m.id" x-text="m.label" :selected="m.id === c.set.model"></option></template></select>
+              <select x-model="c.set.effort" :disabled="!efforts(c.set.model).length"><option value="">no effort</option><template x-for="e in efforts(c.set.model)"><option :value="e" x-text="e" :selected="e === c.set.effort"></option></template></select>
+              <span>≤ <input class="rows" size="7" x-model="c.set.rows"> rows per query</span>
+              <span style="flex:1"></span><span style="color:#8a91a3">context 12k / 1M</span>
+            </div>
+            <template x-if="c.ran"><div>
+              <div class="answer" x-text="c.answer"></div><div class="display">table display: rt_20261113_102233 · 10 rows</div>
+              <div class="traceline">▸ Trace · ran with <span x-text="fmt(c.ran)"></span> · 2 LLM calls · $0.012</div>
+              <div class="traceline" x-show="!same(c.ran, c.set)" style="color:#8a5a00">Settings changed since this ran; Run again to use them.</div>
+            </div></template>
+          </div></template>
+
+          {# ===== Variant B: one bar at the bottom of the page; cells only show what ran ===== #}
+          <template x-if="variant === 'B'"><div>
+            <div class="kind">AI <span class="grow"></span><span class="stale" x-show="c.stale">cells above changed since this ran</span>
+              <span x-show="c.id === selected" style="color:#4a6fd3;text-transform:none;letter-spacing:0;font-weight:400">editing in the bar below ↓</span></div>
+            <div class="prompt" x-show="c.prompt" x-text="c.prompt"></div>
+            <div x-show="!c.prompt" style="color:#8a91a3;font-size:.9rem;margin:.4rem 0">Empty AI Cell: select it, then write the prompt in the bar below.</div>
+            <template x-if="c.ran"><div>
+              <span class="ranwith" x-text="'ran with ' + fmt(c.ran)"></span>
+              <div class="answer" x-text="c.answer"></div><div class="display">table display: rt_20261113_102233 · 10 rows</div>
+              <div class="traceline">▸ Trace · 2 LLM calls · $0.012</div>
+            </div></template>
+          </div></template>
+
+          {# ===== Variant C: one compact chip per cell; click to change in a popover ===== #}
+          <template x-if="variant === 'C'"><div>
+            <div class="kind">AI <span class="grow"></span>
+              <span class="stale" x-show="c.stale">cells above changed since this ran</span>
+              <button type="button" class="chip" @click.stop="popFor = popFor === c.id ? null : c.id" x-text="fmt(c.set) + ' ▾'"></button>
+              <button class="run" type="button" @click="run(c, c.set)" x-text="c.ran ? 'Run again' : 'Run'"></button></div>
+            <div class="pop" x-show="popFor === c.id" x-cloak @click.outside="popFor = null">
+              <label class="f">Model <select x-model="c.set.model" @change="c.set.effort = efforts(c.set.model)[0] || ''"><template x-for="m in models" :key="m.id"><option :value="m.id" x-text="m.label" :selected="m.id === c.set.model"></option></template></select></label>
+              <label class="f">Effort <select x-model="c.set.effort" :disabled="!efforts(c.set.model).length"><option value="">no effort</option><template x-for="e in efforts(c.set.model)"><option :value="e" x-text="e" :selected="e === c.set.effort"></option></template></select></label>
+              <label class="f">Max rows <input class="rows" x-model="c.set.rows"></label>
+              <small style="color:#6b7280">New AI Cells start with the last settings you ran.</small>
+            </div>
+            <template x-if="c.set.model !== noModel"><textarea rows="2" placeholder="Write a prompt" x-model="c.draft" x-init="if (c.draft === null) c.draft = c.prompt"></textarea></template>
+            <template x-if="c.set.model === noModel"><div class="canned-pick"><select @change="run(c, c.set, $event.target.value)"><option value="">No model: pick a Canned Prompt to run…</option>
+              <template x-for="p in canned"><option :value="p" x-text="p"></option></template></select></div></template>
+            <template x-if="c.ran"><div>
+              <div class="answer" x-text="c.answer"></div><div class="display">table display: rt_20261113_102233 · 10 rows</div>
+              <div class="traceline">▸ Trace · ran with <span x-text="fmt(c.ran)"></span><span x-show="!same(c.ran, c.set)" style="color:#8a5a00"> (chip changed since; Run again to use it)</span> · 2 LLM calls · $0.012</div>
+            </div></template>
+          </div></template>
+        </div></template>
+      </div>
+      <div class="add"><button type="button" @click="addAi(i + 1)">+ AI</button><button type="button">+ SQL</button><button type="button">+ Markdown</button></div>
+      </div>
+    </template>
+    <div class="proto-state" x-text="'PROTOTYPE state · variant ' + variant + ' · last-run settings (new cells start here): ' + fmt(last) + '\n' + cells.filter(c => c.kind === 'ai').map(c => 'AI cell ' + c.id + ': set=' + fmt(c.set) + (c.ran ? ' | ran=' + fmt(c.ran) : ' | not run') + (c.stale ? ' | STALE' : '')).join('\n')"></div>
+  </div>
+
+  {# ===== Variant B's bottom bar: one prompt box and one settings strip, for the selected AI Cell ===== #}
+  <template x-if="variant === 'B'"><div class="bar" x-data="{ text: '', s: { ...$data.last } }" x-effect="const c = sel(); text = c ? c.prompt : ''; s = c && c.set ? { ...c.set } : { ...last }">
+    <div class="target" x-text="sel() ? ('Runs AI cell ' + selected + (sel().ran ? ' again (replacing its output)' : '')) : 'Adds a new AI Cell at the end'"></div>
+    <template x-if="s.model !== noModel"><textarea rows="2" placeholder="Write a prompt" x-model="text"
+      @keydown.enter="if (!$event.shiftKey) { $event.preventDefault(); const c = sel() || addAi(cells.length); run(c, s, text) }"></textarea></template>
+    <template x-if="s.model === noModel"><div class="canned-pick nb" style="padding:0"><select style="width:100%;font:inherit;padding:.4rem;border:1px solid #cfd5e2;border-radius:.5rem" @change="const c = sel() || addAi(cells.length); run(c, s, $event.target.value)"><option value="">No model: pick a Canned Prompt to run…</option>
+      <template x-for="p in canned"><option :value="p" x-text="p"></option></template></select></div></template>
+    <div class="settings-row">
+      <select x-model="s.model" @change="s.effort = efforts(s.model)[0] || ''"><template x-for="m in models" :key="m.id"><option :value="m.id" x-text="m.label" :selected="m.id === s.model"></option></template></select>
+      <select x-model="s.effort" :disabled="!efforts(s.model).length"><option value="">no effort</option><template x-for="e in efforts(s.model)"><option :value="e" x-text="e" :selected="e === s.effort"></option></template></select>
+      <span style="flex:1"></span><span>≤ <input class="rows" size="7" x-model="s.rows"> rows per query</span>
+    </div>
+  </div></template>
+
+  <div class="proto-switch" role="navigation" aria-label="Prototype variant">
+    <a href="#" @click.prevent="go(-1)">←</a>
+    <span x-text="{ A: 'A (settings strip in every AI Cell)', B: 'B (one bar at the bottom)', C: 'C (compact chip per cell)' }[variant]"></span>
+    <a href="#" @click.prevent="go(1)">→</a>
+  </div>
+</div>

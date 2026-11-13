@@ -18,7 +18,7 @@ def tables(build_agent, web_client):
 
 
 def open_tables(page):
-    page.get_by_role("button", name="Tables", exact=True).click()
+    page.get_by_role("button", name="Browse tables").click()
     dialog = page.locator(".show-tables dialog:not(.table-viewer)")
     expect(dialog).to_have_attribute("open", "")
     return dialog
@@ -31,7 +31,7 @@ def names_in(dialog, heading):
 def test_tables_sits_above_add_lookup_and_lists_the_four_sections(live_page, tables):
     agent, rt_name = tables
     page = live_page(agent=agent)
-    show = page.get_by_role("button", name="Tables", exact=True)
+    show = page.get_by_role("button", name="Browse tables")
     add = page.get_by_role("button", name="Create lookup table")
     assert show.bounding_box()["y"] < add.bounding_box()["y"]  # type: ignore[index]
     assert show.evaluate("b => getComputedStyle(b).borderColor") == add.evaluate("b => getComputedStyle(b).borderColor")
@@ -209,10 +209,14 @@ def test_the_icons_come_just_before_each_name_and_the_expiry_is_right_aligned(li
     assert list_right and list_right["x"] + list_right["width"] - (expires["x"] + expires["width"]) < 12
 
 
-def test_the_table_buttons_use_the_same_font_as_new_chat(live_page, tables):
+def test_the_sidebar_has_a_tables_section_above_a_conversations_section(live_page, tables):
     agent, _ = tables
     page = live_page(agent=agent)
-    font = "e => { const s = getComputedStyle(e); return [s.fontFamily, s.fontSize, s.fontWeight]; }"
-    new_chat = page.get_by_role("link", name="New chat").evaluate(font)
-    for name in ("Tables", "Create lookup table"):
-        assert page.get_by_role("button", name=name, exact=True).evaluate(font) == new_chat
+    aside = page.locator("aside")
+    tables_head = aside.get_by_role("heading", name="Tables", exact=True)
+    conversations_head = aside.get_by_role("heading", name="Conversations")
+    browse, add = aside.get_by_role("button", name="Browse tables"), aside.get_by_role("button", name="Create lookup table")
+    new_chat = conversations_head.get_by_role("link", name="New chat")  # New chat lives in the Conversations heading
+    y = lambda loc: loc.bounding_box()["y"]  # noqa: E731
+    assert y(tables_head) < y(browse) < y(add) < y(conversations_head)
+    expect(new_chat).to_have_attribute("href", "/")

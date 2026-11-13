@@ -90,11 +90,18 @@
     aside { width: 14rem; flex: none; }
     main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
     #prompt-area { flex: 1; padding-right: .5rem; }
-    aside a.new { display: block; padding: .5rem .75rem; border-radius: .6rem; background: #4a6fd3; color: #fff; text-align: center; text-decoration: none; }
+    /* Two sections: Tables (its actions as links), then Conversations (its heading carries New chat). */
+    aside .sec-head { display: flex; align-items: center; justify-content: space-between; margin: 1rem .2rem .3rem .6rem;
+                      font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #6b7280; }
+    aside .sec-head:first-child { margin-top: .1rem; }
+    aside .sec-head small { font-weight: 400; color: #9ca3af; margin-left: .25rem; letter-spacing: 0; }
+    aside a.new { display: inline-flex; align-items: center; justify-content: center; width: 1.6rem; height: 1.6rem; border-radius: .4rem;
+                  background: #4a6fd3; color: #fff; text-decoration: none; font-size: .9rem; letter-spacing: 0; }
     aside a.new:hover { background: #3b5cb8; }
-    aside .lookup, aside .show-tables { margin: 0 0 .5rem; }
-    aside .sidebar-action { font: inherit; width: 100%; padding: .4rem .75rem; border-radius: .6rem; border: 1px solid #b9c7e6; background: #eef3fd; color: #2a4ba0; cursor: pointer; }  /* secondary, like Collapse turns */
-    aside .sidebar-action:hover { background: #dce7fb; }
+    aside a.new:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
+    aside .lookup, aside .show-tables { margin: 0; }
+    aside .sidebar-action { display: block; width: 100%; text-align: left; font: inherit; font-size: .92rem; padding: .3rem .6rem; border: 0; border-radius: .4rem; background: none; color: #2a4ba0; cursor: pointer; }
+    aside .sidebar-action:hover { background: #eef3fd; }
     aside .sidebar-action:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
     dialog { border: 1px solid #ccc; border-radius: .75rem; box-shadow: 0 8px 24px rgba(0,0,0,.2); padding: 1.25rem 1.5rem; }
     dialog::backdrop { background: rgba(0,0,0,.35); }

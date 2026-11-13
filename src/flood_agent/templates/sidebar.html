@@ -1,4 +1,5 @@
 <aside id="sidebar" {% if oob %}hx-swap-oob="true"{% endif %}>
+  <h2 class="sec-head">Tables</h2>
   <div class="show-tables" x-data="{ open: false, tables: null, error: '', hideRt: false, hideLookup: false, request: 0, confirming: null,
        viewing: null, viewerRequest: 0, viewerLoaded: false, viewerError: '', escapeInEditor: false,
        /* hideRt hides the Result Tables; the name is kept so saved choices survive. */
@@ -94,7 +95,7 @@
          this.$refs.dialog.close();  /* first: a modal dialog keeps focus from the chat box */
          insertIntoChat(name);
        } }" @view-table.window="view($event.detail)">
-    <button type="button" class="sidebar-action" @click="open = true; load()">Tables</button>
+    <button type="button" class="sidebar-action" @click="open = true; load()">&#x25A6;&#xFE0E; Browse tables</button>
     <dialog x-ref="dialog" aria-labelledby="show-tables-title" x-effect="open ? $el.showModal() : $el.open && $el.close()" @close="open = false" @click="closeIfOutside($event)">
       <h3 id="show-tables-title">Tables you can query</h3>
       <div class="filters">
@@ -201,7 +202,7 @@
          } catch (e) { this.error = 'Could not save the table.'; }
          this.busy = false;
        } }" @edit-lookup.window="startEdit($event.detail)">
-    <button type="button" class="sidebar-action" @click="startAdd()">Create lookup table</button>
+    <button type="button" class="sidebar-action" @click="startAdd()">&#xFF0B; Create lookup table</button>
     <dialog x-effect="open ? $el.showModal() : $el.open && $el.close()" @close="open = false">
       <form @submit.prevent="submit()">
         <template x-if="editing"><h3>Edit <code x-text="editing"></code></h3></template>
@@ -228,7 +229,7 @@
       </form>
     </dialog>
   </div>
-  <a class="new" href="/">New chat</a>
+  <h2 class="sec-head conversations"><span>Conversations <small>{{ conversations|length }}</small></span><a class="new" href="/" aria-label="New chat" title="New chat">&#xFF0B;</a></h2>
   <ul>
     {% for c in conversations %}
     <li x-data="{ open: false, editing: false }"{% if c.id == current_id %} class="current"{% endif %}>

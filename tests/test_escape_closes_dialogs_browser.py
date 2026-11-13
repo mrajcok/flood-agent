@@ -9,7 +9,7 @@ from test_stop_turn import HangingLLM
 
 def test_escape_closes_the_tables_dialog(live_page, build_agent):
     page = live_page(agent=build_agent(ScriptedLLM()))
-    page.get_by_role("button", name="Tables").click()
+    page.get_by_role("button", name="Browse tables").click()
     dialog = page.get_by_role("dialog", name="Tables you can query")
     expect(dialog).to_be_visible()
     page.keyboard.press("Escape")
@@ -30,7 +30,7 @@ def test_escape_in_a_dialog_while_a_turn_runs_closes_it_without_stopping_the_tur
     send(page)
     stop = page.get_by_role("button", name="Stop")
     expect(stop).to_be_visible()
-    page.get_by_role("button", name="Tables").click()
+    page.get_by_role("button", name="Browse tables").click()
     dialog = page.get_by_role("dialog", name="Tables you can query")
     expect(dialog).to_be_visible()
     page.keyboard.press("Escape")

@@ -1,5 +1,6 @@
 # work items
-- give the user the ability to run an SQL SELECT query. Provide a drop-down list for the table, or let the program pick a rt_* table name.This is safe since RBAC will prevent them from reading any table they don't have access to. The results should be returned in a table format.
+- I want to give the user the ability to run an arbitrary SQL SELECT query. The word SELECT will be shown (they can't edit that part) and a "From <table>" part will be shown, where <table> is a drop-down list of every table they have access to with a search feature. The drop-down list should also include a rt_ table name. This is safe since RBAC will prevent them from reading any table they don't have access to. The results should be written to a new rt_* table the the results should be displayed in a table. No LLM should be used for this.
+- add the ability to add secondary indexes to a table
 - toggle (off by default) for prompt results to go to the LLM
 - tests are taking too long to run. We need a way for you to only run targeted tests after a change, instead of running all tests.
 - Per J Legg, how can I add workflows to this agent?

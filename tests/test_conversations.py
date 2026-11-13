@@ -304,6 +304,6 @@ def test_sidebar_button_reads_new_chat_and_no_text_says_session(build_agent, web
     client = web_client(build_agent(ScriptedLLM()))
     ask(client, "hi")
     page = client.get("/").text
-    assert re.search(r'class="new"[^>]*>New chat<', page)
+    assert re.search(r'class="new"[^>]*aria-label="New chat"', page)
     assert "New conversation" not in page
     assert "session" not in re.sub(r"<script.*?</script>", "", page, flags=re.S).lower()

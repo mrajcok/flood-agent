@@ -215,8 +215,9 @@
     .trace summary { cursor: pointer; }
     .trace pre { white-space: pre-wrap; word-break: break-word; background: #f6f6f6; padding: .4rem; margin: .2rem 0; }
     .trace h4 { margin: .6rem 0 .2rem; }
-    .sql-label .explain { font: inherit; font-size: .8rem; margin-left: .4rem; padding: 0 .5rem; border: 1px solid #c4c9d4; border-radius: .4rem; background: #fff; color: #333; cursor: pointer; }
-    .sql-label .explain:hover { background: #f2f4f8; }
+    .sql-label .explain { font: inherit; font-size: .8rem; margin-left: .4rem; padding: 0 .5rem; border: 1px solid #e0c36a; border-radius: .4rem; background: #fff4d1; color: #5c4300; cursor: pointer; }  /* amber: stands out from the grey trace without the blue of the table icons */
+    .sql-label .explain:hover { background: #ffe8a3; }
+    .sql-label .explain:focus-visible { outline: 2px solid #b8860b; outline-offset: 1px; }
     dialog.explain { width: min(44rem, 90vw); display: none; flex-direction: column; gap: .6rem; }
     dialog.explain[open] { display: flex; }
     dialog.explain pre.sql { white-space: pre-wrap; word-break: break-word; background: #f6f6f6; padding: .4rem; margin: 0; max-height: 12rem; overflow: auto; }
@@ -269,6 +270,9 @@
     details.turn::details-content, details.trace::details-content { height: 0; overflow: clip; opacity: 0;
       transition: height var(--collapse) ease, opacity var(--collapse) ease, content-visibility var(--collapse) allow-discrete; }
     details.turn[open]::details-content, details.trace[open]::details-content { height: auto; opacity: 1; }
+    /* Closing starts and ends gently: scrolled into a tall Trace, the shrinking chat drags its scroll position with it, which
+       the default curve's fast start made a lurch. Opening keeps `ease`. */
+    details.turn:not([open])::details-content, details.trace:not([open])::details-content { transition-timing-function: ease-in-out; }
     /* Opening another conversation is a page load: cross-fade the chat pane and keep the sidebar still. */
     @view-transition { navigation: auto; }
     #sidebar { view-transition-name: sidebar; }
@@ -419,9 +423,10 @@
             if (handled) e.preventDefault();
           },
           interrupt(e) {
-            /* Esc, or Ctrl-C with nothing selected, stops the running turn. Esc first closes an open popup. */
+            /* Esc, or Ctrl-C with nothing selected, stops the running turn. Esc first closes an open popup or dialog. */
             if (!this.busy || this.stopping || e.isComposing || e.metaKey || e.shiftKey) return;
             if (e.key === 'Escape') {
+              if (document.querySelector('dialog[open]')) return;
               if ([...document.querySelectorAll('.strip .panel, .strip [role=listbox], [role=listbox]')].some(el => el.offsetParent !== null)) return;
             } else if (!(e.ctrlKey && !e.altKey && e.code === 'KeyC' && !window.getSelection().toString() && $refs.message.selectionStart === $refs.message.selectionEnd)) return;
             if (e.key !== 'Escape') e.preventDefault();

@@ -215,6 +215,15 @@
     .trace summary { cursor: pointer; }
     .trace pre { white-space: pre-wrap; word-break: break-word; background: #f6f6f6; padding: .4rem; margin: .2rem 0; }
     .trace h4 { margin: .6rem 0 .2rem; }
+    .sql-label .explain { font: inherit; font-size: .8rem; margin-left: .4rem; padding: 0 .5rem; border: 1px solid #c4c9d4; border-radius: .4rem; background: #fff; color: #333; cursor: pointer; }
+    .sql-label .explain:hover { background: #f2f4f8; }
+    dialog.explain { width: min(44rem, 90vw); display: none; flex-direction: column; gap: .6rem; }
+    dialog.explain[open] { display: flex; }
+    dialog.explain pre.sql { white-space: pre-wrap; word-break: break-word; background: #f6f6f6; padding: .4rem; margin: 0; max-height: 12rem; overflow: auto; }
+    dialog.explain .note { font-size: .85rem; color: #6b7280; }
+    dialog.explain .error { color: #b3261e; white-space: pre-wrap; }
+    dialog.explain .plan { list-style: none; margin: 0; padding: 0; font-family: monospace; font-size: .9rem; }
+    dialog.explain .plan li { margin: .15rem 0; }
     .live-trace { margin: .5rem 0; font-size: .85rem; color: #444; }
     .live-trace summary { cursor: pointer; }
     .live-trace .live-step { margin: .15rem 0; }
@@ -570,6 +579,43 @@
     <span x-text="added && (added.verb || 'Added')">Added</span> <b x-text="added && added.name"></b>: <span x-text="added && (added.row_count + (added.row_count === 1 ? ' row' : ' rows'))"></span>,
     columns <span x-text="added && added.columns.join(', ')"></span>.
   </div>
+  <dialog class="explain" aria-labelledby="explain-title"
+          x-data="{ sql: '', plan: null, error: '', request: 0,
+                    /* The Query Plan of a Generated SQL from a Trace (explainSql below). Never stored, never sent to the LLM. */
+                    async show(sql) {
+                      const request = ++this.request;  /* only the latest click's answer is shown */
+                      this.sql = sql; this.plan = null; this.error = '';
+                      if (!this.$el.open) this.$el.showModal();
+                      try {
+                        const r = await fetch('/api/explain', { method: 'POST', body: new URLSearchParams({ sql }) });
+                        const body = await r.json().catch(() => ({}));
+                        if (request !== this.request) return;
+                        if (r.ok) this.plan = body.plan;
+                        else this.error = (typeof body.detail === 'string' && body.detail) || 'Could not explain this query.';
+                      } catch (e) { if (request === this.request) this.error = 'Could not explain this query. Try again.'; }
+                    },
+                    closeIfOutside(e) {
+                      if (e.target !== e.currentTarget) return;
+                      const r = e.currentTarget.getBoundingClientRect();
+                      if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) e.currentTarget.close();
+                    } }"
+          @explain-sql.window="show($event.detail)" @close="request++" @click="closeIfOutside($event)">
+    <h3 id="explain-title">Query plan</h3>
+    <pre class="sql" x-text="sql"></pre>
+    <p class="note">Plan as of now; it may differ from when the query ran. No rows are read.</p>
+    <p x-show="!plan && !error">Loading&hellip;</p>
+    <p class="error" role="alert" x-show="error" x-text="error" x-cloak></p>
+    <ol class="plan" x-show="plan" x-cloak>
+      <template x-for="(step, i) in plan || []" :key="i"><li :style="'padding-left: ' + (step.depth * 1.5) + 'rem'" x-text="step.detail"></li></template>
+    </ol>
+    <div class="actions"><button type="button" @click="$el.closest('dialog').close()">Close</button></div>
+  </dialog>
+  <script>
+    // A Trace's Explain button: show the Query Plan of its Generated SQL (data-sql) in the dialog above.
+    function explainSql(button) {
+      window.dispatchEvent(new CustomEvent("explain-sql", { detail: button.dataset.sql }));
+    }
+  </script>
   <dialog id="delete-dialog" aria-labelledby="delete-title">
     <form method="dialog">
       <h3 id="delete-title"></h3>

@@ -7,6 +7,7 @@ path to the browser; it is a plain HTTP route, never registered as an MCP tool.
 import csv
 import io
 import json
+import sqlite3
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -446,6 +447,17 @@ def create_app(
             raise HTTPException(404, "unknown result table")
         info = queries.describe_results_table(agent.config.results_db, table.name) or {}
         return {**table.to_json(), **info, "truncated_to": table.truncated_to}
+
+    @app.post("/api/explain")
+    def explain(sql: str = Form("")):
+        """The Query Plan of a Generated SQL from a Trace, for the user only: no LLM, nothing stored.
+        It may read any live table. 422 with the plain reason (rejected SQL, a database error)."""
+        try:
+            plan = queries.explain_query(agent.config.telemetry_db, agent.config.results_db, sql,
+                                         agent.config.query_timeout_s, agent.tables.readable())
+        except (queries.QueryRejected, sqlite3.Error) as e:
+            raise HTTPException(422, str(e))
+        return {"plan": plan}
 
     @app.post("/api/displays/{display_id}/refresh")
     def refresh_count_display(display_id: int):

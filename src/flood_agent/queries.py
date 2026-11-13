@@ -315,6 +315,33 @@ def run_query(
     return result
 
 
+def explain_query(
+    telemetry_db: Path, results_db: Path, sql: str, timeout_s: float, allowed_tables: set[str] | None = None
+) -> list[dict]:
+    """The Query Plan of a single read-only SELECT, as steps of {depth, detail} in plan order. No rows are
+    read and nothing is created. Runs under the same rails as run_query (validation, read-only connection,
+    authorizer, timeout). Raises QueryRejected or sqlite3.Error; their messages are for the user, never
+    the LLM."""
+    select = validate_select(sql)
+    con = open_connection(telemetry_db, results_db, allowed_tables)
+    try:
+        with _deadline(con, timeout_s) as timed_out:
+            try:
+                rows = con.execute(f"EXPLAIN QUERY PLAN {select}").fetchall()
+            except sqlite3.Error as e:
+                if timed_out():
+                    raise sqlite3.OperationalError(_TIMEOUT_GUIDANCE.format(s=timeout_s)) from e
+                raise
+    finally:
+        con.close()
+    depth: dict[int, int] = {}
+    plan = []
+    for node, parent, _, detail in rows:
+        depth[node] = depth[parent] + 1 if parent in depth else 0
+        plan.append({"depth": depth[node], "detail": detail})
+    return plan
+
+
 _COUNT_GUIDANCE = (
     "A count query must have the form SELECT COUNT(...) FROM ... (optionally COUNT(...) AS name) "
     "and return one non-negative integer, e.g. SELECT COUNT(*) FROM flows WHERE ..."

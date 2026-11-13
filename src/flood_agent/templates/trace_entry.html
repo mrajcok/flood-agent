@@ -12,7 +12,7 @@
       {% for c in e.raw_response.tool_calls %}<p>Tool call {{ c.name }} ({{ c.id }})</p><pre>{{ c.arguments }}</pre>{% endfor %}
     {% elif e.kind == "tool_call" %}
       <h4>Tool {{ e.name }} &middot; {{ e.duration_ms }} ms</h4>
-      {% if e.sql %}<p>Generated SQL</p><pre>{{ e.sql }}</pre>{% endif %}
+      {% if e.sql %}<p class="sql-label">Generated SQL <button type="button" class="explain" data-sql="{{ e.sql }}" onclick="explainSql(this)" title="Show how the database would run this query (its Query Plan); no LLM">Explain</button></p><pre>{{ e.sql }}</pre>{% endif %}
       {% if e.executed_sql %}<p>Executed CTAS</p><pre>{{ e.executed_sql }}</pre>{% endif %}
       <p>Sent to the LLM (Query Metadata / tool result)</p><pre>{{ e.query_metadata }}</pre>
     {% elif e.kind == "query_error" %}

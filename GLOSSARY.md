@@ -81,6 +81,10 @@ The per-turn record of what passed between the Agent and the LLM — prompts, ge
 A user can **stop** a running turn: what it had streamed is kept (in the page, the history and the Trace, marked stopped), and the next prompt sees it.
 _Avoid_: Debug log, details
 
+**Query Plan**:
+The database's description of how it would run a query the LLM wrote, shown to the user on demand from a Trace. It is computed when asked, without the LLM, reads no rows, and is never sent to the LLM.
+_Avoid_: Explain output, execution plan
+
 **Display**:
 A table or chart the Agent renders for the user from a Result Table or Saved Table.
 _Avoid_: Widget, view, output

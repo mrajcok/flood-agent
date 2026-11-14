@@ -31,6 +31,6 @@
     <label class="view-switch"><input type="checkbox" x-model="show.tables"> Table info</label>
     <button type="button" class="toggle-all" x-data="{ collapsed: false }"
             @click="collapsed = !collapsed; document.body.classList.toggle('outputs-collapsed', collapsed)"
-            x-text="collapsed ? 'Expand outputs' : 'Collapse outputs'">Collapse outputs</button>
+            ><span class="toggle-label" :class="{ 'label-hidden': collapsed }">Collapse outputs</span><span class="toggle-label label-hidden" :class="{ 'label-hidden': !collapsed }">Expand outputs</span></button>
     </div>
   </div>

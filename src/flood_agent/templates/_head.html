@@ -44,6 +44,10 @@
     .toggle-all:hover { background-color: #dce7fb; }
     .toggle-all:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
     .toggle-all { cursor: pointer; font-size: .9rem; }
+    /* Both labels share one grid cell so the button keeps the wider label's width and the sliders beside it never shift. */
+    .toggle-all { display: inline-grid; }
+    .toggle-label { grid-area: 1 / 1; }
+    .toggle-label.label-hidden { visibility: hidden; }
     .scroll-y { overflow-y: auto; min-height: 0; }
     /* Reply text is Markdown rendered by markdown.js into .md segments. */
     .reply .md-plain, .reply .md-delta { white-space: pre-wrap; }

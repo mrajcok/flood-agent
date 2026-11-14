@@ -46,3 +46,13 @@ def test_the_choices_survive_a_reload(live_page):
     page.reload()
     expect(page.get_by_label("Table info")).not_to_be_checked()
     assert page.evaluate("document.body.classList.contains('hide-tables')")
+
+
+def test_the_sliders_do_not_move_when_outputs_are_collapsed(live_page):
+    page = live_page()
+    open_new_notebook(page)
+    switch = page.get_by_label("Traces", exact=True)
+    before = switch.bounding_box()
+    page.get_by_role("button", name="Collapse outputs").click()
+    expect(page.get_by_role("button", name="Expand outputs")).to_be_visible()
+    assert switch.bounding_box() == before

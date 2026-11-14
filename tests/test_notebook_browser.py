@@ -271,3 +271,10 @@ def test_shift_enter_in_the_prompt_runs_the_cell_and_enter_adds_a_line(live_page
     prompt.press("Shift+Enter")
     expect(cell.locator(".output")).to_contain_text("Done.")
     expect(cell.locator(".gutter .num")).to_have_text("[1]")
+
+
+def test_hovering_canopy_shows_what_it_stands_for(live_page):
+    page = live_page()
+    expect(page.get_by_role("heading", name="CANOPY")).to_have_attribute(
+        "title", "CANOPY: Cyber AI Notebook for Operations, Peering, and telemetrY"
+    )

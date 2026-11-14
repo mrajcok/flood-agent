@@ -6,7 +6,9 @@
      {% if cell.polling %}hx-get="/n/{{ notebook_id }}/cells/{{ cell.id }}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}
      x-data="{ sql: {{ cell.sql | tojson | forceescape }}, maxRows: {{ cell.max_rows | tojson | forceescape }}, pop: false, error: '', stopping: false,
                running: {{ cell.running | tojson }},
-               tpop: false, tq: '', listing: null, tbl: '', cols: [], colError: '',
+               command: {{ cell.command | tojson | forceescape }}, describe: 'DESCRIBE TABLE',
+               tpop: false, tq: '', listing: null, tbl: {{ (cell.table if cell.command == 'DESCRIBE TABLE' else '') | tojson | forceescape }}, cols: [], colError: '',
+               get runnable() { return this.command ? (this.command !== this.describe || !!this.tbl) : !!this.sql.trim(); },
                async openTables() {
                  this.tpop = !this.tpop; this.tq = '';
                  if (!this.tpop) return;
@@ -21,6 +23,7 @@
                },
                async pickTable(name) {
                  this.tpop = false; this.tbl = name; this.cols = []; this.colError = '';
+                 if (this.command) { this.save(); return; }  /* DESCRIBE TABLE: the table is the choice, nothing is inserted */
                  FloodSql.insertAt(this.$refs.sql, name, 'table'); this.save();
                  try {
                    const r = await fetch('/api/tables/' + encodeURIComponent(name) + '/columns');
@@ -29,7 +32,7 @@
                },
                put(text, kind) { FloodSql.insertAt(this.$refs.sql, text, kind); this.save(); },
                get chip() { return '≤ ' + Number(this.maxRows).toLocaleString('en-US') + ' rows ▾'; },
-               fields() { return new URLSearchParams({ sql: this.sql, max_rows: this.maxRows }); },
+               fields() { return new URLSearchParams({ sql: this.sql, max_rows: this.maxRows, command: this.command, table: this.command === this.describe ? this.tbl : '' }); },
                cleanRows() {
                  this.maxRows = String(this.maxRows).replace(/\D/g, '').replace(/^0+/, '') || '{{ cell.max_rows }}';
                  this.save();
@@ -40,7 +43,7 @@
                  try { await fetch('/n/{{ notebook_id }}/cells/{{ cell.id }}/draft', { method: 'POST', body: this.fields() }); } catch (e) {}
                },
                async run() {
-                 if (this.running || busy || !this.sql.trim()) return;
+                 if (this.running || busy || !this.runnable) return;
                  this.error = ''; this.pop = false;
                  try {
                    const r = await fetch('/n/{{ notebook_id }}/cells/{{ cell.id }}/run', { method: 'POST', body: this.fields() });
@@ -60,7 +63,7 @@
     <button type="button" class="gbtn stop" aria-label="Stop" title="Stop this cell" :disabled="stopping" @click="stop()">&#x25A0;</button>
     <div class="num" title="Running">[*]</div>
     {% else %}
-    <button type="button" class="gbtn run" aria-label="Run" title="Run this cell (Shift-Enter); run it again to refresh its table" :disabled="busy || !sql.trim()" @click="run()">&#x25B6;</button>
+    <button type="button" class="gbtn run" aria-label="Run" title="Run this cell (Shift-Enter); run it again to refresh its table" :disabled="busy || !runnable" @click="run()">&#x25B6;</button>
     <div class="num" title="{{ 'Run number' if cell.number else 'Not run yet' }}">[{{ cell.number or " " }}]</div>
     {% endif %}
   </div>
@@ -68,11 +71,16 @@
     <div class="head">
       <span class="kind">SQL</span>
       <span class="grow"></span>
+      <select class="command" aria-label="Command" title="What this cell runs: your SQL query, or a SHOW / DESCRIBE command" x-model="command"
+              @change="error = ''; save()" {% if cell.running %}disabled{% else %}:disabled="running"{% endif %}>
+        <option value="">SQL query</option>
+        {% for c in show_commands %}<option value="{{ c }}"{% if c == cell.command %} selected{% endif %}>{{ c }}</option>{% endfor %}
+      </select>
       <button type="button" class="explain" title="Show how the database would run this query (its Query Plan); no LLM, nothing is run"
-              :disabled="!sql.trim()" @click="$dispatch('explain-sql', sql)">Explain</button>
+              :disabled="!sql.trim() || !!command" x-show="!command" @click="$dispatch('explain-sql', sql)">Explain</button>
       <span class="chip-wrap">
         <button type="button" class="chip" aria-haspopup="true" :aria-expanded="pop" title="Row cap for the next run"
-                {% if cell.running %}disabled{% else %}:disabled="running"{% endif %} @click.stop="pop = !pop"
+                {% if cell.running %}disabled{% else %}:disabled="running || !!command"{% endif %} @click.stop="pop = !pop"
                 x-text="chip">&#x2264; {{ "{:,}".format(cell.max_rows) }} rows &#x25BE;</button>
         <div class="pop" role="dialog" aria-label="Row cap" x-show="pop" x-cloak @click.outside="pop = false">
           <label class="f">Max rows
@@ -81,7 +89,7 @@
         </div>
       </span>
     </div>
-    <div class="sql-tools" x-show="!running">
+    <div class="sql-tools" x-show="!running && (!command || command === describe)">
       <span class="chip-wrap">
         <button type="button" class="tpick" aria-haspopup="true" :aria-expanded="tpop" title="Pick a table to query" @click.stop="openTables()">Table &#x25BE;</button>
         <div class="pop table-pop" role="dialog" aria-label="Tables" x-show="tpop" x-cloak @click.outside="tpop = false" @keydown.escape.stop="tpop = false">
@@ -93,15 +101,16 @@
           <small x-show="listing && !groups().length">No table matches.</small>
         </div>
       </span>
-      <template x-if="tbl">
+      <template x-if="tbl && !command">
         <span class="tbl-cols">
           <button type="button" class="tname" :title="'Insert ' + tbl + ' at the cursor'" x-text="tbl" @click="put(tbl, 'name')"></button>
           <template x-for="c in cols" :key="c.name"><button type="button" class="col" :title="c.type" :data-type="c.type" x-text="c.name" @click="put(c.insert, 'column')"></button></template>
           <small class="cell-error" x-show="colError" x-text="colError"></small>
         </span>
       </template>
+      <span class="tname chosen" x-show="command && tbl" x-text="tbl"></span>
     </div>
-    <textarea x-ref="sql" class="cell-prompt cell-sql" rows="3" spellcheck="false" placeholder="SELECT ... FROM ... (Shift-Enter to run)" aria-label="SQL" x-model="sql"
+    <textarea x-ref="sql" class="cell-prompt cell-sql" rows="3" spellcheck="false" placeholder="SELECT ... FROM ... (Shift-Enter to run)" aria-label="SQL" x-model="sql" x-show="!command"
               @blur="save()" @keydown.shift.enter.prevent="run()" {% if cell.running %}readonly{% else %}:readonly="running"{% endif %}></textarea>
     <p class="cell-error" role="alert" x-show="error" x-text="error" x-cloak></p>
 
@@ -113,6 +122,22 @@
       </div>
       {% else %}
       {% for item in cell.output %}{% include "display_item.html" %}{% endfor %}
+      {% if cell.result and cell.result.rows is defined and not cell.running %}
+      <div class="show-rows" x-data="{ col: -1, dir: 1,
+             sort(i) {
+               this.dir = this.col === i ? -this.dir : 1; this.col = i;
+               const body = this.$refs.body, rows = Array.from(body.rows), d = this.dir;
+               const val = r => r.cells[i].dataset.v, num = v => v !== '' && !isNaN(Number(v));
+               rows.sort((a, b) => { const x = val(a), y = val(b);
+                 return d * ((num(x) && num(y)) ? Number(x) - Number(y) : x.localeCompare(y)); });
+               rows.forEach(r => body.appendChild(r));
+             } }">
+        <table class="show-table">
+          <thead><tr>{% for name in cell.result.columns %}<th><button type="button" class="sort" @click="sort({{ loop.index0 }})">{{ name }}<span class="arrow" x-show="col === {{ loop.index0 }}" x-text="dir > 0 ? ' \u25B2' : ' \u25BC'"></span></button></th>{% endfor %}</tr></thead>
+          <tbody x-ref="body">{% for row in cell.result.rows %}<tr>{% for v in row %}<td data-v="{{ '' if v is none else v }}">{{ '' if v is none else v }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+        </table>
+      </div>
+      {% endif %}
       {% if cell.status == "stopped" %}<p class="cell-stopped"><em>stopped by the user</em></p>{% endif %}
       {% if cell.result and cell.result.raw_error %}<p class="cell-error sql-error" role="alert">{{ cell.result.raw_error }}</p>{% endif %}
       {% endif %}

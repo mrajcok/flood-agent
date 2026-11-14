@@ -26,11 +26,14 @@ from flood_agent.mcp_protocol import QUERY_TOOLS
 from flood_agent.mcp_server import ServerSettings
 from flood_agent.notebooks import AI, DEFAULT_MAX_ROWS, MARKDOWN, MARKDOWN_NOTE_LABEL, SQL, NotebookStore
 from flood_agent.semantic_layer import SemanticLayer
+from flood_agent.show_commands import SHOW_IN_TEXTBOX, ShowFailed, is_show_statement, run_show, statement_of
 from flood_agent.store import COUNT_KIND, ConversationStore
 from flood_agent.trace import TraceBuilder, context_tokens
 from flood_agent.upgrade import drop_pre_notebook_data
 
 log = logging.getLogger("uvicorn.error")  # the app's terminal log
+
+SHOW_ROWS_TO_AI = 100  # how many rows of a SHOW Cell's result an AI Cell below is sent
 
 
 class NotRefreshable(Exception):
@@ -452,9 +455,11 @@ class Agent:
 
     def add_sql_cell(
         self, notebook_id: str, sql: str = "", max_rows: int = DEFAULT_MAX_ROWS, after: str | None = None,
+        command: str = "", table: str = "",
     ) -> str:
-        """Add a SQL Cell (after cell `after`, or at the end) whose Draft holds its SQL and row cap."""
-        return self.notebooks.add_cell(notebook_id, SQL, {"sql": sql, "max_rows": max_rows}, after)
+        """Add a SQL Cell (after cell `after`, or at the end) whose Draft holds its SQL and row cap. A `command`
+        (a SHOW statement or DESCRIBE TABLE, with its `table`) makes it a SHOW Cell: the SQL is not used."""
+        return self.notebooks.add_cell(notebook_id, SQL, {"sql": sql, "max_rows": max_rows, "command": command, "table": table}, after)
 
     def add_markdown_cell(self, notebook_id: str, text: str = "", send_to_ai: bool = False,
                           after: str | None = None) -> str:
@@ -611,13 +616,15 @@ class Agent:
         Run keeps the labelled message an AI Cell below is sent, with its Query Metadata as it is now."""
         cell_id, draft = cell["id"], cell["draft"]
         sql, max_rows = draft.get("sql", ""), draft.get("max_rows") or DEFAULT_MAX_ROWS
+        command, table = draft.get("command") or "", draft.get("table") or ""
+        statement = statement_of(command, table) if command else sql
         prior = (self.tables.tables_of_cell(cell_id) or [None])[-1]  # the table a re-run replaces, if still live
-        run_id = self.notebooks.start_run(cell_id, sql, {"max_rows": max_rows}, "")
+        run_id = self.notebooks.start_run(cell_id, statement, {"max_rows": max_rows, "command": command}, "")
         stop = self._sql_stops[cell_id] = threading.Event()
         started = time.monotonic()
         try:
             try:
-                outcome: dict[str, Any] = await asyncio.to_thread(self._execute_sql, sql, max_rows, stop, prior, CellRun(cell_id, run_id))
+                outcome: dict[str, Any] = await asyncio.to_thread(self._execute_sql, sql, max_rows, stop, prior, CellRun(cell_id, run_id), command, table)
             except asyncio.CancelledError:  # the client left: abandon the query
                 stop.set()
                 self.notebooks.finish_run(run_id, "stopped")
@@ -629,13 +636,15 @@ class Agent:
         finally:
             self._sql_stops.pop(cell_id, None)
         outcome["elapsed_s"] = round(time.monotonic() - started, 3)
-        label = f"[SQL Cell, run by the user] {sql}"
+        label = f"[SHOW Cell, run by the user] {statement}" if command else f"[SQL Cell, run by the user] {sql}"
         displays: list[tuple] = []
         event: Event | None = None
         if outcome["status"] == "stopped":
             detail = "Stopped by the user."
         elif outcome["status"] == "failed":
             detail = f"Failed: {outcome['error']}"
+        elif "rows" in outcome:
+            detail = self._show_message(outcome["columns"], outcome["rows"])
         elif "count" in outcome:
             detail = f"Count: {outcome['count']}"
             computed, title = self.config.clock(), queries.shorten_sql(sql)
@@ -651,7 +660,7 @@ class Agent:
             event = DisplayEvent("table", outcome["table"], names)
         # The message is stored once, so what AI Cells below are sent is frozen at this Run.
         self.notebooks.add_step(run_id, [({"role": "user", "content": f"{label}\n{detail}"}, displays)])
-        self.notebooks.save_result(run_id, {k: v for k, v in outcome.items() if k != "columns"})
+        self.notebooks.save_result(run_id, {k: v for k, v in outcome.items() if k != "columns" or "rows" in outcome})
         self.notebooks.finish_run(run_id, outcome["status"])
         if event is not None:
             yield event
@@ -659,11 +668,30 @@ class Agent:
             yield TurnError(outcome["raw_error"], "sql cell failed")
         yield TurnEnd()
 
-    def _execute_sql(self, sql: str, max_rows: int, stop: threading.Event, prior: Table | None, owner: CellRun) -> dict:
+    @staticmethod
+    def _show_message(columns: list[str], rows: list[list]) -> str:
+        """A SHOW Cell result as an AI Cell below is sent it: the columns and up to SHOW_ROWS_TO_AI rows, with a
+        note when rows were left out."""
+        lines = [" | ".join(columns)] + [" | ".join("" if v is None else str(v) for v in r) for r in rows[:SHOW_ROWS_TO_AI]]
+        if len(rows) > SHOW_ROWS_TO_AI:
+            lines.append(f"(first {SHOW_ROWS_TO_AI} of {len(rows)} rows; the other rows were left out)")
+        return "\n".join(lines)
+
+    def _execute_sql(self, sql: str, max_rows: int, stop: threading.Event, prior: Table | None, owner: CellRun,
+                     command: str = "", table: str = "") -> dict:
         """The blocking part of a SQL Cell Run (it runs in a thread): the outcome as a dict with `status` ok, failed
         or stopped, then `count`, or `table`, `columns`, `row_count` and `truncated_to`, or `error` (value-free) and
         `raw_error` (for the user, and logged)."""
         cfg, readable = self.config, self.tables.readable()
+        if command:  # SHOW / DESCRIBE: no table, no row cap; the rows are kept with the Run
+            try:
+                names, rows = run_show(command, table, cfg.telemetry_db, cfg.results_db, self.tables.listing())
+            except ShowFailed as e:
+                log.warning("SQL Cell %s failed: %s", owner.cell_id, e)
+                return {"status": "failed", "error": str(e), "raw_error": str(e)}
+            return {"status": "ok", "columns": names, "rows": rows, "row_count": len(rows), "command": command}
+        if is_show_statement(sql):
+            return {"status": "failed", "error": SHOW_IN_TEXTBOX, "raw_error": SHOW_IN_TEXTBOX}
 
         def failure(result: dict) -> dict:
             if result.get("stopped"):

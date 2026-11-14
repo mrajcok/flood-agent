@@ -152,3 +152,21 @@ Numbers: int/float interchangeable, relative tolerance 1e-6 (per-question `toler
 strings exact and case-sensitive; NULL equals NULL.
 The runner reads Result Tables itself (Agent-side harness); the LLM receives only what the
 Agent normally sends.
+
+Each question runs as a new notebook with the question as its AI Cell, and the judge reads the
+tables that cell's current Run made. A question may have an `above:` list of cells placed above its AI
+Cell (a Markdown note, ticked or not, a SQL Cell, a SHOW Cell; SQL and SHOW cells are run first), so the
+AI Cell is sent what they ran. Three questions (`cells-*`) cover this.
+
+Caching smoke check (real API, a few cents; exit 0 working, 1 not working, 2 inconclusive):
+
+```
+export OPENROUTER_API_KEY=...
+uv run python -m flood_agent.evalset.smoke_caching --model anthropic/claude-sonnet-5.5
+```
+
+It runs two AI Cells in one notebook (`--question`, `--question2`) and checks that caching works within
+the first cell and across cells: the second cell's first request must start, byte for byte, with the first
+cell's last request (same `notebook-<id>` session id) and read the cache it wrote. Both questions must make
+no Result Table, since a new one changes the end of the system prompt (ADR 0007). The harness and the
+verdict logic are tested offline against a simulated provider.

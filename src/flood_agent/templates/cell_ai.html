@@ -1,0 +1,209 @@
+{# An AI Cell: gutter (Run/Stop, run number), header with the settings chip, prompt, output and footer.
+   `cell` comes from web.cell_view; `models` and `busy` are the notebook's (see notebook.html). #}
+{% set state = "running" if cell.running else (cell.status or "not-run") %}
+<div class="cellblock ai{% if cell.running %} running{% endif %}" id="cell-{{ cell.id }}" data-cell-id="{{ cell.id }}" data-kind="ai" data-state="{{ state }}"
+     data-edited="{{ 'true' if cell.edited else 'false' }}" :data-edited="edited"
+     data-stale="{{ 'true' if cell.stale else 'false' }}" :data-stale="stale"
+     {% if cell.polling %}hx-get="/n/{{ notebook_id }}/cells/{{ cell.id }}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}
+     x-data="{ prompt: {{ cell.prompt | tojson | forceescape }}, model: {{ cell.model | tojson | forceescape }}, effort: {{ cell.effort | tojson | forceescape }},
+               maxRows: {{ cell.max_rows | tojson | forceescape }}, pop: false, error: '', stopping: false,
+               canned: {{ canned_items | tojson | forceescape }}, noModel: {{ no_model | tojson | forceescape }}, query: '', listOpen: false, active: 0,
+               get fake() { return this.canned.length > 0 && this.model === this.noModel; },
+               get shown() { const q = this.query.trim().toLowerCase(); return this.canned.filter(c => c.prompt.toLowerCase().includes(q)); },
+               pickCanned(prompt) {
+                 /* Fake Mode: picking a Canned Prompt makes it this cell's prompt and runs it. */
+                 this.listOpen = false; this.query = ''; this.prompt = prompt; this.run();
+               },
+               ran: {{ cell.ran | tojson | forceescape }},
+               get edited() {
+                 /* The Draft differs from what ran: the old output stays, marked, and cells below are sent what ran. */
+                 const r = this.ran;
+                 return !!r && (this.prompt !== r.prompt || this.model !== r.model || this.effort !== r.effort || String(this.maxRows) !== String(r.max_rows));
+               },
+               running: {{ cell.running | tojson }},
+               get stale() { return staleIds.includes('{{ cell.id }}'); },
+               get spec() { return models.find(m => m.id === this.model) || {}; },
+               get efforts() { return this.spec.efforts || []; },
+               get chip() { return (this.spec.label || this.model) + ' · ' + (this.effort || 'no effort') + ' · ≤ ' + Number(this.maxRows).toLocaleString('en-US') + ' rows \u25be'; },
+               fields() { return new URLSearchParams({ prompt: this.prompt, model: this.model, effort: this.effort, max_rows: this.maxRows }); },
+               pickModel() {
+                 /* A model offers its own Effort levels: keep the Effort if it offers it, else use the model's default. */
+                 if (!this.efforts.includes(this.effort)) this.effort = this.spec.default_effort || '';
+                 this.save();
+               },
+               cleanRows() {
+                 this.maxRows = String(this.maxRows).replace(/\D/g, '').replace(/^0+/, '') || '{{ cell.max_rows }}';
+                 this.save();
+               },
+               async save() {
+                 /* Keep the Draft, so a reload shows what was typed; a failure is not worth interrupting for. */
+                 if (this.running) return;
+                 try { await fetch('/n/{{ notebook_id }}/cells/{{ cell.id }}/draft', { method: 'POST', body: this.fields() }); } catch (e) {}
+               },
+               async run() {
+                 if (this.running || busy || !this.prompt.trim()) return;
+                 this.error = ''; this.pop = false;
+                 try {
+                   const r = await fetch('/n/{{ notebook_id }}/cells/{{ cell.id }}/run', { method: 'POST', body: this.fields() });
+                   if (!r.ok) { this.error = ((await r.json().catch(() => ({}))).detail) || 'Could not run this cell.'; return; }
+                   const html = await r.text();
+                   const el = this.$root;
+                   el.outerHTML = html;  /* the running cell: it opens its own stream */
+                   htmx.process(document.getElementById('cell-{{ cell.id }}'));
+                 } catch (e) { this.error = 'Could not run this cell. Try again.'; }
+               },
+               async clearEarlier() {
+                 try {
+                   const r = await fetch('/n/{{ notebook_id }}/cells/{{ cell.id }}/earlier-tables/delete', { method: 'POST' });
+                   if (!r.ok) return;
+                   this.$root.outerHTML = await r.text();
+                   htmx.process(document.getElementById('cell-{{ cell.id }}'));
+                 } catch (e) {}
+               },
+               async stop() {
+                 this.stopping = true;
+                 try { await fetch('/n/{{ notebook_id }}/cells/{{ cell.id }}/stop', { method: 'POST' }); } catch (e) {}
+               } }"
+     @keydown.escape.window="pop = false">
+  <div class="gutter">
+    <span class="stale-dot" title="Cells above changed since this ran" role="img" aria-label="Stale: cells above changed since this ran"
+          x-show="stale" {% if not cell.stale %}x-cloak{% endif %}></span>
+    {% if cell.running %}
+    <button type="button" class="gbtn stop" aria-label="Stop" title="Stop this cell" :disabled="stopping" @click="stop()">&#x25A0;</button>
+    <div class="num" title="Running">[*]</div>
+    {% else %}
+    <button type="button" class="gbtn run" aria-label="Run" title="Run this cell (Shift-Enter)" :disabled="busy || !prompt.trim()" @click="run()">&#x25B6;</button>
+    <div class="num" title="{{ 'Run number' if cell.number else 'Not run yet' }}">[{{ cell.number or " " }}]</div>
+    {% endif %}
+  </div>
+  <div class="cell ai">
+    <div class="head">
+      <span class="kind">AI</span>
+      <span class="grow"></span>
+      <span class="chip-wrap">
+        <button type="button" class="chip" aria-haspopup="true" :aria-expanded="pop" title="Model, effort and row cap for the next run"
+                {% if cell.running %}disabled{% else %}:disabled="running"{% endif %} @click.stop="pop = !pop"
+                x-text="chip">{{ cell.chip }} &#x25BE;</button>
+        <div class="pop" role="dialog" aria-label="AI Cell settings" x-show="pop" x-cloak @click.outside="pop = false">
+          <label class="f">Model
+            <select x-model="model" @change="pickModel()" aria-label="Model">
+              <template x-for="m in models" :key="m.id"><option :value="m.id" :disabled="m.disabled" :selected="m.id === model"
+                x-text="m.label + (m.disabled ? ' ({{ needs_key }})' : '')"></option></template>
+            </select></label>
+          <label class="f">Effort
+            <select x-model="effort" :disabled="!efforts.length" @change="save()" aria-label="Effort">
+              <option value="" x-show="!efforts.length">no effort</option>
+              <template x-for="e in efforts" :key="e"><option :value="e" x-text="e" :selected="e === effort"></option></template>
+            </select></label>
+          <label class="f">Max rows
+            <input type="text" inputmode="numeric" x-model="maxRows" @change="cleanRows()" aria-label="Max rows"></label>
+          <small>New AI Cells start with the last settings you ran.</small>
+        </div>
+      </span>
+    </div>
+    <div class="cell-canned" x-show="fake" {% if not canned_items or cell.model != no_model %}x-cloak{% endif %} @click.outside="listOpen = false">
+      <input type="text" x-model="query" :placeholder="prompt || 'No model: click to see a list or type to find a canned prompt'" aria-label="Fake Mode picker"
+             autocomplete="off" :disabled="running"
+             @focus="listOpen = true; active = 0" @click="listOpen = true" @input="listOpen = true; active = 0"
+             @keydown.arrow-down.prevent="listOpen = true; active = Math.min(active + 1, shown.length - 1)"
+             @keydown.arrow-up.prevent="active = Math.max(active - 1, 0)"
+             @keydown.enter.prevent="shown[active] && pickCanned(shown[active].prompt)" @keydown.escape="listOpen = false">
+      <ul x-show="listOpen && shown.length" x-cloak role="listbox" aria-label="Fake Mode choices">
+        <template x-for="(c, i) in shown" :key="c.prompt"><li role="option" :class="{ on: i === active, follow: c.follow }" @mouseenter="active = i" @click="pickCanned(c.prompt)">
+          <span x-text="c.prompt"></span> <small class="fails" x-show="c.fails">fails on purpose</small></li></template>
+      </ul>
+    </div>
+    <textarea class="cell-prompt" x-show="!fake" rows="2" placeholder="Write a prompt (Shift-Enter to run)" aria-label="Prompt" x-model="prompt"
+              @blur="save()" @keydown.shift.enter.prevent="run()" {% if cell.running %}readonly{% else %}:readonly="running"{% endif %}></textarea>
+    <p class="cell-error" role="alert" x-show="error" x-text="error" x-cloak></p>
+
+    <div class="output">
+      {% if cell.streaming %}
+      {# A Run just asked for: its stream opens the Run, fills these in, and on its end the finished cell replaces this one. #}
+      <div class="cell-stream" hx-ext="sse" sse-connect="/n/{{ notebook_id }}/cells/{{ cell.id }}/stream" sse-close="end">
+        <div class="reply" sse-swap="text,display" hx-swap="beforeend"></div>
+        <div sse-swap="flag" hx-swap="beforeend"></div>
+        <div class="live-trace drawer"><div sse-swap="live-step" hx-swap="beforeend"></div><div hidden sse-swap="entry" hx-swap="none"></div></div>
+        <span hidden hx-get="/n/{{ notebook_id }}/cells/{{ cell.id }}" hx-trigger="sse:end" hx-target="closest .cellblock" hx-swap="outerHTML"></span>
+      </div>
+      {% else %}
+      {% for item in cell.output %}
+        {% if item.type == "assistant" %}<div class="reply"><span class="md-delta">{{ item.text }}</span></div>
+        {% elif item.type == "display" %}{% include "display_item.html" %}{% endif %}
+      {% endfor %}
+      {% if cell.footer and cell.footer.trace %}
+        {% set flags = cell.footer.trace.entries|selectattr("kind", "equalto", "flag")|list %}
+        {% if flags %}{% include "flag_note.html" %}{% endif %}
+      {% endif %}
+      {% if cell.status == "stopped" %}<p class="cell-stopped"><em>stopped by the user</em></p>{% endif %}
+      {% endif %}
+    </div>
+
+    {% if cell.status and not cell.running and cell.output %}
+    {# Copy to Markdown Cell: offers to save the answer's rt_ tables first, so the copy does not expire with them. #}
+    <div class="copy-md" x-data="{ tables: [], names: {}, offer: false, error: '',
+           async start() {
+             this.error = '';
+             const url = '/n/{{ notebook_id }}/cells/{{ cell.id }}/copy-to-markdown';
+             try {
+               const r = await fetch(url);
+               if (!r.ok) { this.error = ((await r.json().catch(() => ({}))).detail) || 'Could not copy.'; return; }
+               this.tables = (await r.json()).tables; this.names = {};
+               if (this.tables.length) { this.offer = true; return; }
+               await this.copy();
+             } catch (e) { this.error = 'Could not copy. Try again.'; }
+           },
+           async copy() {
+             const body = new URLSearchParams();
+             for (const t of this.tables) if ((this.names[t] || '').trim()) body.append('save', t + ':' + this.names[t].trim());
+             try {
+               const r = await fetch('/n/{{ notebook_id }}/cells/{{ cell.id }}/copy-to-markdown', { method: 'POST', body });
+               if (!r.ok) { this.error = ((await r.json().catch(() => ({}))).detail) || 'Could not copy.'; return; }
+               this.offer = false;
+               const bar = this.$root.closest('.cellblock').nextElementSibling;
+               bar.insertAdjacentHTML('afterend', await r.text());
+               htmx.process(bar.nextElementSibling); htmx.process(bar.nextElementSibling.nextElementSibling);
+               window.dispatchEvent(new Event('cells-changed'));
+             } catch (e) { this.error = 'Could not copy. Try again.'; }
+           } }">
+      <button type="button" class="linkish" :disabled="busy" @click="start()" title="Insert a Markdown Cell below with this answer and its tables and charts">Copy to Markdown Cell</button>
+      <div class="save-offer" role="group" aria-label="Save tables" x-show="offer" x-cloak>
+        <p>These tables are deleted after a day unless saved. Name any you want to keep (letters, digits, underscores; not starting with <code>rt_</code>):</p>
+        <template x-for="t in tables" :key="t"><label class="f"><code x-text="t"></code> save as
+          <input type="text" maxlength="60" x-model="names[t]" :aria-label="'Save ' + t + ' as'" placeholder="leave blank to not save"></label></template>
+        <button type="button" class="primary" @click="copy()">Copy</button>
+        <button type="button" @click="offer = false">Cancel</button>
+      </div>
+      <p class="cell-error" role="alert" x-show="error" x-text="error" x-cloak></p>
+    </div>
+    {% endif %}
+
+    {% if cell.footer and not cell.running %}
+    {% set f = cell.footer %}
+    <div class="cell-foot">
+      <details class="trace cell-trace">
+        <summary><span class="trace-only">Trace</span><span class="trace-totals trace-only"> &middot; ran <time data-ms="{{ f.started_at_ms }}" x-data x-text="new Date({{ f.started_at_ms }}).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })">{{ f.ran_utc }}</time> with {{ f.settings }}
+          {%- if f.calls is not none %} &middot; {{ f.calls }} LLM call{{ "" if f.calls == 1 else "s" }}{% endif %}
+          {%- if f.trace %} &middot; {% if f.cost is not none %}${{ "%.3f"|format(f.cost) }}{% else %}cost n/a{% endif %}{% endif %}</span>
+          {%- with context=f.context %}<span class="trace-only"> &middot; </span>{% include "context_meter.html" %}{% endwith %}
+          {%- if f.stopped %} <span class="badge stopped">stopped</span>{% elif f.failed %} <span class="badge failed">failed</span>{% endif %}
+          <template x-if="edited"><span class="badge edited" title="The prompt or settings changed since this ran; the cells below were sent what ran">edited, not run</span></template></summary>
+        {% if f.trace %}{% with trace=f.trace, after_cell=cell.id %}{% include "trace_body.html" %}{% endwith %}{% endif %}
+      </details>
+      {% set generated = f.trace.entries|selectattr("sql")|list if f.trace else [] %}
+      {% if generated %}{% from "trace_macros.html" import open_as_sql %}{{ open_as_sql((generated|last).sql, notebook_id, cell.id) }}{% endif %}
+    </div>
+    {% endif %}
+
+    {% if cell.earlier_tables and not cell.running %}
+    <details class="earlier-tables">
+      <summary>Tables from earlier runs ({{ cell.earlier_tables|length }})</summary>
+      <p class="note">Kept until their Retention ends; not sent to the AI. Cells below can still query them.</p>
+      {% for t in cell.earlier_tables %}
+      {% with settings_url=t.settings_url %}{% include "table_name.html" %}{% endwith %}
+      {% endfor %}
+      <button type="button" class="danger" @click="clearEarlier()" :disabled="running">Delete all <code>rt_</code> tables</button>
+    </details>
+    {% endif %}
+  </div>
+</div>

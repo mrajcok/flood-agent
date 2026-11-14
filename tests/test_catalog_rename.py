@@ -4,9 +4,9 @@ import sqlite3
 from contextlib import closing
 
 import pytest
+from conftest import register_table
 
 from flood_agent.catalog import Catalog
-from flood_agent.store import ConversationStore
 
 HOUR = 3_600_000
 DAY = 24 * HOUR
@@ -28,22 +28,22 @@ def physical(results_db) -> set[str]:
 
 
 def make(tmp_path, on_rename=None, telemetry=("flows",)):
-    """(catalog, conversation id, results db path) with one Result Table, registered and physical, 1-day default."""
+    """(catalog, cell id, results db path) with one Result Table, registered and physical, 1-day default."""
     app_db, results_db = tmp_path / "app.db", tmp_path / "results.db"
     clock = Clock()
     catalog = Catalog(app_db, clock, default_retention_ms=DAY, telemetry_tables=telemetry, results_db=results_db,
                       on_rename=on_rename)
-    cid = ConversationStore(app_db, clock).create_conversation()
+    cid = "cell-1"
     with closing(sqlite3.connect(results_db)) as con, con:
         con.execute(f'CREATE TABLE "{RT}" (n INTEGER)')
-    catalog.register(RT, cid, 1)
+    register_table(catalog, RT, cid, 1)
     return catalog, cid, results_db
 
 
 def add_second(catalog, cid, results_db):
     with closing(sqlite3.connect(results_db)) as con, con:
         con.execute(f'CREATE TABLE "{RT2}" (n INTEGER)')
-    catalog.register(RT2, cid, 1)
+    register_table(catalog, RT2, cid, 1)
 
 
 def test_rename_lowercases_and_every_lookup_ignores_case(tmp_path):
@@ -153,7 +153,7 @@ def test_when_the_registry_update_fails_the_physical_rename_is_undone(tmp_path):
 
 def test_register_lowercases_the_name(tmp_path):
     catalog, cid, _ = make(tmp_path)
-    catalog.register("RT_20260101_000002", cid, 1)
+    register_table(catalog, "RT_20260101_000002", cid, 1)
     assert catalog["rt_20260101_000002"].name == "rt_20260101_000002"
 
 

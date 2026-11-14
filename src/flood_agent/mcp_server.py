@@ -12,7 +12,7 @@ and CHART_ROW_CAP. There are no fallbacks. Most tests run it in-process
 
 Per-turn context arrives with every tool call in the MCP request `_meta`, set by the Agent and
 never a tool argument, so the LLM never sees it. The server reads only the turn's row cap
-(`flood_agent/max_result_rows`). Tables are not scoped to a Conversation (ADR 0003): every call may
+(`flood_agent/max_result_rows`). Tables are not scoped to a Notebook (ADR 0003): every call may
 read and show any live Result Table, and read any Lookup Table.
 """
 
@@ -30,7 +30,7 @@ from mcp.server.fastmcp import Context, FastMCP
 from flood_agent import logs, queries
 from flood_agent.catalog import CatalogView
 from flood_agent.mcp_protocol import META_MAX_RESULT_ROWS
-from flood_agent.store import rename_data_source
+from flood_agent.notebooks import rename_data_source
 
 
 @dataclass(frozen=True)
@@ -78,7 +78,7 @@ def _wall_clock() -> int:
 
 def _in_worker_thread(fn):
     """Run a sync tool body in a worker thread. FastMCP calls sync tools directly on its event
-    loop, so one slow `run_query` would stall every other Conversation's calls (ADR 0002)."""
+    loop, so one slow `run_query` would stall every other call (ADR 0002)."""
 
     @functools.wraps(fn)  # keeps the signature, so FastMCP builds the same input schema
     async def wrapper(*args, **kwargs):
@@ -250,7 +250,7 @@ def create_server(settings: ServerSettings, clock: Callable[[], int] | None = No
     @_in_worker_thread
     def describe_table(name: str) -> str:
         """Describe a table the user names: its kind, column names and types, and row count. Works
-        for any live table from any chat, not only those listed in your prompt. Never returns
+        for any live table from any notebook, not only those listed in your prompt. Never returns
         rows. Query it by name with run_query."""
         kind = catalog.kind_of(name) if catalog else None
         kind = kind if kind in ("lookup", "result", "saved") else None
@@ -263,7 +263,7 @@ def create_server(settings: ServerSettings, clock: Callable[[], int] | None = No
     @mcp.tool()
     @_in_worker_thread
     def show_table(result_table: str, columns: list[str] | None = None) -> str:
-        """Show a live Result Table, from any chat, to the user as a table Display. You
+        """Show a live Result Table, from any notebook, to the user as a table Display. You
         will not see the rows."""
         # Any live Result Table may be shown (ADR 0003).
         live = catalog is not None and result_table in catalog

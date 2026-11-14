@@ -18,6 +18,9 @@ class Question:
     ordered: bool = False
     tolerance: float | None = None
     crosscheck: dict | None = None  # verified against attacks.json by the test suite
+    # Cells above the question's AI Cell, top to bottom: {kind: markdown, text, send_to_ai}, {kind: sql, sql}
+    # or {kind: show, command, table}. SQL and SHOW cells are run before the question.
+    above: list[dict] | None = None
 
 
 def load_golden(path: Path = GOLDEN_PATH) -> list[Question]:

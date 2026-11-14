@@ -2,7 +2,7 @@
 
 import json
 
-from conftest import ScriptedLLM, last_tool_result, tool_call
+from conftest import ScriptedLLM, ask, last_tool_result, tool_call
 
 from flood_agent.llm import TextChunk
 
@@ -30,9 +30,7 @@ def test_chart_display_is_streamed_and_rows_served_from_chart_endpoint(build_age
         [TextChunk("chart")],
     )
     client = web_client(build_agent(llm))
-    posted = client.post("/chat", data={"message": "chart bytes", "max_rows": "1000"})
-    stream_url = posted.text.split('sse-connect="')[1].split('"')[0]
-    body = client.get(stream_url).text
+    _, _, body = ask(client, "chart bytes")
 
     assert "event: display" in body and "vegaEmbed" in body
     chart_url = body.split("/api/results/")[1].split("/chart-rows")[0]
@@ -81,14 +79,10 @@ def test_reopening_rerenders_chart_display(build_agent, web_client):
         [TextChunk("chart")],
     )
     client = web_client(build_agent(llm))
-    posted = client.post("/chat", data={"message": "chart bytes", "max_rows": "1000"})
-    import re
-
-    cid = re.search(r'name="conversation_id" value="([0-9a-f]+)"', posted.text).group(1)
-    client.get(posted.text.split('sse-connect="')[1].split('"')[0])
+    nb, _, _ = ask(client, "chart bytes")
 
     restarted = web_client(build_agent(ScriptedLLM()))
-    page = restarted.get(f"/c/{cid}").text
+    page = restarted.get(f"/n/{nb}").text
     assert "vegaEmbed" in page and "/chart-rows" in page
     import html
 

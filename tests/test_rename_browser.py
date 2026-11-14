@@ -1,21 +1,20 @@
 """Renaming a Result Table in its table Display makes it a Saved Table, kept 30 days by default."""
 
-from conftest import ScriptedLLM
+from conftest import ScriptedLLM, table_script
 from playwright.sync_api import expect
-from test_conversations import table_script
+from test_notebook_browser import run_in_new_notebook
 
 
 def ask_for_a_table(build_agent, live_page, days=None):
     agent = build_agent(ScriptedLLM(*table_script()))
     page = live_page(agent=agent)
-    page.get_by_placeholder("Write a prompt").fill("show me flows")
-    page.get_by_role("button", name="Send message (Enter)").click()
-    expect(page.locator(".reply", has_text="Here you go.")).to_be_visible()
+    cell = run_in_new_notebook(page, "show me flows")
+    expect(cell.locator(".reply", has_text="Here you go.")).to_be_visible()
+    expect(cell.locator(".cell-foot")).to_be_visible()  # the run is over: the cell no longer re-renders
     (table,) = agent.tables.names()
     if days is not None:
         agent.tables.update(table, retention_days=days)
         page.reload()
-        page.locator("aside ul li a").first.click()
     return agent, page, table
 
 
@@ -71,10 +70,10 @@ def test_a_result_table_kept_longer_than_30_days_is_not_cut_back(build_agent, li
     expect(retention).to_have_value("365")
 
 
-def test_the_copy_icon_next_to_the_table_name_inserts_it_into_the_chat_like_the_tables_dialog(build_agent, live_page):
+def test_the_copy_icon_next_to_the_table_name_inserts_it_into_the_prompt_like_the_tables_dialog(build_agent, live_page):
     _, page, table = ask_for_a_table(build_agent, live_page)
     expect(page.get_by_role("button", name="Copy", exact=True)).to_have_count(0)  # the old text button is gone
-    chat = page.get_by_placeholder("Write a prompt")
+    chat = page.get_by_label("Prompt").first
     chat.fill("count rows")
     chat.evaluate("i => i.setSelectionRange(6, 6)")  # "count |rows"
     copy = page.locator(".table-name").get_by_role("button", name="Copy " + table)
@@ -103,7 +102,6 @@ def test_the_form_shows_the_deployments_retention_policy(build_agent, live_page)
     agent, page, table = ask_for_a_table(build_agent, live_page)
     agent.tables.policy = replace(agent.tables.policy, result_days=3, saved_days=14, max_days=100)
     page.reload()
-    page.locator("aside ul li a").first.click()
     name, retention = edit(page, table)
     expect(retention).to_have_value("custom")  # created with 1 day, which is no longer a preset
     expect(retention.locator("option", has_text="Result Table default")).to_have_text("3 days (Result Table default)")

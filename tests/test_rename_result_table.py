@@ -1,9 +1,9 @@
 """Renaming a Result Table is a real SQL rename, at the HTTP seam."""
 
-import re
 
 import pytest
-from conftest import ScriptedLLM, last_tool_result, query_limits, tool_call
+from conftest import ScriptedLLM, last_tool_result, query_limits, register_table, tool_call
+from conftest import ask as run_in_notebook
 
 from flood_agent import queries
 from flood_agent.llm import TextChunk
@@ -18,7 +18,7 @@ def chart_spec(t):
 
 
 def make(build_agent, web_client, *followups):
-    """One turn that makes a Result Table, shows it and charts it; then any scripted follow-up turns."""
+    """One AI Cell that makes a Result Table, shows it and charts it; then any scripted follow-up cells."""
     seen = {}
 
     def table(msgs):
@@ -32,14 +32,8 @@ def make(build_agent, web_client, *followups):
         [tool_call("run_query", sql=BY_PORT, title="Bytes per port")],
         table, chart, [TextChunk("here")], *followups)
     client = web_client(build_agent(llm))
-    cid, _ = chat(client, "ports")
-    return client, cid, seen["t"]
-
-
-def chat(client, message, cid=""):
-    posted = client.post("/chat", data={"message": message, "conversation_id": cid, "max_rows": "1000"})
-    cid = re.search(r'name="conversation_id" value="([0-9a-f]+)"', posted.text).group(1)
-    return cid, client.get(posted.text.split('sse-connect="')[1].split('"')[0]).text
+    nb, _, _ = run_in_notebook(client, "ports")
+    return client, nb, seen["t"]
 
 
 def rename(client, old, new):
@@ -47,14 +41,14 @@ def rename(client, old, new):
 
 
 def test_rename_changes_the_name_everywhere_and_keeps_displays_loading(build_agent, web_client):
-    client, cid, old = make(build_agent, web_client)
+    client, nb, old = make(build_agent, web_client)
     resp = rename(client, old, "  top_ports ")
     assert resp.status_code == 200 and resp.json()["name"] == "top_ports"
     assert client.get("/api/results/top_ports/rows").json()["name"] == "top_ports"
     assert client.get(f"/api/results/{old}/rows").status_code == 404
     assert client.get("/api/results/top_ports/chart-rows").json()[0]["dport"] == 8443
     assert client.get("/api/results/top_ports/psv").status_code == 200
-    page = client.get(f"/c/{cid}").text
+    page = client.get(f"/n/{nb}").text
     assert "/api/results/top_ports/rows" in page and "/api/results/top_ports/chart-rows" in page
 
 
@@ -72,9 +66,9 @@ def test_new_name_is_queryable_and_old_is_not(build_agent, web_client):
         results.append(last_tool_result(msgs))
         return [TextChunk("done")]
 
-    client, cid, seen["old"] = make(build_agent, web_client, count("top_ports"), count(None), done)
+    client, nb, seen["old"] = make(build_agent, web_client, count("top_ports"), count(None), done)
     assert rename(client, seen["old"], "top_ports").status_code == 200
-    chat(client, "again", cid)
+    run_in_notebook(client, "again", nb)
     assert results[-2]["success"] is True and results[-2]["count"] > 0
     assert results[-1]["success"] is False
 
@@ -100,8 +94,7 @@ def two_tables(build_agent, web_client):
     names = []
     for _ in range(2):
         meta = queries.run_query(agent.config.telemetry_db, agent.config.results_db, BY_PORT, **query_limits())
-        cid = agent.store.create_conversation()
-        agent.tables.register(meta["result_table"], cid, agent.store.start_turn(cid, "q"))
+        register_table(agent.tables, meta["result_table"])
         names.append(meta["result_table"])
     return agent, client, names
 
@@ -146,14 +139,14 @@ def test_a_name_typed_with_capitals_is_stored_in_lower_case(build_agent, web_cli
     assert client.get("/api/results/MyTable/rows").json()["name"] == "mytable"
 
 
-def test_deleting_the_conversation_with_its_result_tables_keeps_the_saved_table(build_agent, web_client):
-    client, cid, old = make(build_agent, web_client)
+def test_deleting_the_notebook_with_its_result_tables_keeps_the_saved_table(build_agent, web_client):
+    client, nb, old = make(build_agent, web_client)
     rename(client, old, "kept")
-    client.post(f"/c/{cid}/delete", data={"tables": "delete_rt"})
+    client.post(f"/n/{nb}/delete", data={"tables": "delete_rt"})
     assert client.get("/api/results/kept/rows").status_code == 200
 
 
 def test_display_shows_the_sql_name_with_a_copy_icon_that_inserts_it_into_the_chat():
     html = TEMPLATES.get_template("display_table.html").render(
         rows_url="/r", psv_url="/p", result_table="t", columns=[], settings_url="/s")
-    assert 'class="copy"' in html and "insertIntoChat(name)" in html
+    assert 'class="copy"' in html and "insertIntoPrompt(name)" in html

@@ -1,11 +1,10 @@
 """Adding a Lookup Table from pasted rows (plain HTTP, never MCP), then using it in turns."""
 
 import json
-import re
 import sqlite3
 
 import pytest
-from conftest import DAY, Clock, ScriptedLLM, all_telemetry_values, last_tool_result, tool_call
+from conftest import DAY, Clock, ScriptedLLM, all_telemetry_values, ask, last_tool_result, tool_call
 
 from flood_agent.llm import TextChunk, ToolCallChunk
 
@@ -19,9 +18,9 @@ def add(client, name, rows, overwrite=False):
     return client.post("/api/lookup-tables", data=data)
 
 
-def run_turn(client, message="hello"):
-    posted = client.post("/chat", data={"message": message, "conversation_id": "", "max_rows": "1000"})
-    return client.get(re.search(r'sse-connect="([^"]+)"', posted.text).group(1)).text
+def run_cell(client, message="hello"):
+    """Run an AI Cell in a new notebook; returns its stream."""
+    return ask(client, message)[2]
 
 
 def describe(name, call_id="c1"):
@@ -95,7 +94,7 @@ def test_header_only_or_empty_paste_is_rejected(build_agent, web_client):
     assert add(client, "e", "a,b").status_code == 422
 
 
-def test_any_conversation_can_describe_and_join_against_it(build_agent, web_client, telemetry_db):
+def test_any_notebook_can_describe_and_join_against_it(build_agent, web_client, telemetry_db):
     llm = ScriptedLLM(
         [describe("lookup_hosts")],
         lambda msgs: [tool_call(
@@ -107,9 +106,9 @@ def test_any_conversation_can_describe_and_join_against_it(build_agent, web_clie
     agent = build_agent(llm)
     client = web_client(agent)
     assert add(client, "hosts", f"ip,desc\n198.18.77.200,{SECRET}").status_code == 200
-    # Creating it wrote nothing to any Conversation.
-    assert agent.store.list_conversations() == []
-    run_turn(client)
+    # Creating it wrote nothing to any notebook.
+    assert agent.notebooks.list_notebooks() == []
+    run_cell(client)
     described = last_tool_result(llm.calls[1])
     assert described["success"] is True and described["kind"] == "lookup"
     assert [c["name"] for c in described["columns"]] == ["ip", "desc"]
@@ -121,12 +120,12 @@ def test_any_conversation_can_describe_and_join_against_it(build_agent, web_clie
     assert not any(v in sent for v in all_telemetry_values(telemetry_db) | {SECRET} if len(v) >= 8)
 
 
-def test_the_next_turn_does_not_mention_the_lookup_table(build_agent, web_client):
+def test_the_next_cell_does_not_mention_the_lookup_table(build_agent, web_client):
     llm = ScriptedLLM([TextChunk("hi")])
     agent = build_agent(llm)
     client = web_client(agent)
     add(client, "hosts", f"ip,desc\n198.18.77.200,{SECRET}")
-    run_turn(client)
+    run_cell(client)
     sent = llm.all_sent_text()
     assert "lookup_hosts" not in sent and SECRET not in sent
 
@@ -138,7 +137,7 @@ def test_a_result_table_named_lookup_is_not_a_lookup_table(build_agent, web_clie
         [TextChunk("ok")],
     )
     agent = build_agent(llm)
-    run_turn(web_client(agent))
+    run_cell(web_client(agent))
     assert last_tool_result(llm.calls[2])["kind"] == "result"
 
 
@@ -150,7 +149,7 @@ def test_a_lookup_table_never_expires(build_agent, web_client):
     add(client, "hosts", "ip\n1.1.1.1")
     clock.ms += 1000 * DAY
     agent.tables.sweep()
-    run_turn(client)
+    run_cell(client)
     assert last_tool_result(llm.calls[1])["kind"] == "lookup"
     assert stored(agent, "lookup_hosts") == [["1.1.1.1"]]
 
@@ -273,7 +272,7 @@ def test_overwrite_cannot_replace_a_result_table_or_other_table(build_agent, web
     llm = ScriptedLLM([tool_call("run_query", sql="SELECT dport FROM flows", title="lookup_fake")], [TextChunk("ok")])
     agent = build_agent(llm)
     client = web_client(agent)
-    run_turn(client)
+    run_cell(client)
     con = sqlite3.connect(agent.config.results_db)
     names = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")]
     con.execute("CREATE TABLE lookup_other (x TEXT)")
@@ -356,7 +355,7 @@ def test_describe_table_ignores_the_case_of_the_name(build_agent, web_client):
     agent = build_agent(llm)
     client = web_client(agent)
     add(client, "Hosts", "ip\n1.1.1.1")  # the name is stored lower-cased
-    run_turn(client)
+    run_cell(client)
     described = last_tool_result(llm.calls[1])
     assert described["success"] is True and described["kind"] == "lookup" and described["row_count"] == 1
 

@@ -225,3 +225,44 @@ async def test_an_unregistered_rt_table_is_never_counted_as_a_result(telemetry_d
     [r] = await runner.run_eval(["fake/model"], [Q], telemetry_db, semantic_layer_path, factory, tmp_path / "work")
     assert r.result_tables == 1
     assert r.matched_table is None or "rt_2020" not in r.matched_table
+
+
+def sent_text(llm) -> str:
+    return json.dumps(llm.calls[0])
+
+
+async def test_a_question_with_a_sql_cell_above_sends_what_the_cell_ran(telemetry_db, semantic_layer_path, tmp_path):
+    q = Question(id="q", question="Which port is first above?", sql=GOOD,
+                 above=[{"kind": "sql", "sql": "SELECT dport, SUM(bytes) AS b FROM flows GROUP BY dport LIMIT 3"}])
+    r, llm = await run_one([query(GOOD), DONE], telemetry_db, semantic_layer_path, tmp_path, q)
+    sent = llm.calls[0]
+    assert r.correct
+    assert any(m["role"] == "user" and m["content"].startswith("[SQL Cell, run by the user] SELECT dport") for m in sent)
+    assert sent[-1] == {"role": "user", "content": "Which port is first above?"}
+
+
+async def test_only_ticked_markdown_and_a_show_cell_reach_the_question(telemetry_db, semantic_layer_path, tmp_path):
+    q = Question(id="q", question="How many?", sql=GOOD, above=[
+        {"kind": "markdown", "text": "TICKED-NOTE", "send_to_ai": True},
+        {"kind": "markdown", "text": "UNTICKED-NOTE", "send_to_ai": False},
+        {"kind": "show", "command": "DESCRIBE TABLE", "table": "flows"},
+    ])
+    _, llm = await run_one([query(GOOD), DONE], telemetry_db, semantic_layer_path, tmp_path, q)
+    text = sent_text(llm)
+    assert "[Markdown note]" in text and "TICKED-NOTE" in text and "UNTICKED-NOTE" not in text
+    assert "[SHOW Cell, run by the user] DESCRIBE TABLE flows" in text
+
+
+async def test_the_judge_reads_only_the_ai_cells_tables_not_those_of_cells_above(telemetry_db, semantic_layer_path, tmp_path):
+    q = Question(id="q", question="top port", sql=GOOD, above=[{"kind": "sql", "sql": GOOD}])
+    wrong = "SELECT dport, SUM(bytes) AS total FROM flows GROUP BY dport ORDER BY total ASC LIMIT 1"
+    r, _ = await run_one([query(wrong), DONE], telemetry_db, semantic_layer_path, tmp_path, q)
+    assert not r.correct  # the correct table above does not count
+
+
+def test_the_multi_cell_golden_questions_exist():
+    from flood_agent.evalset.golden import load_golden
+
+    by_id = {q.id: q for q in load_golden()}
+    kinds = {c["kind"] for q in by_id.values() for c in q.above or []}
+    assert len([q for q in by_id.values() if q.above]) == 3 and kinds == {"sql", "markdown", "show"}

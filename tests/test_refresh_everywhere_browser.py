@@ -1,8 +1,9 @@
-"""Refresh reaches a chart of the table and a Display of it in another Conversation (ADR 0003, ADR 0006)."""
+"""Refresh reaches a chart of the table and a Display of it in another notebook (ADR 0003, ADR 0006)."""
 
 from conftest import Clock, ScriptedLLM, last_tool_result, tool_call
 from playwright.sync_api import expect
 from test_chart_tooltip_browser import chart_script
+from test_notebook_browser import run_in_new_notebook
 from test_refresh_browser import HOUR, RECENT, ask_for_recent_table
 
 from flood_agent.llm import TextChunk
@@ -22,7 +23,7 @@ def test_a_refreshed_chart_loads_the_new_rows_and_agrees_with_the_table(build_ag
     expect(page.locator(".display.chart canvas")).to_be_visible()
 
 
-def test_a_table_shown_from_another_conversation_is_refreshed_there_and_the_creator_sees_it(build_agent, live_page, monkeypatch):
+def test_a_table_shown_from_another_notebook_is_refreshed_there_and_the_creator_sees_it(build_agent, live_page, monkeypatch):
     monkeypatch.setenv("FIXED_NOW_MS", "1700000003000")
     clock = Clock()
     llm = ScriptedLLM(
@@ -33,14 +34,10 @@ def test_a_table_shown_from_another_conversation_is_refreshed_there_and_the_crea
         [TextChunk("There it is.")])
     agent = build_agent(llm, clock=clock)
     page = live_page(agent=agent)
-    prompt, send = page.get_by_placeholder("Write a prompt"), page.get_by_role("button", name="Send message (Enter)")
-    prompt.fill("recent flows")
-    send.click()
+    run_in_new_notebook(page, "recent flows")
     expect(page.locator(".reply", has_text="Here you go.")).to_be_visible()
     (table,) = agent.tables.names()
-    page.get_by_role("link", name="New chat").click()
-    prompt.fill(f"show {table}")
-    send.click()
+    run_in_new_notebook(page, f"show {table}")
     expect(page.locator(".reply", has_text="There it is.")).to_be_visible()
     expect(page.locator(".display tbody tr")).to_have_count(2)
 
@@ -49,6 +46,6 @@ def test_a_table_shown_from_another_conversation_is_refreshed_there_and_the_crea
     page.locator(".display .table-name").get_by_role("button", name="Refresh").click()
     expect(page.locator(".display tbody tr")).to_have_count(1)
 
-    page.locator("aside ul li a").last.click()  # the creator's Conversation
+    page.locator(".notebook-list li a").last.click()  # the creator's notebook
     expect(page.locator(".display .table-name .name")).to_have_text(table)
     expect(page.locator(".display tbody tr")).to_have_count(1)

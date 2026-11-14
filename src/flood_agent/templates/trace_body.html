@@ -1,0 +1,12 @@
+{# What a Trace shows when opened: the prompt parts and each entry. Used by the turn Trace and a cell's. #}
+  {% set parts = trace.system_prompt|split_system_prompt %}
+  <details class="trace-part"><summary>System prompt</summary><pre>{{ parts[0] }}</pre></details>
+  <details class="trace-part"><summary>Semantic Layer</summary><pre>{{ parts[1] }}</pre></details>
+  <details class="trace-part" open><summary>Result Tables and turn activity</summary>
+  <pre>{{ parts[2] }}</pre>
+  {% set steps = namespace(n=0) %}
+  {% for e in trace.entries %}
+  {% if e.kind == "llm_step" %}{% set steps.n = steps.n + 1 %}{% endif %}{% set step = steps.n %}
+  {% include "trace_entry.html" %}
+  {% endfor %}
+  </details>

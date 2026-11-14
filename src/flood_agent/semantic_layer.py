@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING
 
 import yaml
 
+from flood_agent import table_names
+
 if TYPE_CHECKING:  # annotations only: no import-time coupling to the Catalog
     from flood_agent.catalog import Table
 
@@ -53,6 +55,11 @@ counts). Rules:
   You cannot know them: do not guess, estimate or recall them. Point the user to the
   table or chart instead. Any IP address or large number in your reply that is not in the
   user's messages, the Semantic Layer or Query Metadata, or a run_count_query count is flagged to the user as unverified.
+- Some user messages are labelled. "[Markdown note] ..." is a note the user wrote in the notebook.
+  Other labelled messages report queries the user ran themselves, without you. Treat all of them
+  as the user's own words and work. You may state a row count, a count query's number and the
+  rows of a SHOW or DESCRIBE result that such a message gives you. You were never sent any other
+  values from those queries, so do not state any.
 - Filter time ranges on the Time Key column (etime), never on stime.
 - Resolve relative time phrases ("last hour", "yesterday", "past 15 minutes") with the SQL
   function now() (epoch ms), e.g. `etime >= now() - 2 * 3600 * 1000`. You are not told the
@@ -110,22 +117,25 @@ class SemanticLayer:
 
     @staticmethod
     def render_result_tables(tables: "list[Table]") -> str:
-        """The Conversation's live Result Tables: names, schemas and originating requests only."""
+        """The live Result Tables of the cells above, and the cell's own earlier Runs: names, schemas and originating requests only."""
         if not tables:
             return (
-                "\n# Result Tables\nNone are available in this Conversation. Result Tables named in "
+                "\n# Result Tables\nNone are available in the cells above. Result Tables named in "
                 "earlier messages have expired and cannot be queried. If the user names another table, "
                 "call describe_table(name) to see its columns, then query it by name; a live Result Table "
-                "from another Conversation can also be shown directly with show_table or show_chart.\n"
+                "from another notebook can also be shown directly with show_table or show_chart.\n"
             )
         lines = [
             "\n# Result Tables",
-            "Earlier results in this Conversation. Query them by name in run_query like any table "
+            "Earlier results in this notebook. Query them by name in run_query like any table "
             "(e.g. to break down or filter an earlier result). Others have expired. If the user names a "
             "table not listed here, call describe_table(name) to see its columns, then query it by name; a live "
-            "Result Table from another Conversation can also be shown directly with show_table or show_chart.",
+            "Result Table from another notebook can also be shown directly with show_table or show_chart.",
         ]
         for t in tables:
             cols = ", ".join(f"{c['name']} {c['type']}" for c in t.columns)
-            lines.append(f"- {t.name} ({t.title}): columns {cols}; from request: {t.request!r}")
+            if t.request == table_names.SQL_CELL_REQUEST:
+                lines.append(f"- {t.name} (SQL Cell) {t.title}: columns {cols}")
+            else:
+                lines.append(f"- {t.name} ({t.title}): columns {cols}; from request: {t.request!r}")
         return "\n".join(lines) + "\n"

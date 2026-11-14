@@ -3,14 +3,15 @@
 import pytest
 from conftest import ScriptedLLM
 from playwright.sync_api import expect
-from test_show_tables import two_conversations_with_tables
+from test_notebook_browser import open_new_notebook
+from test_show_tables import two_notebooks_with_tables
 
 
 @pytest.fixture
 def tables(build_agent, web_client):
     """Set up through HTTP: two Lookup Tables, a Result Table still named rt_* and one renamed ddos_victims.
     Returns (agent for the live app on the same files, the rt_* name)."""
-    client, _, _, rt_name, b_table = two_conversations_with_tables(build_agent, web_client)
+    client, _, _, rt_name, b_table = two_notebooks_with_tables(build_agent, web_client)
     client.post(f"/api/results/{b_table}/settings", data={"name": "ddos_victims", "retention_days": "30"})
     for name in ("watch", "bad_ips"):
         client.post("/api/lookup-tables", data={"name": name, "rows": "ip\n10.0.0.1"})
@@ -18,7 +19,7 @@ def tables(build_agent, web_client):
 
 
 def open_tables(page):
-    page.get_by_role("button", name="Tables", exact=True).click()
+    page.get_by_role("button", name="Browse tables").click()
     dialog = page.locator(".show-tables dialog:not(.table-viewer)")
     expect(dialog).to_have_attribute("open", "")
     return dialog
@@ -31,7 +32,7 @@ def names_in(dialog, heading):
 def test_tables_sits_above_add_lookup_and_lists_the_four_sections(live_page, tables):
     agent, rt_name = tables
     page = live_page(agent=agent)
-    show = page.get_by_role("button", name="Tables", exact=True)
+    show = page.get_by_role("button", name="Browse tables")
     add = page.get_by_role("button", name="Create lookup table")
     assert show.bounding_box()["y"] < add.bounding_box()["y"]  # type: ignore[index]
     assert show.evaluate("b => getComputedStyle(b).borderColor") == add.evaluate("b => getComputedStyle(b).borderColor")
@@ -110,7 +111,8 @@ def test_checkboxes_hide_result_and_lookup_tables_and_are_remembered_after_reloa
 def test_copying_inserts_the_name_at_the_cursor_closes_the_dialog_and_focuses_the_input(live_page, tables):
     agent, _ = tables
     page = live_page(agent=agent)  # headless Chrome grants no clipboard permission: writeText rejects
-    chat = page.get_by_placeholder("Write a prompt")
+    open_new_notebook(page)
+    chat = page.get_by_label("Prompt").first
     chat.fill("count me rows")
     chat.evaluate("i => i.setSelectionRange(6, 6)")  # "count |me rows": touches "me" on its right
 
@@ -129,11 +131,12 @@ def test_copying_inserts_the_name_at_the_cursor_closes_the_dialog_and_focuses_th
 def test_copying_still_inserts_when_there_is_no_clipboard_api(live_page, tables):
     agent, _ = tables
     page = live_page(agent=agent)
+    open_new_notebook(page)
     page.evaluate("() => Object.defineProperty(navigator, 'clipboard', { value: undefined })")
     errors = []
     page.on("pageerror", lambda e: errors.append(e))
     open_tables(page).get_by_role("button", name="Copy flows").click()
-    expect(page.get_by_placeholder("Write a prompt")).to_have_value("flows")
+    expect(page.get_by_label("Prompt").first).to_have_value("flows")
     assert errors == []
 
 
@@ -209,10 +212,13 @@ def test_the_icons_come_just_before_each_name_and_the_expiry_is_right_aligned(li
     assert list_right and list_right["x"] + list_right["width"] - (expires["x"] + expires["width"]) < 12
 
 
-def test_the_table_buttons_use_the_same_font_as_new_chat(live_page, tables):
+def test_the_sidebar_has_a_tables_section_above_a_notebooks_section(live_page, tables):
     agent, _ = tables
     page = live_page(agent=agent)
-    font = "e => { const s = getComputedStyle(e); return [s.fontFamily, s.fontSize, s.fontWeight]; }"
-    new_chat = page.get_by_role("link", name="New chat").evaluate(font)
-    for name in ("Tables", "Create lookup table"):
-        assert page.get_by_role("button", name=name, exact=True).evaluate(font) == new_chat
+    aside = page.locator("aside")
+    tables_head = aside.get_by_role("heading", name="Tables", exact=True)
+    notebooks_head = aside.get_by_role("heading", name="Notebooks")
+    browse, add = aside.get_by_role("button", name="Browse tables"), aside.get_by_role("button", name="Create lookup table")
+    y = lambda loc: loc.bounding_box()["y"]  # noqa: E731
+    assert y(tables_head) < y(browse) < y(add) < y(notebooks_head)
+    expect(notebooks_head.get_by_role("button", name="New notebook")).to_be_visible()  # New notebook lives in the Notebooks heading

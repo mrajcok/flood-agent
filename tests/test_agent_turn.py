@@ -6,7 +6,7 @@ import sqlite3
 import pytest
 from conftest import ScriptedLLM, all_telemetry_values, collect, last_tool_result, tool_call
 
-from flood_agent.agent import Conversation, DisplayEvent, TextDelta, TurnEnd
+from flood_agent.agent import DisplayEvent, TextDelta, TurnEnd
 from flood_agent.llm import TextChunk
 
 TOP_PORTS_SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
@@ -108,12 +108,12 @@ async def test_system_prompt_contains_semantic_layer_and_the_now_function(make_a
     assert "etime" in system["content"] and "now()" in system["content"]
 
 
-async def test_second_turn_keeps_conversation_history(make_agent):
+async def test_a_second_cell_in_a_notebook_keeps_the_earlier_cells_history(make_agent):
     llm = ScriptedLLM([TextChunk("one")], [TextChunk("two")])
     agent = await make_agent(llm)
-    conv = Conversation()
-    await collect(agent, "first", conv)
-    await collect(agent, "second", conv)
+    nb = agent.create_notebook()
+    await collect(agent, "first", nb)
+    await collect(agent, "second", nb)
     roles = [m["role"] for m in llm.calls[1]]
     assert roles == ["system", "user", "assistant", "user"]
 
@@ -138,7 +138,7 @@ async def test_no_telemetry_value_ever_reaches_the_llm(make_agent, telemetry_db)
     values = {v for v in all_telemetry_values(telemetry_db) if len(v) >= 4}
     for llm in scripts:
         await collect(await make_agent(llm), "anything")
-        # Everything the Agent put into the conversation (system prompt, tool
+        # Everything the Agent put into the notebook (system prompt, tool
         # results) must be value-free. Assistant messages are the LLM's own words.
         for call in llm.calls:
             for m in call:

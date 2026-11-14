@@ -6,7 +6,8 @@ import threading
 from contextlib import closing
 from dataclasses import replace
 
-from conftest import DAY, Clock, ScriptedLLM, last_tool_result, tool_call
+from conftest import DAY, Clock, ScriptedLLM, last_tool_result, run_of, tables_in, tool_call
+from conftest import ask as run_in_notebook
 
 from flood_agent import queries
 from flood_agent.llm import TextChunk
@@ -16,7 +17,7 @@ RECENT = "SELECT sip, etime FROM flows WHERE etime > now() - 1500 ORDER BY etime
 
 
 def ask(build_agent, web_client, *sqls, max_rows="1000"):
-    """Run a turn whose LLM makes one run_query per SQL (a SQL may be a function of the earlier result's
+    """Run an AI Cell whose LLM makes one run_query per SQL (a SQL may be a function of the earlier result's
     name). Returns (client, agent, clock, llm, [table names])."""
     clock = Clock()
     steps = [[tool_call("run_query", sql=sql, title="T")] if isinstance(sql, str)
@@ -25,8 +26,7 @@ def ask(build_agent, web_client, *sqls, max_rows="1000"):
     llm = ScriptedLLM(*steps, [TextChunk("done")])
     agent = build_agent(llm, clock=clock, result_ttl_ms=DAY)
     client = web_client(agent)
-    posted = client.post("/chat", data={"message": "go", "conversation_id": "", "max_rows": max_rows})
-    client.get(posted.text.split('sse-connect="')[1].split('"')[0])
+    run_in_notebook(client, "go", max_rows=max_rows)
     return client, agent, clock, llm, agent.tables.names()
 
 
@@ -47,7 +47,7 @@ def test_refresh_replaces_the_rows_under_the_same_name_and_restarts_retention(bu
     monkeypatch.setenv("FIXED_NOW_MS", "1700000003000")
     client, agent, clock, _, (name,) = ask(build_agent, web_client, RECENT)
     assert rows(client, name)["total"] == 2
-    created = agent.tables[name].conversation_id
+    created = agent.tables[name].owner
 
     monkeypatch.setenv("FIXED_NOW_MS", "1700000003600")  # the clock moves: only the last flow is recent now
     clock.ms += HOUR
@@ -60,7 +60,7 @@ def test_refresh_replaces_the_rows_under_the_same_name_and_restarts_retention(bu
     assert [c["name"] for c in body["columns"]] == ["sip", "etime"]
     after = rows(client, name)
     assert after["total"] == 1 and after["rows"] == [["172.30.99.3", 1_700_000_002_999]]
-    assert agent.tables[name].conversation_id == created  # ownership is unchanged
+    assert agent.tables[name].owner == created  # ownership is unchanged
 
 
 def test_as_of_is_the_creation_time_until_the_first_refresh(build_agent, web_client):
@@ -183,42 +183,24 @@ def test_lookup_telemetry_and_unknown_tables_are_not_refreshable(build_agent, we
 
 def test_the_llm_is_told_nothing(build_agent, web_client):
     client, agent, _, llm, (name,) = ask(build_agent, web_client, RECENT)
-    (conversation_id,) = [c["id"] for c in agent.store.list_conversations()]
-    calls, messages = len(llm.calls), agent.store.messages(conversation_id)
+    (nb,) = [n["id"] for n in agent.notebooks.list_notebooks()]
+    calls, messages = len(llm.calls), run_of(agent, nb)["messages"]
 
     refresh(client, name)
 
-    assert len(llm.calls) == calls and agent.store.messages(conversation_id) == messages
-
-
-def test_a_catalog_from_before_this_feature_gains_the_new_columns(tmp_path):
-    from flood_agent.catalog import Catalog
-
-    app_db = tmp_path / "app.db"
-    with closing(sqlite3.connect(app_db)) as con, con:
-        con.executescript("""
-            CREATE TABLE conversations(id TEXT PRIMARY KEY, last_activity_at INTEGER);
-            CREATE TABLE result_tables (name TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, turn_id INTEGER NOT NULL,
-              created_at INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '', columns TEXT NOT NULL DEFAULT '[]',
-              request TEXT NOT NULL DEFAULT '', expired INTEGER NOT NULL DEFAULT 0, truncated_to INTEGER,
-              retention_ms INTEGER NOT NULL);
-            INSERT INTO conversations VALUES ('c', 1);
-            INSERT INTO result_tables(name, conversation_id, turn_id, created_at, retention_ms)
-              VALUES ('rt_20240101_000000', 'c', 1, 1, 100000000000);""")
-    catalog = Catalog(app_db, clock=lambda: 5)
-    assert catalog["rt_20240101_000000"].refreshable is False
+    assert len(llm.calls) == calls and run_of(agent, nb)["messages"] == messages
 
 
 def test_refreshing_a_table_leaves_the_system_prompt_byte_identical(build_agent, web_client):
-    """The prompt lists the Conversation's tables in creation order; a Refresh must not reorder them, or the
-    next turn misses the prompt cache."""
+    """The prompt lists the tables of the cells above in creation order; a Refresh must not reorder them, or
+    the next cell run misses the prompt cache."""
     client, agent, clock, _, (first, second) = ask(build_agent, web_client, RECENT, RECENT)
-    cid = agent.tables[first].conversation_id
-    before = agent.semantic_layer.system_prompt(agent.tables.tables_of(cid))
+    (nb,) = [n["id"] for n in agent.notebooks.list_notebooks()]
+    before = agent.semantic_layer.system_prompt(tables_in(agent, nb))
     clock.ms += HOUR
     assert refresh(client, first).status_code == 200
-    assert [t.name for t in agent.tables.tables_of(cid)] == [first, second]
-    assert agent.semantic_layer.system_prompt(agent.tables.tables_of(cid)) == before
+    assert [t.name for t in tables_in(agent, nb)] == [first, second]
+    assert agent.semantic_layer.system_prompt(tables_in(agent, nb)) == before
 
 
 def test_a_sweep_dropping_the_table_mid_refresh_gives_the_plain_expired_answer(build_agent, web_client, monkeypatch):

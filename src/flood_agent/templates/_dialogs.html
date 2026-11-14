@@ -1,0 +1,105 @@
+  <div class="toast" role="status" x-data="{ added: null, timer: null }" x-show="added" x-transition.opacity x-cloak
+       @lookup-added.window="added = $event.detail; clearTimeout(timer); timer = setTimeout(() => added = null, 6000)">
+    <span x-text="added && (added.verb || 'Added')">Added</span> <b x-text="added && added.name"></b>: <span x-text="added && (added.row_count + (added.row_count === 1 ? ' row' : ' rows'))"></span>,
+    columns <span x-text="added && added.columns.join(', ')"></span>.
+  </div>
+  <dialog class="explain" aria-labelledby="explain-title"
+          x-data="{ sql: '', plan: null, error: '', request: 0,
+                    /* The Query Plan of a Generated SQL from a Trace (explainSql below). Never stored, never sent to the LLM. */
+                    async show(sql) {
+                      const request = ++this.request;  /* only the latest click's answer is shown */
+                      this.sql = sql; this.plan = null; this.error = '';
+                      if (!this.$el.open) this.$el.showModal();
+                      try {
+                        const r = await fetch('/api/explain', { method: 'POST', body: new URLSearchParams({ sql }) });
+                        const body = await r.json().catch(() => ({}));
+                        if (request !== this.request) return;
+                        if (r.ok) this.plan = body.plan;
+                        else this.error = (typeof body.detail === 'string' && body.detail) || 'Could not explain this query.';
+                      } catch (e) { if (request === this.request) this.error = 'Could not explain this query. Try again.'; }
+                    },
+                    closeIfOutside(e) {
+                      if (e.target !== e.currentTarget) return;
+                      const r = e.currentTarget.getBoundingClientRect();
+                      if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) e.currentTarget.close();
+                    } }"
+          @explain-sql.window="show($event.detail)" @close="request++" @click="closeIfOutside($event)">
+    <h3 id="explain-title">Query plan</h3>
+    <pre class="sql" x-text="sql"></pre>
+    <p class="note">Plan as of now; it may differ from when the query ran. No rows are read.</p>
+    <p x-show="!plan && !error">Loading&hellip;</p>
+    <p class="error" role="alert" x-show="error" x-text="error" x-cloak></p>
+    <ol class="plan" x-show="plan" x-cloak>
+      <template x-for="(step, i) in plan || []" :key="i"><li :style="'padding-left: ' + (step.depth * 1.5) + 'rem'" x-text="step.detail"></li></template>
+    </ol>
+    <div class="actions"><button type="button" @click="$el.closest('dialog').close()">Close</button></div>
+  </dialog>
+  <script>
+    // A Trace's Explain button: show the Query Plan of its Generated SQL (data-sql) in the dialog above.
+    function explainSql(button) {
+      window.dispatchEvent(new CustomEvent("explain-sql", { detail: button.dataset.sql }));
+    }
+  </script>
+  <dialog id="delete-dialog" aria-labelledby="delete-title">
+    <form method="dialog">
+      <h3 id="delete-title"></h3>
+      <div id="delete-result-choice">
+        <label><input type="radio" name="choice" value="keep" checked> <span>Keep its <span class="delete-result-count"></span> (named <code>rt_&hellip;</code>); they expire per their Retention</span></label>
+        <label><input type="radio" name="choice" value="delete_rt"> <span>Delete its <span class="delete-result-count"></span> now</span></label>
+      </div>
+      <p id="delete-saved-note"></p>
+      <div class="actions"><button value="ok" class="danger">Delete</button> <button value="cancel" formnovalidate>Cancel</button></div>
+    </form>
+  </dialog>
+  <script>
+    // Deleting a Notebook or Cell always asks in this dialog: whether to keep or delete its
+    // live Result Tables (rt_*) if it has any, and that its Saved Tables are kept (ADR 0004).
+    // Ask in the dialog; resolves to "keep" or "delete_rt", or null if cancelled. `counts` is {result, saved}.
+    function askDeleteChoice(title, counts) {
+      return new Promise((resolve) => {
+        const tables = (n, kind) => n + " " + kind + (n === 1 ? "" : "s");
+        const dialog = document.getElementById("delete-dialog");
+        document.getElementById("delete-title").textContent = title;
+        document.getElementById("delete-result-choice").hidden = !counts.result;
+        dialog.querySelectorAll(".delete-result-count").forEach(el => el.textContent = tables(counts.result, "Result Table"));
+        const note = document.getElementById("delete-saved-note");
+        note.hidden = !counts.saved;
+        note.textContent = "Its " + tables(counts.saved, "Saved Table") + " will be kept. Use the Tables button to delete Saved (renamed) Tables.";
+        dialog.querySelector('input[value="keep"]').checked = true;
+        dialog.returnValue = "";
+        dialog.onclose = () => resolve(dialog.returnValue === "ok" ? dialog.querySelector('input[name="choice"]:checked').value : null);
+        dialog.showModal();
+      });
+    }
+    document.addEventListener("submit", async (event) => {
+      const form = event.target;
+      if (!form.classList || !form.classList.contains("delete-form") || form.dataset.confirmed) return;
+      event.preventDefault();
+      let counts = { result: 0, saved: 0 };
+      try { counts = await (await fetch(form.dataset.previewUrl)).json(); } catch (e) { /* ask without the counts */ }
+      const choice = await askDeleteChoice(form.dataset.title, counts);
+      if (!choice) return;
+      let field = form.querySelector('input[name="tables"]');
+      if (!field) { field = document.createElement("input"); field.type = "hidden"; field.name = "tables"; form.appendChild(field); }
+      field.value = choice;
+      form.dataset.confirmed = "1";
+      form.submit();
+    }, true);
+  </script>
+  <script>
+    // Copy a table name to the clipboard and insert it into a prompt box at the cursor, spaced from
+    // the words around it; used by the Tables dialog and each table Display.
+    function insertIntoPrompt(name) {
+      try { navigator.clipboard.writeText(name).catch(() => {}); } catch (e) { /* no clipboard: still insert */ }
+      // The prompt box last used (or the first AI Cell's) takes the name.
+      const input = window.lastPromptBox || document.querySelector("textarea.cell-prompt");
+      if (!input) return;
+      const value = input.value;
+      const before = value.slice(0, input.selectionStart), after = value.slice(input.selectionEnd);
+      const head = before + (before && !/\s$/.test(before) ? " " : "") + name;
+      input.value = head + (after && !/^\s/.test(after) ? " " : "") + after;
+      input.focus();
+      input.setSelectionRange(head.length, head.length);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  </script>

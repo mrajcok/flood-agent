@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import ScriptedLLM, query_limits
+from conftest import ScriptedLLM, query_limits, register_table
 
 from flood_agent import queries
 
@@ -40,8 +40,7 @@ def env(build_agent, web_client, semantic_layer_path):
     def table(sql=GEN):
         meta = queries.run_query(agent.config.telemetry_db, agent.config.results_db, sql, **query_limits())
         assert meta["success"], meta
-        cid = agent.store.create_conversation()
-        agent.tables.register(meta["result_table"], cid, agent.store.start_turn(cid, "q"))
+        register_table(agent.tables, meta["result_table"])
         return meta["result_table"]
 
     return client, table
@@ -152,6 +151,14 @@ def test_js_formatting_functions():
     if not shutil.which("node"):
         pytest.skip("node not installed")
     test_file = Path(__file__).parent / "js" / "format.test.js"
+    r = subprocess.run(["node", "--test", str(test_file)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_js_sql_insert_functions():
+    if not shutil.which("node"):
+        pytest.skip("node not installed")
+    test_file = Path(__file__).parent / "js" / "sql_insert.test.js"
     r = subprocess.run(["node", "--test", str(test_file)], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
 

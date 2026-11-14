@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} - Flood Agent</title>
+  {% include "_head.html" %}
+  {% include "notebook_style.html" %}
+</head>
+<body data-model="{{ default_model }}">
+  {% include "_topbar.html" %}
+  <div class="layout">
+  <div class="scroll-y" id="history-area">{% include "sidebar.html" %}</div>
+  <main>
+  <div class="scroll-y nb" id="prompt-area">
+    <h2 class="nb-title">{{ title }}</h2>
+    {# One flat list: each cell block is followed by its "add a cell" bar, so a cell of any kind can be placed
+       between any two. The models and the busy flag are the scope every cell reads. #}
+    <div id="cells" data-notebook-id="{{ notebook_id }}"
+         x-data="{ models: {{ models | tojson | forceescape }}, busy: false, staleIds: {{ stale_ids | tojson | forceescape }},
+                   async refreshStale() {
+                     /* Which AI Cells are stale can change whenever a cell does: ask the server. */
+                     try {
+                       const r = await fetch('/n/{{ notebook_id }}/stale');
+                       if (r.ok) this.staleIds = await r.json();
+                     } catch (e) {}
+                   },
+                   async cellOp(button, op) {
+                     /* Move, copy or delete the cell above the button's bar; the server refuses a running cell. */
+                     const bar = button.closest('.add-bar'), block = bar.previousElementSibling, id = block.dataset.cellId;
+                     const url = '/n/{{ notebook_id }}/cells/' + id;
+                     try {
+                       if (op === 'delete') {
+                         const preview = await fetch(url + '/delete-preview');
+                         if (!preview.ok) return;
+                         const choice = await askDeleteChoice('Delete this ' + block.dataset.kind + ' cell?', await preview.json());
+                         if (!choice) return;
+                         const r = await fetch(url + '/delete', { method: 'POST', body: new URLSearchParams({ tables: choice }) });
+                         if (!r.ok) return;
+                         block.remove(); bar.remove();
+                       } else if (op === 'copy') {
+                         const r = await fetch(url + '/copy', { method: 'POST' });
+                         if (!r.ok) return;
+                         bar.insertAdjacentHTML('afterend', await r.text());
+                         htmx.process(bar.nextElementSibling); htmx.process(bar.nextElementSibling.nextElementSibling);
+                       } else {
+                         const r = await fetch(url + '/move', { method: 'POST', body: new URLSearchParams({ direction: op }) });
+                         if (!r.ok) return;
+                         if (op === 'up') {
+                           const prevBlock = block.previousElementSibling.previousElementSibling;
+                           if (prevBlock && prevBlock.classList.contains('cellblock')) { prevBlock.before(block, bar); }
+                         } else {
+                           const next = bar.nextElementSibling;
+                           if (next && next.classList.contains('cellblock')) { next.nextElementSibling.after(block, bar); }
+                         }
+                       }
+                     } catch (e) { return; }
+                     window.dispatchEvent(new Event('cells-changed'));
+                   },
+                   watch() {
+                     const update = () => { this.busy = !!this.$el.querySelector('.cellblock.running'); };
+                     new MutationObserver(update).observe(this.$el, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+                     update();
+                   } }" x-init="watch()"
+         @htmx:after-swap.window="refreshStale()" @cells-changed.window="refreshStale()">
+      <div class="add-top" data-at="start">
+        {% for kind, label in [("ai", "+ AI"), ("sql", "+ SQL"), ("markdown", "+ Markdown")] %}
+        <button type="button" data-add-top="{{ kind }}" aria-label="Insert {{ label[2:] }} Cell above the first cell" title="Insert above the first cell"
+                hx-post="/n/{{ notebook_id }}/cells" hx-vals='{"kind": "{{ kind }}", "at": "start"}' hx-target="closest .add-top" hx-swap="afterend">{{ label }}</button>
+        {% endfor %}
+      </div>
+      {% for cell in cells %}{% include "notebook_slot.html" %}{% endfor %}
+    </div>
+  </div>
+  </main>
+  </div>
+  {% include "_dialogs.html" %}
+  <script>
+    // The prompt box last used takes a table name copied from the Tables dialog or a Display (insertIntoPrompt).
+    document.addEventListener("focusin", (e) => { if (e.target.matches && e.target.matches("textarea.cell-prompt")) window.lastPromptBox = e.target; });
+  </script>
+</body>
+</html>

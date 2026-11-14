@@ -8,6 +8,7 @@ import ipaddress
 import os
 import re
 import sqlite3
+import threading
 import time
 from contextlib import closing, contextmanager
 from datetime import datetime
@@ -74,6 +75,18 @@ _FORBIDDEN_WORDS = {
     "rollback", "savepoint", "release",
 }
 _ONLY_SELECT = "Only a single read-only SELECT statement is allowed."
+_QUOTE_HINT = (' A word the check does not allow (such as "analyze") may be a column name: put it in double quotes, '
+               'like "analyze".')
+# Words that are SQL keywords, not names: a column called one of these must be quoted to be selected.
+_KEYWORDS = _FORBIDDEN_WORDS | {
+    "select", "from", "where", "group", "order", "by", "having", "limit", "offset", "union", "all", "distinct",
+    "as", "on", "join", "left", "right", "inner", "outer", "cross", "natural", "using", "and", "or", "not", "in",
+    "is", "null", "like", "glob", "between", "case", "when", "then", "else", "end", "with", "table", "index",
+    "view", "values", "set", "into", "exists", "except", "intersect", "default", "key", "primary", "references",
+    "replace", "to", "add", "column", "check", "collate", "constraint", "foreign", "unique", "if", "for", "no",
+    "of", "row", "rows", "range", "window", "over", "partition", "filter", "current", "escape", "cast", "plan",
+    "query", "explain",
+}
 
 
 class QueryRejected(Exception):
@@ -130,7 +143,7 @@ def validate_select(sql: str) -> str:
     if not words or words[0] not in ("select", "with"):
         raise QueryRejected(_ONLY_SELECT)
     if _FORBIDDEN_WORDS & set(words):
-        raise QueryRejected(_ONLY_SELECT)
+        raise QueryRejected(_ONLY_SELECT + _QUOTE_HINT)
     if len(semis) > 1:
         raise QueryRejected(_ONLY_SELECT)
     if semis:
@@ -140,6 +153,30 @@ def validate_select(sql: str) -> str:
             raise QueryRejected(_ONLY_SELECT)
         return sql[: semis[0]]
     return sql
+
+
+def sql_name(identifier: str) -> str:
+    """`identifier` as it is written in a query: bare when it is a plain name, double-quoted when it is a keyword
+    or has odd characters."""
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", identifier) and identifier.lower() not in _KEYWORDS:
+        return identifier
+    return table_names.quote(identifier)
+
+
+def table_columns(telemetry_db: Path, results_db: Path, name: str, telemetry: bool) -> list[dict] | None:
+    """A table's column names and types (never rows), each with `insert`, the text to put in a query. `telemetry`
+    says which database `name` is in; None if it has no columns there. The caller has checked `name` is readable."""
+    if telemetry:
+        con = sqlite3.connect(f"file:{telemetry_db}?mode=ro", uri=True)
+        try:
+            cols = [{"name": n, "type": t or "ANY"} for n, t in
+                    con.execute("SELECT name, type FROM pragma_table_info(?)", (name,))]
+        finally:
+            con.close()
+    else:
+        described = describe_results_table(results_db, name)
+        cols = described["columns"] if described else []
+    return [{**c, "insert": sql_name(c["name"])} for c in cols] or None
 
 
 def now_ms() -> int:
@@ -172,7 +209,7 @@ def sanitize_error(message: str) -> str:
 
     Authorizer denials ("access to results.<table>.col is prohibited", "not authorized") are
     replaced wholesale so no table or column name from a denied read (possibly another
-    Conversation's) reaches the LLM; any other database-qualified reference is redacted."""
+    notebook's) reaches the LLM; any other database-qualified reference is redacted."""
     if _DENIAL_RE.search(message):
         return ACCESS_DENIED
     message = _QUALIFIED_RE.sub("<table>", message)
@@ -234,14 +271,16 @@ _TRUNCATED_NOTE = (
 
 
 @contextmanager
-def _deadline(con: sqlite3.Connection, timeout_s: float):
-    """Abort statements on `con` after `timeout_s` seconds. Yields a callable that says whether
-    the deadline fired."""
+def _deadline(con: sqlite3.Connection, timeout_s: float, stop: threading.Event | None = None):
+    """Abort statements on `con` after `timeout_s` seconds, or as soon as `stop` is set (a user's Stop).
+    Yields a callable that says whether the deadline fired."""
     end = time.monotonic() + timeout_s
     fired = False
 
     def _progress():
         nonlocal fired
+        if stop is not None and stop.is_set():
+            return 1
         if time.monotonic() > end:
             fired = True
             return 1
@@ -254,8 +293,11 @@ def _deadline(con: sqlite3.Connection, timeout_s: float):
         con.set_progress_handler(None, 0)
 
 
-def _failure(e: sqlite3.Error, timed_out: bool, timeout_s: float, **extra) -> dict:
-    """A failed-query result: a sanitised `error` for the LLM plus `raw_error` for the Trace."""
+def _failure(e: sqlite3.Error, timed_out: bool, timeout_s: float, stop: threading.Event | None = None, **extra) -> dict:
+    """A failed-query result: a sanitised `error` for the LLM plus `raw_error` for the Trace; `stopped` when
+    the user's Stop caused it."""
+    if stop is not None and stop.is_set() and not timed_out:
+        return {"success": False, "stopped": True, "error": "Stopped by the user.", "raw_error": str(e), **extra}
     error = _TIMEOUT_GUIDANCE.format(s=timeout_s) if timed_out else sanitize_error(str(e))
     return {"success": False, "error": error, "raw_error": str(e), **extra}
 
@@ -268,6 +310,7 @@ def run_query(
     max_rows: int,
     allowed_tables: set[str] | None = None,
     title: str = "",
+    stop: threading.Event | None = None,
 ) -> dict:
     """Run the SQL as CTAS into the results database. Returns Query Metadata only.
 
@@ -276,7 +319,8 @@ def run_query(
 
     On failure the dict has a sanitised `error` (safe for the LLM) and, for SQLite errors,
     a `raw_error` that the caller must keep for the Trace and strip before the LLM.
-    The SELECT may reference only the Result Tables in `allowed_tables` (the Conversation's own).
+    The SELECT may reference only the Result Tables in `allowed_tables` (the ones the caller may read).
+    Setting `stop` aborts the query; the failure then has `stopped` set.
     """
     try:
         select = validate_select(sql)
@@ -286,7 +330,7 @@ def run_query(
     executed = ""
     try:
         name = _free_name(con)
-        with _deadline(con, timeout_s) as timed_out:
+        with _deadline(con, timeout_s, stop) as timed_out:
             for attempt in range(5):  # a concurrent query may take the name between check and create
                 executed = f"CREATE TABLE results.{name} AS SELECT * FROM (\n{select}\n) LIMIT {int(max_rows)}"
                 try:
@@ -296,7 +340,7 @@ def run_query(
                     if attempt < 4 and f"table {name} already exists" in str(e):
                         name = _free_name(con)
                         continue
-                    return _failure(e, timed_out(), timeout_s, executed_sql=executed)
+                    return _failure(e, timed_out(), timeout_s, stop, executed_sql=executed)
         try:
             con.set_authorizer(None)
             con.commit()
@@ -304,7 +348,7 @@ def run_query(
             info = [(r[1], r[2]) for r in con.execute(f"PRAGMA results.table_info({name})")]
             cols = _column_types(con, f"results.{name}", info)
         except sqlite3.Error as e:
-            return _failure(e, False, timeout_s, executed_sql=executed)
+            return _failure(e, False, timeout_s, stop, executed_sql=executed)
     finally:
         con.close()
     result = {"success": True, "result_table": name, "columns": cols, "row_count": count, "executed_sql": executed}
@@ -342,12 +386,20 @@ def explain_query(
     return plan
 
 
-_COUNT_GUIDANCE = (
+COUNT_GUIDANCE = (
     "A count query must have the form SELECT COUNT(...) FROM ... (optionally COUNT(...) AS name) "
     "and return one non-negative integer, e.g. SELECT COUNT(*) FROM flows WHERE ..."
 )
 # The select list must be exactly one bare COUNT(...): no other column, alias trick or arithmetic.
 _COUNT_FORM_RE = re.compile(r"^\s*select\s+count\s*\([^()]*\)\s*(?:as\s+\w+\s+)?from\s", re.I)
+
+
+def looks_like_count(sql: str) -> bool:
+    """Whether the statement has the count form (`SELECT COUNT(...) FROM ...`), as `run_count_query` checks it."""
+    try:
+        return _COUNT_FORM_RE.match(validate_select(sql)) is not None
+    except QueryRejected:
+        return False
 
 
 def run_count_query(
@@ -356,6 +408,7 @@ def run_count_query(
     sql: str,
     timeout_s: float,
     allowed_tables: set[str] | None = None,
+    stop: threading.Event | None = None,
 ) -> dict:
     """Run a `SELECT COUNT(...) FROM ...` and return the number itself (no Result Table). The one
     place a telemetry-derived value reaches the LLM, so the select list must be a bare COUNT and
@@ -365,22 +418,28 @@ def run_count_query(
     except QueryRejected as e:
         return {"success": False, "error": str(e)}
     if not _COUNT_FORM_RE.match(select):
-        return {"success": False, "error": _COUNT_GUIDANCE}
+        return {"success": False, "error": COUNT_GUIDANCE}
     con = open_connection(telemetry_db, results_db, allowed_tables)
     try:
-        with _deadline(con, timeout_s) as timed_out:
+        with _deadline(con, timeout_s, stop) as timed_out:
             try:
                 rows = con.execute(f"SELECT * FROM (\n{select}\n) LIMIT 2").fetchall()
             except sqlite3.Error as e:
-                return _failure(e, timed_out(), timeout_s)
+                return _failure(e, timed_out(), timeout_s, stop)
     finally:
         con.close()
     if len(rows) != 1 or len(rows[0]) != 1:
-        return {"success": False, "error": _COUNT_GUIDANCE}
+        return {"success": False, "error": COUNT_GUIDANCE}
     value = rows[0][0]
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        return {"success": False, "error": _COUNT_GUIDANCE}
+        return {"success": False, "error": COUNT_GUIDANCE}
     return {"success": True, "count": value}
+
+
+def shorten_sql(sql: str, limit: int = 60) -> str:
+    """The SQL on one line, cut to `limit` characters (with an ellipsis): a SQL Cell's table title."""
+    one_line = " ".join(sql.split())
+    return one_line if len(one_line) <= limit else one_line[: limit - 1].rstrip() + "\u2026"
 
 
 def result_table_columns(results_db: Path, name: str) -> list[str] | None:

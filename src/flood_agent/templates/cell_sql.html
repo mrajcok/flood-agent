@@ -1,0 +1,169 @@
+{# A SQL Cell: gutter (Run/Stop, run number), header with Explain and the row cap chip, the SQL, the output (a table or
+   Count Display, the raw error if it failed) and a status line. Its Run button is its refresh: there is no other.
+   `cell` comes from web.cell_view; `busy` is the notebook's (see notebook.html). #}
+{% set state = "running" if cell.running else (cell.status or "not-run") %}
+<div class="cellblock sql{% if cell.running %} running{% endif %}" id="cell-{{ cell.id }}" data-cell-id="{{ cell.id }}" data-kind="sql" data-state="{{ state }}"
+     data-edited="{{ 'true' if cell.edited else 'false' }}" :data-edited="edited"
+     {% if cell.polling %}hx-get="/n/{{ notebook_id }}/cells/{{ cell.id }}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}
+     x-data="{ sql: {{ cell.sql | tojson | forceescape }}, maxRows: {{ cell.max_rows | tojson | forceescape }}, pop: false, error: '', stopping: false,
+               running: {{ cell.running | tojson }},
+               ran: {{ cell.ran | tojson | forceescape }},
+               get edited() {
+                 /* The Draft differs from what ran: the old output stays, marked, and cells below are sent what ran. */
+                 const r = this.ran;
+                 return !!r && (this.statement !== r.statement || this.command !== r.command || String(this.maxRows) !== String(r.max_rows));
+               },
+               get statement() { return this.command ? (this.command === this.describe ? this.command + ' ' + this.tbl.trim() : this.command) : this.sql; },
+               command: {{ cell.command | tojson | forceescape }}, describe: 'DESCRIBE TABLE',
+               tpop: false, tq: '', listing: null, tbl: {{ (cell.table if cell.command == 'DESCRIBE TABLE' else '') | tojson | forceescape }}, cols: [], colError: '',
+               get runnable() { return this.command ? (this.command !== this.describe || !!this.tbl) : !!this.sql.trim(); },
+               async openTables() {
+                 this.tpop = !this.tpop; this.tq = '';
+                 if (!this.tpop) return;
+                 try { this.listing = await (await fetch('/api/tables')).json(); } catch (e) { this.listing = null; }
+                 this.$nextTick(() => this.$refs.tq && this.$refs.tq.focus());
+               },
+               groups() {
+                 const l = this.listing || {}, q = this.tq.trim().toLowerCase();
+                 return [['Telemetry', l.telemetry], ['Saved', l.saved], ['Lookup', l.lookup], ['Result', l.result]]
+                   .map(([label, names]) => ({ label, names: (names || []).filter(n => n.toLowerCase().includes(q)) }))
+                   .filter(g => g.names.length);
+               },
+               async pickTable(name) {
+                 this.tpop = false; this.tbl = name; this.cols = []; this.colError = '';
+                 if (this.command) { this.save(); return; }  /* DESCRIBE TABLE: the table is the choice, nothing is inserted */
+                 FloodSql.insertAt(this.$refs.sql, name, 'table'); this.save();
+                 try {
+                   const r = await fetch('/api/tables/' + encodeURIComponent(name) + '/columns');
+                   if (r.ok) this.cols = (await r.json()).columns; else this.colError = 'That table is no longer available.';
+                 } catch (e) { this.colError = 'Could not load its columns.'; }
+               },
+               put(text, kind) { FloodSql.insertAt(this.$refs.sql, text, kind); this.save(); },
+               get chip() { return '≤ ' + Number(this.maxRows).toLocaleString('en-US') + ' rows ▾'; },
+               fields() { return new URLSearchParams({ sql: this.sql, max_rows: this.maxRows, command: this.command, table: this.command === this.describe ? this.tbl : '' }); },
+               cleanRows() {
+                 this.maxRows = String(this.maxRows).replace(/\D/g, '').replace(/^0+/, '') || '{{ cell.max_rows }}';
+                 this.save();
+               },
+               async save() {
+                 /* Keep the Draft, so a reload shows what was typed; a failure is not worth interrupting for. */
+                 if (this.running) return;
+                 try { await fetch('/n/{{ notebook_id }}/cells/{{ cell.id }}/draft', { method: 'POST', body: this.fields() }); } catch (e) {}
+               },
+               async run() {
+                 if (this.running || busy || !this.runnable) return;
+                 this.error = ''; this.pop = false;
+                 try {
+                   const r = await fetch('/n/{{ notebook_id }}/cells/{{ cell.id }}/run', { method: 'POST', body: this.fields() });
+                   if (!r.ok) { this.error = ((await r.json().catch(() => ({}))).detail) || 'Could not run this cell.'; return; }
+                   const html = await r.text();
+                   const el = this.$root;
+                   el.outerHTML = html;  /* the running cell: it opens its own stream */
+                   htmx.process(document.getElementById('cell-{{ cell.id }}'));
+                 } catch (e) { this.error = 'Could not run this cell. Try again.'; }
+               },
+               async stop() {
+                 this.stopping = true;
+                 try { await fetch('/n/{{ notebook_id }}/cells/{{ cell.id }}/stop', { method: 'POST' }); } catch (e) {}
+               } }"
+     @keydown.escape.window="pop = false">
+  <div class="gutter">
+    {% if cell.running %}
+    <button type="button" class="gbtn stop" aria-label="Stop" title="Stop this cell" :disabled="stopping" @click="stop()">&#x25A0;</button>
+    <div class="num" title="Running">[*]</div>
+    {% else %}
+    <button type="button" class="gbtn run" aria-label="Run" title="Run this cell (Shift-Enter); run it again to refresh its table" :disabled="busy || !runnable" @click="run()">&#x25B6;</button>
+    <div class="num" title="{{ 'Run number' if cell.number else 'Not run yet' }}">[{{ cell.number or " " }}]</div>
+    {% endif %}
+  </div>
+  <div class="cell sql">
+    <div class="head">
+      <span class="kind">SQL</span>
+      <span class="grow"></span>
+      <select class="command" aria-label="Command" title="What this cell runs: your SQL query, or a SHOW / DESCRIBE command" x-model="command"
+              @change="error = ''; save()" {% if cell.running %}disabled{% else %}:disabled="running"{% endif %}>
+        <option value="">SQL query</option>
+        {% for c in show_commands %}<option value="{{ c }}"{% if c == cell.command %} selected{% endif %}>{{ c }}</option>{% endfor %}
+      </select>
+      <button type="button" class="explain" title="Show how the database would run this query (its Query Plan); no LLM, nothing is run"
+              :disabled="!sql.trim() || !!command" x-show="!command" @click="$dispatch('explain-sql', sql)">Explain</button>
+      <span class="chip-wrap">
+        <button type="button" class="chip" aria-haspopup="true" :aria-expanded="pop" title="Row cap for the next run"
+                {% if cell.running %}disabled{% else %}:disabled="running || !!command"{% endif %} @click.stop="pop = !pop"
+                x-text="chip">&#x2264; {{ "{:,}".format(cell.max_rows) }} rows &#x25BE;</button>
+        <div class="pop" role="dialog" aria-label="Row cap" x-show="pop" x-cloak @click.outside="pop = false">
+          <label class="f">Max rows
+            <input type="text" inputmode="numeric" x-model="maxRows" @change="cleanRows()" aria-label="Max rows"></label>
+          <small>New SQL Cells start with the last row cap you ran.</small>
+        </div>
+      </span>
+    </div>
+    <div class="sql-tools" x-show="!running && (!command || command === describe)">
+      <span class="chip-wrap">
+        <button type="button" class="tpick" aria-haspopup="true" :aria-expanded="tpop" title="Pick a table to query" @click.stop="openTables()">Table &#x25BE;</button>
+        <div class="pop table-pop" role="dialog" aria-label="Tables" x-show="tpop" x-cloak @click.outside="tpop = false" @keydown.escape.stop="tpop = false">
+          <input type="search" x-ref="tq" x-model="tq" placeholder="Search tables" aria-label="Search tables">
+          <template x-for="g in groups()" :key="g.label">
+            <div class="tgroup"><div class="tlabel" x-text="g.label"></div>
+              <template x-for="n in g.names" :key="n"><button type="button" class="titem" x-text="n" @click="pickTable(n)"></button></template></div>
+          </template>
+          <small x-show="listing && !groups().length">No table matches.</small>
+        </div>
+      </span>
+      <template x-if="tbl && !command">
+        <span class="tbl-cols">
+          <button type="button" class="tname" :title="'Insert ' + tbl + ' at the cursor'" x-text="tbl" @click="put(tbl, 'name')"></button>
+          <template x-for="c in cols" :key="c.name"><button type="button" class="col" :title="c.type" :data-type="c.type" x-text="c.name" @click="put(c.insert, 'column')"></button></template>
+          <small class="cell-error" x-show="colError" x-text="colError"></small>
+        </span>
+      </template>
+      <span class="tname chosen" x-show="command && tbl" x-text="tbl"></span>
+    </div>
+    <textarea x-ref="sql" class="cell-prompt cell-sql" rows="3" spellcheck="false" placeholder="SELECT ... FROM ... (Shift-Enter to run)" aria-label="SQL" x-model="sql" x-show="!command"
+              @blur="save()" @keydown.shift.enter.prevent="run()" {% if cell.running %}readonly{% else %}:readonly="running"{% endif %}></textarea>
+    <p class="cell-error" role="alert" x-show="error" x-text="error" x-cloak></p>
+
+    <div class="output">
+      {% if cell.streaming %}
+      {# A Run just asked for: its stream runs the query, and on its end the finished cell replaces this one. #}
+      <div class="cell-stream" hx-ext="sse" sse-connect="/n/{{ notebook_id }}/cells/{{ cell.id }}/stream" sse-close="end">
+        <span hidden hx-get="/n/{{ notebook_id }}/cells/{{ cell.id }}" hx-trigger="sse:end" hx-target="closest .cellblock" hx-swap="outerHTML"></span>
+      </div>
+      {% else %}
+      {% for item in cell.output %}{% include "display_item.html" %}{% endfor %}
+      {% if cell.result and cell.result.rows is defined and not cell.running %}
+      <div class="show-rows" x-data="{ col: -1, dir: 1,
+             sort(i) {
+               this.dir = this.col === i ? -this.dir : 1; this.col = i;
+               const body = this.$refs.body, rows = Array.from(body.rows), d = this.dir;
+               const val = r => r.cells[i].dataset.v, num = v => v !== '' && !isNaN(Number(v));
+               rows.sort((a, b) => { const x = val(a), y = val(b);
+                 return d * ((num(x) && num(y)) ? Number(x) - Number(y) : x.localeCompare(y)); });
+               rows.forEach(r => body.appendChild(r));
+             } }">
+        <table class="show-table">
+          <thead><tr>{% for name in cell.result.columns %}<th><button type="button" class="sort" @click="sort({{ loop.index0 }})">{{ name }}<span class="arrow" x-show="col === {{ loop.index0 }}" x-text="dir > 0 ? ' \u25B2' : ' \u25BC'"></span></button></th>{% endfor %}</tr></thead>
+          <tbody x-ref="body">{% for row in cell.result.rows %}<tr>{% for v in row %}<td data-v="{{ '' if v is none else v }}">{{ '' if v is none else v }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+        </table>
+      </div>
+      {% endif %}
+      {% if cell.status == "stopped" %}<p class="cell-stopped"><em>stopped by the user</em></p>{% endif %}
+      {% if cell.result and cell.result.raw_error %}<p class="cell-error sql-error" role="alert">{{ cell.result.raw_error }}</p>{% endif %}
+      {% endif %}
+    </div>
+
+    {% if cell.result and not cell.running %}
+    {% set r = cell.result %}
+    <div class="cell-foot sql-status">
+      {%- if r.status == "ok" -%}
+        {% if r.count is defined %}count{% else %}{{ "{:,}".format(r.row_count) }} row{{ "" if r.row_count == 1 else "s" }}{% endif %}
+      {%- else -%}
+        {{ r.status }}
+      {%- endif %} &middot; {{ r.elapsed_s }} s &middot; ran <time data-ms="{{ cell.started_at_ms }}" x-data x-text="new Date({{ cell.started_at_ms }}).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })">{{ cell.ran_utc }}</time>
+      {%- if cell.refreshed_at_ms %} &middot; refreshed <time data-ms="{{ cell.refreshed_at_ms }}" x-data x-text="new Date({{ cell.refreshed_at_ms }}).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })"></time>{% endif %}
+      {%- if r.truncated_to %} <span class="badge-truncated">stopped at the {{ "{:,}".format(r.truncated_to) }}-row cap: there are probably more rows</span>{% endif %}
+      <template x-if="edited"><span class="badge edited" title="The SQL, command or row cap changed since this ran; the cells below were sent what ran">edited, not run</span></template>
+    </div>
+    {% endif %}
+  </div>
+</div>

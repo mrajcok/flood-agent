@@ -3,9 +3,9 @@
 import json
 import re
 
-from conftest import ScriptedLLM, collect, last_tool_result, tool_call
+from conftest import ScriptedLLM, ask, collect, last_tool_result, tool_call
 
-from flood_agent.agent import Conversation, TraceReady
+from flood_agent.agent import TraceReady
 from flood_agent.llm import TextChunk
 
 SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
@@ -22,9 +22,9 @@ def chart_script():
     ]
 
 
-async def run(make_agent, llm, message="q", conversation=None):
+async def run(make_agent, llm, message="q", notebook=None):
     agent = await make_agent(llm)
-    events = await collect(agent, message, conversation)
+    events = await collect(agent, message, notebook)
     traces = [e for e in events if isinstance(e, TraceReady)]
     assert len(traces) == 1
     return agent, traces[0].trace
@@ -133,36 +133,26 @@ async def test_trace_never_reaches_the_llm(make_agent):
         lambda msgs: [tool_call("show_table", result_table=last_tool_result(msgs)["result_table"])],
         [TextChunk("ok")],
     )
-    conv = Conversation()
-    agent, trace = await run(make_agent, llm, "first", conv)
+    agent, trace = await run(make_agent, llm, "first")
     raw = of_kind(trace, "query_error")[0]["raw_error"]
     executed = of_kind(trace, "tool_call")[1]["executed_sql"]
 
     follow = ScriptedLLM([TextChunk("fine")])
     agent.client_for = lambda model: follow
-    await collect(agent, "second", agent.open_conversation(conv.id))
+    await collect(agent, "second", agent.notebooks.list_notebooks()[0]["id"])
     sent = llm.all_sent_text() + follow.all_sent_text()
     for secret in [raw, executed, "executed_sql", "raw_error", "prompt_tokens", "duration_ms", "query_metadata"]:
         assert secret not in sent, secret
 
 
-def ask(client, message, conversation_id=""):
-    posted = client.post("/chat", data={"message": message, "conversation_id": conversation_id, "max_rows": "1000"})
-    cid = re.search(r'name="conversation_id" value="([0-9a-f]+)"', posted.text).group(1)
-    stream_url = posted.text.split('sse-connect="')[1].split('"')[0]
-    return cid, client.get(stream_url).text
-
-
 def test_trace_is_collapsed_details_in_stream_and_after_restart(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM(*chart_script())))
-    cid, body = ask(client, "chart please")
-    assert "event: trace" in body
-    assert "<details" in body and body.count("open><summary>Result Tables and turn activity") == 1
-
+    nb, _, body = ask(client, "chart please")
+    assert "event: live-step" in body  # while it runs, each LLM call shows live
     restarted = web_client(build_agent(ScriptedLLM()))
-    page = restarted.get(f"/c/{cid}").text
+    page = restarted.get(f"/n/{nb}").text
     assert "<details" in page and page.count("open><summary>Result Tables and turn activity") == 1
-    assert page.count('class="trace"') == 1
+    assert page.count('class="trace cell-trace"') == 1
     assert page.count('class="trace-part"') >= 3
     assert '<details class="trace-part" open><summary>Result Tables' in page
     assert "CREATE TABLE results." in page and "z-ai/glm-5.3" in page
@@ -172,19 +162,19 @@ def test_trace_content_is_html_escaped(build_agent, web_client):
     sql = "SELECT '<script>alert(1)</script>' AS x FROM flows"
     llm = ScriptedLLM([tool_call("run_query", sql=sql, title="t")], [TextChunk("<b>hi</b>")])
     client = web_client(build_agent(llm))
-    cid, body = ask(client, "q")
-    page = client.get(f"/c/{cid}").text
+    nb, _, body = ask(client, "q")
+    page = client.get(f"/n/{nb}").text
     for text in (body, page):
         assert "<script>alert(1)</script>" not in text
         assert "&lt;script&gt;alert(1)&lt;/script&gt;" in text or "\\u003cscript" in text
 
 
-def test_each_turn_has_its_own_trace_on_reopen(build_agent, web_client):
+def test_each_cell_has_its_own_trace_on_reopen(build_agent, web_client):
     llm = ScriptedLLM([TextChunk("one")], [TextChunk("two")])
     client = web_client(build_agent(llm))
-    cid, _ = ask(client, "a")
-    ask(client, "b", cid)
-    assert client.get(f"/c/{cid}").text.count('class="trace"') == 2
+    nb, _, _ = ask(client, "a")
+    ask(client, "b", nb)
+    assert client.get(f"/n/{nb}").text.count('class="trace cell-trace"') == 2
 
 
 def test_split_system_prompt_into_three_parts():
@@ -203,8 +193,8 @@ def test_only_a_changed_result_tables_section_is_called_a_change_and_every_syste
     build_agent, web_client
 ):
     client = web_client(build_agent(ScriptedLLM(*chart_script())))
-    cid, _ = ask(client, "chart please")
-    page = client.get(f"/c/{cid}").text
+    nb, _, _ = ask(client, "chart please")
+    page = client.get(f"/n/{nb}").text
     # run_query adds a Result Table, so the second step's prompt differs in that section only
     assert "System prompt changed" not in page
     assert "Result Tables changed" in page
@@ -216,9 +206,9 @@ def test_an_unchanged_system_prompt_is_not_reported_as_changed(build_agent, web_
     client = web_client(
         build_agent(ScriptedLLM([tool_call("run_count_query", sql="SELECT COUNT(*) FROM flows", title="T")], [TextChunk("n")]))
     )
-    cid, _ = ask(client, "how many")
-    page = client.get(f"/c/{cid}").text
-    assert "changed" not in page.split('class="trace"')[1]
+    nb, _, _ = ask(client, "how many")
+    page = client.get(f"/n/{nb}").text
+    assert "changed" not in page.split('<details class="trace-part"')[1]
 
 
 async def test_each_llm_step_records_how_many_bytes_were_sent_to_the_model(make_agent):
@@ -233,28 +223,29 @@ async def test_each_llm_step_records_how_many_bytes_were_sent_to_the_model(make_
 
 def test_trace_shows_kilobytes_sent_after_each_llm_call(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
-    _, body = ask(client, "hello")
-    assert re.search(r"LLM step \d+ &middot; \d+ ms &middot; [\d.]+ KB sent", body)
+    nb, _, _ = ask(client, "hello")
+    assert re.search(r"LLM step \d+ &middot; \d+ ms &middot; [\d.]+ KB sent", client.get(f"/n/{nb}").text)
 
 
 def render_trace(totals, usage):
+    """What a cell's Trace shows when opened (its steps; the totals are in the cell's footer line)."""
     from flood_agent.web import TEMPLATES
     trace = {"model": "m", "system_prompt": "", "totals": totals,
              "entries": [{"kind": "llm_step", "duration_ms": 1, "usage": usage,
                          "raw_response": {"content": "", "tool_calls": []}}]}
-    return TEMPLATES.get_template("trace.html").render(trace=trace)
+    return TEMPLATES.get_template("trace_body.html").render(trace=trace)
 
 
 def test_an_old_stored_trace_without_cache_write_tokens_still_renders():
     old = {"prompt_tokens": 10, "completion_tokens": 2, "cost": 0.001, "duration_ms": 5, "cached_tokens": 4}
     html = render_trace(old, {"prompt_tokens": 10, "completion_tokens": 2, "cost": 0.001, "cached_tokens": 4})
-    assert "10 tokens in / 2 out &middot; 4 cached &middot;" in html and "cache write" not in html
+    assert "4 cached" in html and "cache write" not in html
 
 
-def test_cache_write_tokens_show_in_totals_and_steps():
+def test_cache_write_tokens_show_in_the_steps():
     new = {"prompt_tokens": 10, "completion_tokens": 2, "cost": None, "duration_ms": 5, "cache_write_tokens": 7}
     html = render_trace(new, {"prompt_tokens": 10, "completion_tokens": 2, "cost": None, "cache_write_tokens": 7})
-    assert html.count("7 cache write") == 2
+    assert html.count("7 cache write") == 1
 
 
 def test_a_stored_trace_lacking_both_cache_fields_renders_with_zero_totals():
@@ -275,26 +266,7 @@ def test_usage_total_sums_across_values_and_keeps_cost_none_when_unreported():
     assert UsageChunk.total([]) == UsageChunk()
 
 
-def test_trace_summary_shows_total_time_in_secs():
-    html = render_trace({"prompt_tokens": 1, "completion_tokens": 1, "cost": None, "duration_ms": 5974}, None)
-    assert "6.0 secs" in html and "5974" not in html
-
-
-def test_trace_summary_names_the_turn_and_its_llm_call_count():
-    totals = {"llm_steps": 3, "prompt_tokens": 9, "completion_tokens": 1, "cost": None, "duration_ms": 1000}
-    html = render_trace(totals, None)
-    assert "3 LLM calls &middot;" in html and "Billed tokens for this turn" in html
-    assert "1 LLM call &middot;" in render_trace({**totals, "llm_steps": 1}, None)
-
-
-def test_trace_summary_shows_the_short_model_name():
+def test_short_model_names():
     from flood_agent.trace import short_model
     assert short_model("anthropic/claude-haiku-5.5") == "Haiku-5.5"
     assert short_model("deepseek/deepseek-v4-pro-0813") == "deepseek-v4-pro-0813"
-    html = render_trace({"prompt_tokens": 1, "completion_tokens": 1, "cost": None, "duration_ms": 1000}, None)
-    assert "m &middot;" in html  # the fixture's model "m" is shown as is
-    from flood_agent.web import TEMPLATES
-    t = {"model": "anthropic/claude-haiku-5.5", "system_prompt": "", "entries": [],
-         "totals": {"prompt_tokens": 1, "completion_tokens": 1, "cost": None, "duration_ms": 1000}}
-    shown = TEMPLATES.get_template("trace.html").render(trace=t)
-    assert "Haiku-5.5 &middot;" in shown and "anthropic/" not in shown

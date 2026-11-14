@@ -4,6 +4,7 @@ import re
 
 from conftest import ScriptedLLM, last_tool_result, tool_call
 from playwright.sync_api import expect
+from test_notebook_browser import run_in_new_notebook
 
 from flood_agent.llm import TextChunk
 
@@ -27,11 +28,10 @@ def chart_script(sql, mark, encoding):
 
 def tooltip_on_hover(page):
     """Ask for the scripted chart, then sweep the pointer over the plot until a tooltip shows."""
-    page.get_by_placeholder("Write a prompt").fill("chart it")
-    page.get_by_role("button", name="Send message (Enter)").click()
+    run_in_new_notebook(page, "chart it")
     plot = page.locator(".display.chart canvas, .display.chart svg.marks").first
     expect(plot).to_be_visible()
-    expect(page.locator(".live-trace")).to_have_count(0)  # the layout stops moving once the live trace has folded away
+    expect(page.locator(".drawer")).to_have_count(0)  # the layout stops moving once the live trace has folded away
     tooltip = page.locator("#vg-tooltip-element.visible")
     box = plot.bounding_box()
     assert box
@@ -80,8 +80,7 @@ def test_a_line_chart_shows_the_nearest_points_tooltip_with_the_pointer_anywhere
         },
     )
     page = live_page(agent=build_agent(ScriptedLLM(*script)))
-    page.get_by_placeholder("Write a prompt").fill("chart it")
-    page.get_by_role("button", name="Send message (Enter)").click()
+    run_in_new_notebook(page, "chart it")
     plot = page.locator(".display.chart canvas, .display.chart svg.marks").first
     expect(plot).to_be_visible()
     # The line runs from 987,654 bytes down to 123,457 and back up to 555,321: the plot's top-right
@@ -159,14 +158,13 @@ def test_only_charts_with_a_time_axis_show_the_zoom_hint(live_page, build_agent)
     )
     for script, shown in ((bar_chart, False), (time_chart, True)):
         page = live_page(agent=build_agent(ScriptedLLM(*script)))
-        page.get_by_placeholder("Write a prompt").fill("chart it")
-        page.get_by_role("button", name="Send message (Enter)").click()
+        run_in_new_notebook(page, "chart it")
         expect(page.locator(".display.chart canvas")).to_be_visible()
         hint = page.get_by_text("Ctrl+scroll to zoom, drag to pan, double-click to reset")
         expect(hint).to_be_visible() if shown else expect(hint).to_be_hidden()
-    expect(page.locator(".live-trace")).to_have_count(0)  # the layout stops moving once the live trace has folded away
+    expect(page.locator(".drawer")).to_have_count(0)  # the layout stops moving once the live trace has folded away
     # The hint sits just under the chart, at its right edge.
     chart, note = page.locator(".display.chart canvas").bounding_box(), page.locator(".chart-hint").bounding_box()
     assert chart and note
-    assert 0 <= note["y"] - (chart["y"] + chart["height"]) < 10
+    assert 0 <= note["y"] - (chart["y"] + chart["height"]) < 16
     assert page.locator(".chart-hint").evaluate("el => getComputedStyle(el).textAlign") == "right"

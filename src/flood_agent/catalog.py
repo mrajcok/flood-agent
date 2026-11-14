@@ -13,15 +13,15 @@ from contextlib import closing
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Callable, Iterable, Literal, NamedTuple
+from typing import Callable, Iterable, Literal
 
 from flood_agent import lookup_tables, queries, table_names
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS result_tables (
   name TEXT PRIMARY KEY,
-  conversation_id TEXT NOT NULL REFERENCES conversations(id),
-  turn_id INTEGER NOT NULL,
+  cell_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   title TEXT NOT NULL DEFAULT '',
   columns TEXT NOT NULL DEFAULT '[]',
@@ -66,13 +66,22 @@ class TableExpired(Exception):
 
 
 @dataclass(frozen=True)
+class CellRun:
+    """Who made a Result Table: one Run of a notebook Cell."""
+
+    cell_id: str
+    run_id: str
+
+
+Owner = CellRun
+
+
+@dataclass(frozen=True)
 class Table:
     """A live Result Table or Saved Table, as the registry describes it (no row values)."""
 
     name: str
     kind: Literal["result", "saved"]
-    conversation_id: str
-    turn_id: int
     title: str
     columns: list[dict]
     request: str
@@ -83,6 +92,13 @@ class Table:
     sql: str | None = None  # the query that made it, for Refresh; None for a table made before that was recorded
     max_rows: int | None = None  # the row cap that query ran under
     policy: RetentionPolicy = field(default=RetentionPolicy(result_days=1), compare=False)  # the Catalog's rules
+    cell_id: str = ""  # the Cell and Run that made it (a SQL Cell's re-run moves it to the new Run)
+    run_id: str = ""
+    created_at_ms: int = 0  # when it was registered; never changes (as_of_ms moves on a Refresh)
+
+    @property
+    def owner(self) -> Owner:
+        return CellRun(self.cell_id, self.run_id)
 
     @property
     def retention_days(self) -> float:
@@ -101,11 +117,6 @@ class Table:
         }
 
 
-class Owned(NamedTuple):
-    """The live tables a Conversation or one turn owns: Result Tables (still named `rt_*`) and Saved Tables."""
-
-    result: list[Table]
-    saved: list[Table]
 
 
 def _as_of(row: sqlite3.Row) -> int:
@@ -200,14 +211,8 @@ class CatalogView:
             "expires_in_ms": {t.name: t.expires_in_ms for t in live},
         }
 
-    def owned(self, conversation_id: str, turn_id: int | None = None) -> Owned:
-        """The live tables a Conversation (or just its turn `turn_id`) made, by the turn recorded when
-        each was registered."""
-        tables = [t for t in self.tables_of(conversation_id) if turn_id is None or t.turn_id == turn_id]
-        return Owned([t for t in tables if t.kind == "result"], [t for t in tables if t.kind == "saved"])
-
     def readable(self) -> set[str]:
-        """Every table a query may read (ADR 0003): all live Result and Saved Tables, from any Conversation,
+        """Every table a query may read (ADR 0003): all live Result and Saved Tables, from any notebook,
         and every Lookup Table."""
         return set(self.names()) | self.lookup_names()
 
@@ -215,11 +220,11 @@ class CatalogView:
         return Table(
             name=row["name"],
             kind="result" if table_names.is_result_table_name(row["name"]) else "saved",
-            conversation_id=row["conversation_id"], turn_id=row["turn_id"], title=row["title"],
+            title=row["title"],
             columns=json.loads(row["columns"]), request=row["request"], truncated_to=row["truncated_to"],
             retention_ms=row["retention_ms"], expires_in_ms=_as_of(row) + row["retention_ms"] - self._now(),
             as_of_ms=_as_of(row), sql=row["sql"], max_rows=row["max_rows"],
-            policy=self.policy,
+            policy=self.policy, cell_id=row["cell_id"], run_id=row["run_id"], created_at_ms=row["created_at"],
         )
 
     @staticmethod
@@ -257,16 +262,32 @@ class CatalogView:
                     f"SELECT * FROM result_tables WHERE name IN ({marks})", chunk) if self._is_live(r, now))
         return out
 
-    def tables_of(self, conversation_id: str) -> list[Table]:
-        """The live Result and Saved Tables a Conversation made, in the order they were created."""
+    def tables_of_run(self, cell_id: str, run_id: str) -> list[Table]:
+        """The live Result and Saved Tables a Cell Run made, in the order they were created."""
         now = self._now()
         with closing(self._connect()) as con:
             rows = con.execute(
-                "SELECT * FROM result_tables WHERE conversation_id=? ORDER BY created_at, name", (conversation_id,))
+                "SELECT * FROM result_tables WHERE cell_id=? AND run_id=? ORDER BY created_at, name", (cell_id, run_id))
+            return [self._table(r) for r in rows if self._is_live(r, now)]
+
+    def tables_of_cell(self, cell_id: str) -> list[Table]:
+        """The live Result and Saved Tables any Run of a Cell made, oldest first."""
+        now = self._now()
+        with closing(self._connect()) as con:
+            rows = con.execute("SELECT * FROM result_tables WHERE cell_id=? ORDER BY created_at, name", (cell_id,))
+            return [self._table(r) for r in rows if self._is_live(r, now)]
+
+    def earlier_tables_of_cell(self, cell_id: str, current_run_id: str | None) -> list[Table]:
+        """The live Result and Saved Tables a Cell's earlier Runs made (all but `current_run_id`'s), oldest first."""
+        now = self._now()
+        with closing(self._connect()) as con:
+            rows = con.execute(
+                "SELECT * FROM result_tables WHERE cell_id=? AND run_id IS NOT ? ORDER BY created_at, name",
+                (cell_id, current_run_id))
             return [self._table(r) for r in rows if self._is_live(r, now)]
 
     def names(self) -> list[str]:
-        """Names of every live Result and Saved Table, across Conversations, sorted."""
+        """Names of every live Result and Saved Table, across notebooks, sorted."""
         now = self._now()
         with closing(self._connect()) as con:
             return [r["name"] for r in con.execute("SELECT * FROM result_tables ORDER BY name") if self._is_live(r, now)]
@@ -309,26 +330,21 @@ class Catalog(CatalogView):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as con, con:
             con.executescript(SCHEMA)
-            have = {r["name"] for r in con.execute("PRAGMA table_info(result_tables)")}
-            for column, type_ in (("sql", "TEXT"), ("max_rows", "INTEGER"), ("refreshed_at", "INTEGER")):  # for Refresh (ADR 0006)
-                if column not in have:
-                    con.execute(f"ALTER TABLE result_tables ADD COLUMN {column} {type_}")
 
-    def register(
-        self, name: str, conversation_id: str, turn_id: int, title: str = "", columns: list[dict] | None = None,
+    def register_for(
+        self, owner: Owner, name: str, title: str = "", columns: list[dict] | None = None,
         request: str = "", truncated_to: int | None = None, sql: str | None = None, max_rows: int | None = None,
     ) -> None:
-        """Record a new Result Table made by `turn_id`, with the current default Retention. `sql` and
+        """Record a new Result Table made by `owner`, with the current default Retention. `sql` and
         `max_rows` (the query and the row cap it ran under) are what Refresh runs again."""
         now = self._now()
         with closing(self._connect()) as con, con:
             con.execute(
-                "INSERT OR IGNORE INTO result_tables(name, conversation_id, turn_id, created_at, title, columns,"
-                " request, truncated_to, retention_ms, sql, max_rows) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (canonical(name), conversation_id, turn_id, now, title, json.dumps(columns or []), request, truncated_to,
-                 self.default_retention_ms, sql, max_rows),
+                "INSERT OR IGNORE INTO result_tables(name, cell_id, run_id, created_at, title,"
+                " columns, request, truncated_to, retention_ms, sql, max_rows) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (canonical(name), owner.cell_id, owner.run_id, now, title, json.dumps(columns or []), request,
+                 truncated_to, self.default_retention_ms, sql, max_rows),
             )
-            con.execute("UPDATE conversations SET last_activity_at=? WHERE id=?", (now, conversation_id))
 
     def record_refresh(self, name: str, columns: list[dict], truncated_to: int | None) -> Table:
         """Record that live table `name` now holds fresh rows: its "as of" time is now, its columns and
@@ -341,6 +357,13 @@ class Catalog(CatalogView):
     def restore_refresh(self, before: Table) -> None:
         """Put back what `record_refresh` changed, given the table it returned. Needs no liveness check."""
         self._write_refresh(before.name, before.as_of_ms, before.columns, before.truncated_to)
+
+    def reown_for_rerun(self, name: str, owner: CellRun, title: str, sql: str, max_rows: int) -> None:
+        """A SQL Cell's re-run has put fresh rows under `name` (after `record_refresh`): the table now belongs
+        to the cell's new Run and is described by the SQL that made them."""
+        with closing(self._connect()) as con, con:
+            con.execute("UPDATE result_tables SET cell_id=?, run_id=?, title=?, sql=?, max_rows=? WHERE name=?",
+                        (owner.cell_id, owner.run_id, title, sql, max_rows, canonical(name)))
 
     def _write_refresh(self, name: str, as_of_ms: int, columns: list[dict], truncated_to: int | None) -> None:
         with closing(self._connect()) as con, con:
@@ -359,10 +382,18 @@ class Catalog(CatalogView):
         with closing(self._connect()) as con, con:
             con.executemany("UPDATE result_tables SET expired=1 WHERE name=?", [(n,) for n in names])
 
-    def drop_owned(self, conversation_id: str, turn_id: int | None = None) -> list[str]:
-        """Drop the Result Tables a Conversation (or one turn) owns that are still named `rt_*`, never
-        its Saved Tables. They stay registered as expired. Returns the names dropped."""
-        names = [t.name for t in self.owned(conversation_id, turn_id).result]
+    def drop_earlier_of_cell(self, cell_id: str, current_run_id: str | None) -> list[str]:
+        """Drop the Result Tables a Cell's earlier Runs made that are still named `rt_*`, never a Saved Table
+        nor the current Run's tables. They stay registered as expired. Returns the names dropped."""
+        names = [t.name for t in self.earlier_tables_of_cell(cell_id, current_run_id) if t.kind == "result"]
+        self._drop_physical(names)
+        self._mark_expired(names)
+        return names
+
+    def drop_of_cell(self, cell_id: str) -> list[str]:
+        """Drop the Result Tables any Run of a Cell made that are still named `rt_*` (its current Run's and
+        earlier ones'), never a Saved Table. They stay registered as expired. Returns the names dropped."""
+        names = [t.name for t in self.tables_of_cell(cell_id) if t.kind == "result"]
         self._drop_physical(names)
         self._mark_expired(names)
         return names
@@ -407,6 +438,10 @@ class Catalog(CatalogView):
             with closing(self._connect()) as con, con:
                 con.execute("UPDATE result_tables SET retention_ms=? WHERE name=?", (retention_ms, table.name))
         return self[new or table.name]
+
+    def check_new_name(self, new_name: str) -> None:
+        """ValueError unless `update` would accept this as a table's new name (it is lower-cased first)."""
+        self._check_new_name(canonical(new_name))
 
     def _check_new_name(self, new: str) -> None:
         if not table_names.is_identifier(new):

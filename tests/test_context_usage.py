@@ -1,12 +1,8 @@
-"""Context Usage: how much of the model's window the Conversation fills, shown under the prompt box."""
-
-import re
+"""Context Usage: how much of the model's window a cell's context fills, shown in its footer (see test_notebook_page)."""
 
 import pytest
-from conftest import ScriptedLLM, tool_call
 
 from flood_agent.context_usage import context_usage, format_tokens
-from flood_agent.llm import TextChunk
 from flood_agent.trace import context_tokens
 
 
@@ -49,37 +45,3 @@ def test_context_tokens_is_the_latest_llm_steps_prompt_tokens():
     assert context_tokens(trace) == 250
     assert context_tokens({"entries": [{"kind": "llm_step", "usage": None}]}) is None
     assert context_tokens({"entries": []}) is None
-
-
-def ask(client, message, conversation_id=""):
-    posted = client.post("/chat", data={"message": message, "conversation_id": conversation_id, "max_rows": "1000"})
-    cid = re.search(r'name="conversation_id" value="([0-9a-f]+)"', posted.text).group(1)
-    stream_url = posted.text.split('sse-connect="')[1].split('"')[0]
-    return cid, client.get(stream_url).text
-
-
-def meter(html):
-    return re.search(r'<span id="context-meter"[^>]*>(.*?)</span>', html, re.S)
-
-
-def test_a_new_page_shows_zero_used(build_agent, web_client):
-    page = web_client(build_agent(ScriptedLLM())).get("/").text
-    assert "0 tokens of 1.05M" in meter(page).group(1)
-
-
-def test_a_reopened_conversation_shows_its_latest_calls_prompt_tokens(build_agent, web_client):
-    client = web_client(build_agent(ScriptedLLM([tool_call("run_query", sql="SELECT 1 AS x", title="t")], [TextChunk("ok")])))
-    cid, _ = ask(client, "hello")
-    assert "100 tokens of 1.05M" in meter(client.get(f"/c/{cid}").text).group(1)  # ScriptedLLM reports 100 prompt tokens
-
-
-def test_after_a_turn_the_context_meter_endpoint_reports_its_tokens_against_the_requested_models_window(build_agent, web_client):
-    client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
-    cid, _ = ask(client, "hello")
-    page = client.get("/context-meter", params={"model": "anthropic/claude-sonnet-5.5", "conversation_id": cid}).text
-    assert "100 tokens of 1M" in meter(page).group(1)
-
-
-def test_no_model_has_no_context_window(build_agent, web_client):
-    page = web_client(build_agent(ScriptedLLM()), has_api_key=False).get("/").text
-    assert "no context used" in meter(page).group(1)

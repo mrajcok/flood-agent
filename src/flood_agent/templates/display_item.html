@@ -1,0 +1,9 @@
+{# A saved Display (`item`, from web.display_item): its table, chart or count, or a note that it expired. #}
+{% if item.expired %}<p class="expired"><em>expired</em> (this result has been deleted)</p>
+{% elif item.kind == "count" %}
+  {% with title=item.title, value=item.value, computed_at_ms=item.computed_at_ms, display_id=item.display_id, refresh_url=item.refresh_url %}{% include "display_count.html" %}{% endwith %}
+{% elif item.kind == "table" %}
+  {% with rows_url=item.rows_url, psv_url=item.psv_url, settings_url=item.settings_url, result_table=item.result_table, columns=item.columns %}{% include "display_table.html" %}{% endwith %}
+{% elif item.kind == "chart" %}
+  {% with spec_json=item.spec_json, settings_url=item.settings_url %}{% include "display_chart.html" %}{% endwith %}
+{% endif %}

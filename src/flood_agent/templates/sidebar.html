@@ -1,4 +1,19 @@
-<aside id="sidebar" {% if oob %}hx-swap-oob="true"{% endif %}>
+<aside id="sidebar" {% if oob %}hx-swap-oob="true"{% endif %}
+       x-data="{ q: '', matches: null, request: 0,
+                 /* The Notebooks search: the server matches titles and cell text; the list is filtered as you type. */
+                 async search() {
+                   const request = ++this.request, q = this.q.trim();
+                   if (!q) { this.matches = null; return; }
+                   try {
+                     const r = await fetch('/api/notebooks?q=' + encodeURIComponent(q));
+                     if (r.ok && request === this.request) this.matches = (await r.json()).map(n => n.id);
+                   } catch (e) {}
+                 } }">
+  <div class="sidebar-bar">
+    <button type="button" class="sidebar-hide" aria-label="Hide sidebar" title="Hide the sidebar" onclick="setSidebarHidden(true)">&laquo;</button>
+    <button type="button" class="sidebar-show" aria-label="Show sidebar" title="Show the sidebar" onclick="setSidebarHidden(false)">&raquo;</button>
+  </div>
+  <h2 class="sec-head">Tables</h2>
   <div class="show-tables" x-data="{ open: false, tables: null, error: '', hideRt: false, hideLookup: false, request: 0, confirming: null,
        viewing: null, viewerRequest: 0, viewerLoaded: false, viewerError: '', escapeInEditor: false,
        /* hideRt hides the Result Tables; the name is kept so saved choices survive. */
@@ -57,7 +72,7 @@
          if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) close();
        },
        async view(name) {
-         /* The chat's table Display for a Saved or Result Table (paging, sorting, PSV, rename), in a modal over this one. */
+         /* The table Display for a Saved or Result Table (paging, sorting, PSV, rename), in a modal over this one. */
          const request = ++this.viewerRequest;  /* only the latest open's response is shown */
          this.viewing = name; this.showInViewer(''); this.viewerError = '';
          try {
@@ -81,20 +96,20 @@
          this.$refs.viewerBody.innerHTML = html; this.viewerLoaded = html !== '';
        },
        closeBeforeDisplayCopy(e) {
-         /* The Display's copy button inserts into the chat box, which both modals would keep focus from: close them first. */
+         /* The Display's copy button inserts into a prompt box, which both modals would keep focus from: close them first. */
          if (!e.target.closest('.table-name .copy')) return;
          this.$refs.viewer.close(); this.$refs.dialog.close();
        },
        keepViewerOpen(e) {
-         /* Escape in the Display's rename form cancels the edit, as in the chat; it must not also close the viewer. */
+         /* Escape in the Display's rename form cancels the edit, as in a cell; it must not also close the viewer. */
          if (this.escapeInEditor) e.preventDefault();
          this.escapeInEditor = false;
        },
        copy(name) {
-         this.$refs.dialog.close();  /* first: a modal dialog keeps focus from the chat box */
-         insertIntoChat(name);
+         this.$refs.dialog.close();  /* first: a modal dialog keeps focus from the prompt box */
+         insertIntoPrompt(name);
        } }" @view-table.window="view($event.detail)">
-    <button type="button" class="sidebar-action" @click="open = true; load()">Tables</button>
+    <button type="button" class="sidebar-action" @click="open = true; load()">&#x25A6;&#xFE0E; Browse tables</button>
     <dialog x-ref="dialog" aria-labelledby="show-tables-title" x-effect="open ? $el.showModal() : $el.open && $el.close()" @close="open = false" @click="closeIfOutside($event)">
       <h3 id="show-tables-title">Tables you can query</h3>
       <div class="filters">
@@ -112,7 +127,7 @@
                 <li>
                   <template x-if="confirming !== name">
                     <div class="row"><span class="row-actions">
-                      <button type="button" class="copy" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into the chat'" @click="copy(name)">&#x29C9;</button>
+                      <button type="button" class="copy" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into a prompt'" @click="copy(name)">&#x29C9;</button>
                       <!-- Hidden, not removed, where not offered so the names line up across sections. -->
                       <button type="button" class="delete" :style="section.deletable ? '' : 'visibility: hidden'" :disabled="!section.deletable" :aria-label="'Delete ' + name" :title="'Delete ' + name" @click="confirming = name">&#x1F5D1;&#xFE0E;</button>
                       <!-- One column for view (Saved and Result Tables) and edit (Lookup Tables): no table has both. -->
@@ -201,7 +216,7 @@
          } catch (e) { this.error = 'Could not save the table.'; }
          this.busy = false;
        } }" @edit-lookup.window="startEdit($event.detail)">
-    <button type="button" class="sidebar-action" @click="startAdd()">Create lookup table</button>
+    <button type="button" class="sidebar-action" @click="startAdd()">&#xFF0B; Create lookup table</button>
     <dialog x-effect="open ? $el.showModal() : $el.open && $el.close()" @close="open = false">
       <form @submit.prevent="submit()">
         <template x-if="editing"><h3>Edit <code x-text="editing"></code></h3></template>
@@ -228,20 +243,23 @@
       </form>
     </dialog>
   </div>
-  <a class="new" href="/">New chat</a>
-  <ul>
-    {% for c in conversations %}
-    <li x-data="{ open: false, editing: false }"{% if c.id == current_id %} class="current"{% endif %}>
-      <a href="/c/{{ c.id }}" x-show="!editing" @mouseenter="$el.title = $el.scrollWidth <= $el.clientWidth ? '' : $el.textContent">{{ c.title }}</a>
-      <form class="rename" method="post" action="/c/{{ c.id }}/rename" x-show="editing" x-cloak>
-        <input type="text" name="title" value="{{ c.title }}" maxlength="60" required x-ref="title" aria-label="Conversation name"
+  <h2 class="sec-head notebooks"><span>Notebooks <small>{{ notebooks|length }}</small></span>
+    <form method="post" action="/notebooks"><button type="submit" class="new" aria-label="New notebook" title="New notebook">&#xFF0B;</button></form></h2>
+  <input type="search" class="notebook-search" placeholder="Search notebooks" aria-label="Search notebooks" x-model="q" @input.debounce.150ms="search()">
+  <ul class="notebook-list">
+    {% for n in notebooks %}
+    <li x-data="{ open: false, editing: false }" data-notebook-id="{{ n.id }}"{% if n.id == current_notebook_id %} class="current"{% endif %}
+        x-show="!matches || matches.includes('{{ n.id }}')">
+      <a href="/n/{{ n.id }}" x-show="!editing" @mouseenter="$el.title = $el.scrollWidth <= $el.clientWidth ? '' : $el.textContent">{{ n.title }}</a>
+      <form class="rename" method="post" action="/n/{{ n.id }}/rename" x-show="editing" x-cloak>
+        <input type="text" name="title" value="{{ n.title }}" maxlength="60" required x-ref="title" aria-label="Notebook name"
                @keydown.escape="editing = false" @blur="editing = false">
       </form>
       <div class="menu" x-show="!editing" @click.outside="open = false">
-        <button type="button" class="dots" aria-label="Conversation options" aria-haspopup="menu" :aria-expanded="open" @click="open = !open">&hellip;</button>
+        <button type="button" class="dots" aria-label="Notebook options" aria-haspopup="menu" :aria-expanded="open" @click="open = !open">&hellip;</button>
         <div class="popup" role="menu" x-show="open" x-cloak>
           <button type="button" role="menuitem" @click="open = false; editing = true; $nextTick(() => { $refs.title.focus(); $refs.title.select(); })">Rename</button>
-          <form method="post" action="/c/{{ c.id }}/delete" class="delete-form" data-preview-url="/c/{{ c.id }}/delete-preview" data-title="Delete this conversation?">
+          <form method="post" action="/n/{{ n.id }}/delete" class="delete-form" data-preview-url="/n/{{ n.id }}/delete-preview" data-title="Delete this notebook?">
             <button type="submit" role="menuitem">Delete</button>
           </form>
         </div>
@@ -249,4 +267,5 @@
     </li>
     {% endfor %}
   </ul>
+  <p class="no-match" x-show="matches && !matches.length" x-cloak>No notebook matches.</p>
 </aside>

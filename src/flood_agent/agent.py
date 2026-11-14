@@ -1,9 +1,10 @@
-"""The Agent: runs the LLM tool loop for one turn and emits an event stream.
+"""The Agent: runs the LLM tool loop for one AI Cell Run and emits an event stream.
 
-The HTTP/SSE layer is a thin adapter over `Agent.run_turn`. The LLM client is injected.
+The HTTP/SSE layer is a thin adapter over `Agent.run_cell`. The LLM client is injected.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import sys
@@ -12,22 +13,26 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncIterator, Callable, Iterator, Literal
+from typing import Any, AsyncIterator, Callable, Iterator, Literal, Protocol
 
 from mcp import StdioServerParameters
 from mcp.types import TextContent
 
-from flood_agent import flagging, queries
-from flood_agent.catalog import Catalog, Table
+from flood_agent import flagging, queries, table_names
+from flood_agent.catalog import Catalog, CellRun, Owner, Table, TableExpired, canonical
 from flood_agent.llm import LLMClient, LLMError, ModelSpec, TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
 from flood_agent.mcp_protocol import QUERY_TOOLS
 from flood_agent.mcp_server import ServerSettings
+from flood_agent.notebooks import AI, COUNT_KIND, DEFAULT_MAX_ROWS, MARKDOWN, MARKDOWN_NOTE_LABEL, SQL, NotebookStore
 from flood_agent.semantic_layer import SemanticLayer
-from flood_agent.store import COUNT_KIND, ConversationStore
-from flood_agent.trace import TraceBuilder
+from flood_agent.show_commands import SHOW_IN_TEXTBOX, ShowFailed, is_show_statement, run_show, statement_of
+from flood_agent.trace import TraceBuilder, context_tokens
+from flood_agent.upgrade import drop_pre_notebook_data
 
 log = logging.getLogger("uvicorn.error")  # the app's terminal log
+
+SHOW_ROWS_TO_AI = 100  # how many rows of a SHOW Cell's result an AI Cell below is sent
 
 
 class NotRefreshable(Exception):
@@ -38,11 +43,15 @@ class RefreshInProgress(Exception):
     """The table is already being refreshed."""
 
 
+class NotebookBusy(Exception):
+    """A cell in this notebook is already running; only one runs at a time."""
+
+
 class RefreshFailed(Exception):
     """A Refresh did not complete; the message is plain text safe to show the user."""
 
 
-# Whether deleting a Conversation or exchange also drops its live Result Tables (those still named
+# Whether deleting a Notebook or Cell also drops its live Result Tables (those still named
 # rt_*). Its Saved Tables are always kept (ADR 0004).
 TablesChoice = Literal["keep", "delete_rt"]
 
@@ -57,7 +66,7 @@ class AgentConfig:
     semantic_layer: Path
     model: str  # the default model: runs a turn that names none
     models: tuple[ModelSpec, ...]  # the curated list; window_of looks a model's window up here
-    result_ttl_ms: int  # Result Tables expire this long after last Conversation activity
+    result_ttl_ms: int  # Result Tables expire this long after they are made
     query_timeout_s: float
     chart_row_cap: int
     max_failed_attempts: int
@@ -82,12 +91,40 @@ ClientFactory = Callable[[str], LLMClient]
 """Gives the client that runs a model id: the real OpenRouter client (made lazily, reused) or a scripted fake."""
 
 
-@dataclass
-class Conversation:
-    """A Conversation's message history. `id` is None until first persisted by `run_turn`."""
+class ExchangeSink(Protocol):
+    """Where one LLM exchange is stored: its messages, Displays and Trace, and the owner its Result Tables
+    are recorded against. An AI Cell's Run is one."""
 
-    id: str | None = None
-    messages: list[dict] = field(default_factory=list)
+    @property
+    def owner(self) -> Owner: ...
+    @property
+    def key(self) -> str: ...  # names the exchange (the cell id)
+    @property
+    def session_id(self) -> str: ...  # lets OpenRouter route every step of the exchange to one cache
+
+    def record(self, history: list[dict], message: dict) -> int: ...
+    def add_step(self, items: list[tuple[dict, list[tuple]]]) -> tuple[list[int], list[list[int]]]: ...
+    def save_trace(self, trace: dict) -> None: ...
+
+
+class _CellSink:
+    """Stores an AI Cell's Run in the NotebookStore."""
+
+    def __init__(self, store: NotebookStore, notebook_id: str, cell_id: str, run_id: str):
+        self.store, self.run_id = store, run_id
+        self.owner = CellRun(cell_id, run_id)
+        self.key = cell_id
+        self.session_id = f"notebook-{notebook_id}"  # one cache for every cell of a notebook
+
+    def record(self, history: list[dict], message: dict) -> int:
+        history.append(message)
+        return self.store.add_message(self.run_id, message)
+
+    def add_step(self, items):
+        return self.store.add_step(self.run_id, items)
+
+    def save_trace(self, trace: dict) -> None:
+        self.store.save_trace(self.run_id, trace, context_tokens(trace))
 
 
 DAY_MS = 24 * 3600 * 1000
@@ -157,7 +194,6 @@ class TraceReady:
     """The finished Trace for the turn (already persisted); for the UI only, never for the LLM."""
 
     trace: dict
-    turn_id: int | None = None
 
 
 @dataclass
@@ -278,34 +314,39 @@ def _resolve_data(node, table: str, url: dict):
     return node
 
 
+def markdown_note(draft: dict) -> str:
+    """What an AI Cell is sent for a ticked Markdown Cell: its text, then one line per embedded Display naming
+    its kind and table. Never rows or a chart's data (ADR 0001); the same draft always gives the same note."""
+    lines = [f"{MARKDOWN_NOTE_LABEL} {draft.get('text', '').strip()}".rstrip()]
+    lines += [f"[Display: {d['kind']} {d['table']}]" for d in draft.get("displays") or []]
+    return "\n".join(lines)
+
+
 class Agent:
     def __init__(self, config: AgentConfig, client_for: ClientFactory):
         self.config = config
         self.client_for = client_for
         self.semantic_layer = SemanticLayer(config.semantic_layer)
-        self.store = ConversationStore(config.app_db, config.clock)
+        drop_pre_notebook_data(config.app_db, config.results_db)  # before anything creates the new schema
+        self.notebooks = NotebookStore(config.app_db, config.clock)
         self.tables = Catalog(
             config.app_db, config.clock, config.result_ttl_ms, telemetry_tables=self.semantic_layer.table_names(),
-            results_db=config.results_db, on_rename=self.store.follow_rename,
+            results_db=config.results_db, on_rename=self._follow_rename,
         )
         self._connection: McpConnection | None = None
         self._restart_lock = asyncio.Lock()
         self._turn_tasks: set[asyncio.Task] = set()
-        self._keyed_turns: dict[str, asyncio.Task] = {}  # running turns by the key `run_turn` was given
+        self._keyed_turns: dict[str, asyncio.Task] = {}  # running cell runs by cell id
         self._stopped_turns: set[asyncio.Task] = set()  # turns `stop_turn` cancelled
+        self._running_cells: dict[str, str] = {}  # notebook id -> the cell running in it now
+        self._sql_stops: dict[str, threading.Event] = {}  # SQL Cell id -> its running query's stop flag
         self._refreshing: set[tuple[str, str | int]] = set()  # ("table", name) or ("count", id) being refreshed now
         self._refreshing_lock = threading.Lock()
         self.tables.sweep()
 
-    def create_conversation(self) -> str:
-        """Persist a new, empty Conversation and return its id. Also sweeps the Table Catalog (expired
-        and orphaned tables), which runs only here and at startup."""
-        self.tables.sweep()
-        return self.store.create_conversation()
-
     async def start(self) -> None:
-        """Launch the long-lived MCP server. Needed before `run_turn`, not for row fetches,
-        PSV export or Conversation listing."""
+        """Launch the long-lived MCP server. Needed before `run_cell`, not for row fetches
+        or PSV export."""
         if self._connection is not None:
             raise RuntimeError("Agent already started")
         connection = McpConnection(self._transport())
@@ -347,12 +388,12 @@ class Agent:
         await self.aclose()
 
     def _server_settings(self) -> ServerSettings:
-        # Static settings only. The Conversation id travels in each call's `_meta`, not here
-        # and not as a tool argument, so the LLM can't name another Conversation.
+        # Static settings only. The row cap travels in each call's `_meta`, not here
+        # and not as a tool argument, so the LLM can't choose it.
         return ServerSettings(
             telemetry_db=self.config.telemetry_db,
             results_db=self.config.results_db,
-            app_db=self.store.path,
+            app_db=self.config.app_db,
             query_timeout_s=self.config.query_timeout_s,
             chart_row_cap=self.config.chart_row_cap,
             telemetry_tables=tuple(self.semantic_layer.table_names()),
@@ -368,41 +409,434 @@ class Agent:
         """How a new connection reaches its server: a stdio subprocess (tests swap in an in-process one)."""
         return stdio_transport(self._server_params())
 
-    def open_conversation(self, conversation_id: str) -> Conversation:
-        """Load a saved Conversation (KeyError if unknown)."""
-        if not self.store.exists(conversation_id):
-            raise KeyError(conversation_id)
-        return Conversation(conversation_id, repair_history(self.store.messages(conversation_id)))
+    # --- Notebooks (AI Cells only so far) ---------------------------------------------------------------
 
-    def delete_preview(self, conversation_id: str, turn_id: int | None = None) -> dict:
-        """Counts for the delete dialog: the live Result Tables that delete_rt would drop (`result`) and
-        the live Saved Tables that are always kept (`saved`). KeyError if the Conversation, or the turn
-        in it, is unknown."""
-        if not self.store.exists(conversation_id) or (
-                turn_id is not None and not self.store.has_turn(conversation_id, turn_id)):
-            raise KeyError(turn_id if turn_id is not None else conversation_id)
-        owned = self.tables.owned(conversation_id, turn_id)
-        return {"result": len(owned.result), "saved": len(owned.saved)}
+    def create_notebook(self, title: str | None = None) -> str:
+        """Persist a new, empty Notebook ("Notebook N" by default) and return its id."""
+        self.tables.sweep()
+        return self.notebooks.create_notebook(title)
 
-    def delete_conversation(self, conversation_id: str, tables: TablesChoice = "keep") -> None:
-        """Delete a saved Conversation; `tables` (keep or delete_rt) says whether to drop its live
-        Result Tables. Its Saved Tables are always kept (KeyError if unknown). The tables go first, so a
-        store failure leaves the Conversation in place and the delete can be retried."""
-        if not self.store.exists(conversation_id):
-            raise KeyError(conversation_id)
+    def add_ai_cell(
+        self, notebook_id: str, prompt: str = "", model: str | None = None, effort: str | None = None,
+        max_rows: int = DEFAULT_MAX_ROWS, after: str | None = None, before: str | None = None,
+    ) -> str:
+        """Add an AI Cell (after cell `after`, or at the end) whose Draft holds its prompt and settings."""
+        return self.notebooks.add_ai_cell(
+            notebook_id, {"prompt": prompt, "model": model, "effort": effort, "max_rows": max_rows}, after, before)
+
+    def add_sql_cell(
+        self, notebook_id: str, sql: str = "", max_rows: int = DEFAULT_MAX_ROWS, after: str | None = None,
+        before: str | None = None, command: str = "", table: str = "",
+    ) -> str:
+        """Add a SQL Cell (after cell `after`, or at the end) whose Draft holds its SQL and row cap. A `command`
+        (a SHOW statement or DESCRIBE TABLE, with its `table`) makes it a SHOW Cell: the SQL is not used."""
+        return self.notebooks.add_cell(
+            notebook_id, SQL, {"sql": sql, "max_rows": max_rows, "command": command, "table": table}, after, before)
+
+    def _follow_rename(self, con, old: str, new: str) -> None:
+        """Every Display, in a Run or a Markdown Cell, follows a table's new name."""
+        self.notebooks.follow_rename(con, old, new)
+
+    def _copyable_run(self, notebook_id: str, cell_id: str) -> tuple[str, list[dict]]:
+        """An AI Cell's latest answer as a Markdown Cell would hold it: the text and the embedded Displays (a
+        table or chart of a table that is still live, each with its own definition). Count Displays are not
+        embedded: their number is already in the text. ValueError if the cell has not run."""
+        cell = self._idle_cell(notebook_id, cell_id)
+        if cell["kind"] != AI or cell["run"] is None:
+            raise ValueError("Only an AI Cell that has run can be copied to a Markdown Cell.")
+        texts: list[str] = []
+        displays: list[dict] = []
+        for item in self.notebooks.transcript(cell["run"]["id"]):
+            if item["type"] == "message":
+                m = item["message"]
+                if m["role"] == "assistant" and m.get("content"):
+                    text = m["content"].removesuffix(STOPPED_NOTE).rstrip()
+                    if text:
+                        texts.append(text)
+            elif item["kind"] in ("table", "chart") and item["result_table"] in self.tables:
+                d = {"kind": item["kind"], "table": item["result_table"]}
+                if item["kind"] == "chart":
+                    d["spec"] = item["spec"]
+                displays.append(d)
+        return "\n\n".join(texts), displays
+
+    def markdown_copy_tables(self, notebook_id: str, cell_id: str) -> list[str]:
+        """The `rt_` tables a Copy to Markdown Cell would embed, which the user may save first (so the copy does
+        not expire with them)."""
+        _, displays = self._copyable_run(notebook_id, cell_id)
+        return list(dict.fromkeys(d["table"] for d in displays if table_names.is_result_table_name(d["table"])))
+
+    def copy_to_markdown_cell(self, notebook_id: str, cell_id: str, save: dict[str, str] | None = None) -> str:
+        """Insert a Markdown Cell below an AI Cell holding its answer text and one embedded Display per table or
+        chart, and return its id. Send to AI starts unticked. `save` maps `rt_` tables of the answer to the names
+        to rename them to (Saved Tables); every name is checked first, so a ValueError changes nothing."""
+        save = save or {}
+        usable = self.markdown_copy_tables(notebook_id, cell_id)
+        if not set(save) <= set(usable):
+            raise ValueError("Only the answer's rt_ tables can be saved.")
+        for new in save.values():
+            self.tables.check_new_name(new)
+        if len({canonical(n) for n in save.values()}) != len(save):
+            raise ValueError("Each saved table needs its own name.")
+        for old, new in save.items():
+            self.tables.update(old, new_name=new)
+        text, displays = self._copyable_run(notebook_id, cell_id)
+        return self.notebooks.add_cell(
+            notebook_id, MARKDOWN, {"text": text, "send_to_ai": False, "displays": displays}, after=cell_id)
+
+    def add_markdown_cell(self, notebook_id: str, text: str = "", send_to_ai: bool = False,
+                          after: str | None = None, before: str | None = None) -> str:
+        """Add a Markdown Cell. Its text reaches the AI Cells below only while `send_to_ai` is ticked."""
+        return self.notebooks.add_cell(notebook_id, MARKDOWN, {"text": text, "send_to_ai": send_to_ai}, after, before)
+
+    def _idle_cell(self, notebook_id: str, cell_id: str) -> dict:
+        """The cell, for an operation that cannot touch a running one: KeyError if it is not in the notebook,
+        `NotebookBusy` if it is running."""
+        cell = self.notebooks.cell(cell_id)
+        if cell["notebook_id"] != notebook_id:
+            raise KeyError(cell_id)
+        if self.running_cell(notebook_id) == cell_id:
+            raise NotebookBusy("This cell is running; stop it first")
+        return cell
+
+    def rename_notebook(self, notebook_id: str, title: str) -> None:
+        """Retitle a notebook (at most 60 characters). ValueError if the title is blank, KeyError if unknown."""
+        title = title.strip()[:60]
+        if not title:
+            raise ValueError("a notebook name cannot be blank")
+        self.notebooks.rename_notebook(notebook_id, title)
+
+    def _idle_notebook(self, notebook_id: str) -> list[dict]:
+        """The notebook's cells, for an operation that cannot touch a running one: KeyError if unknown,
+        `NotebookBusy` if a cell is running."""
+        if not self.notebooks.exists(notebook_id):
+            raise KeyError(notebook_id)
+        if self.running_cell(notebook_id):
+            raise NotebookBusy("A cell in this notebook is running; stop it first")
+        return self.notebooks.cells(notebook_id)
+
+    def notebook_delete_preview(self, notebook_id: str) -> dict:
+        """Counts for the delete dialog: the live Result Tables `delete_rt` would drop (any cell's, any Run's)
+        and the live Saved Tables that are always kept."""
+        tables = [t for c in self._idle_notebook(notebook_id) for t in self.tables.tables_of_cell(c["id"])]
+        return {"result": sum(t.kind == "result" for t in tables), "saved": sum(t.kind == "saved" for t in tables)}
+
+    def delete_notebook(self, notebook_id: str, tables: TablesChoice = "keep") -> None:
+        """Delete a notebook with its cells. `tables` (keep or delete_rt) says whether to drop the `rt_` tables its
+        Runs made; Saved Tables are always kept. The tables go first, so a failure leaves the notebook in place."""
+        cells = self._idle_notebook(notebook_id)
         if tables == "delete_rt":
-            self.tables.drop_owned(conversation_id)
-        self.store.delete_conversation(conversation_id)
+            for cell in cells:
+                self.tables.drop_of_cell(cell["id"])
+        self.notebooks.delete_notebook(notebook_id)
 
-    def delete_turn(self, conversation_id: str, turn_id: int, tables: TablesChoice = "keep") -> None:
-        """Delete one prompt/answer exchange; `tables` says whether to drop the Result Tables it
-        created. Saved Tables are always kept (KeyError if unknown)."""
-        if not self.store.has_turn(conversation_id, turn_id):
-            raise KeyError(turn_id)
+    def move_cell(self, notebook_id: str, cell_id: str, direction: Literal["up", "down"]) -> None:
+        """Swap a cell with the one above or below it (nothing at either end). Staleness follows from the new order."""
+        self._idle_cell(notebook_id, cell_id)
+        self.notebooks.move_cell(cell_id, direction)
+
+    def copy_cell(self, notebook_id: str, cell_id: str) -> str:
+        """Insert a copy of a cell's Draft just below it and return its id: an AI Cell's prompt and settings, a SQL
+        Cell's SQL and row cap, a Markdown Cell's text and Send to AI. The copy has no Run."""
+        cell = self._idle_cell(notebook_id, cell_id)
+        return self.notebooks.add_cell(notebook_id, cell["kind"], dict(cell["draft"]), after=cell_id)
+
+    def cell_delete_preview(self, notebook_id: str, cell_id: str) -> dict:
+        """Counts for the delete dialog: the live Result Tables `delete_rt` would drop (any Run's) and the live
+        Saved Tables that are always kept."""
+        self._idle_cell(notebook_id, cell_id)
+        tables = self.tables.tables_of_cell(cell_id)
+        return {"result": sum(t.kind == "result" for t in tables), "saved": sum(t.kind == "saved" for t in tables)}
+
+    def delete_cell(self, notebook_id: str, cell_id: str, tables: TablesChoice = "keep") -> None:
+        """Delete a cell. `tables` (keep or delete_rt) says whether to drop the `rt_` tables its Runs made; kept
+        ones expire per their Retention. Saved Tables are always kept. The tables go first, so a failure leaves
+        the cell in place and the delete can be retried."""
+        self._idle_cell(notebook_id, cell_id)
         if tables == "delete_rt":
-            self.tables.drop_owned(conversation_id, turn_id)
-        self.store.delete_turn(conversation_id, turn_id)
+            self.tables.drop_of_cell(cell_id)
+        self.notebooks.delete_cell(cell_id)
 
+    async def run_cell(self, notebook_id: str, cell_id: str) -> AsyncIterator[Event]:
+        """Run a cell, with what its Draft holds, and stream its events (`start()` first). A SQL Cell runs its
+        SQL without the LLM (see `_run_sql_cell`); an AI Cell as follows.
+
+        It is sent the system prompt, then the AI Cells above it in order (each as its latest Run stored it:
+        prompt, answer, tool calls and results), then its own prompt; cells below are never sent. Its Run
+        replaces the cell's earlier one. `NotebookBusy` if a cell of this notebook is already running,
+        KeyError if the cell is not in the notebook."""
+        if self._connection is None:
+            raise RuntimeError("Agent not started: call `await agent.start()` or use `async with agent`")
+        cell = self.notebooks.cell(cell_id)
+        if cell["notebook_id"] != notebook_id:
+            raise KeyError(cell_id)
+        if notebook_id in self._running_cells:
+            raise NotebookBusy("A cell in this notebook is already running.")
+        self._running_cells[notebook_id] = cell_id
+        if cell["kind"] == SQL:
+            try:
+                async for item in self._run_sql_cell(notebook_id, cell):
+                    yield item
+            finally:
+                if self._running_cells.get(notebook_id) == cell_id:
+                    del self._running_cells[notebook_id]
+            return
+        try:
+            task, queue, release = self._start_cell_run(notebook_id, cell)
+        except BaseException:
+            del self._running_cells[notebook_id]
+            raise
+        try:
+            async for item in self._consume(task, queue):
+                yield item
+        finally:
+            release()  # now, not whenever the task's done callback gets its turn
+
+    def _context_above(self, notebook_id: str, cell_id: str) -> tuple[list[dict], list[tuple[str, str]]]:
+        """What an AI Cell is sent from the cells above it, built from what each ran (never from Drafts), plus
+        the (cell id, run id) of each AI Cell above that has run. Shared by a Run and by stale detection."""
+        history: list[dict] = []
+        above: list[tuple[str, str]] = []
+        for other in self.notebooks.cells(notebook_id):
+            if other["id"] == cell_id:
+                break
+            if other["kind"] == MARKDOWN:
+                text = other["draft"].get("text", "").strip()
+                if other["draft"].get("send_to_ai") and (text or other["draft"].get("displays")):
+                    history.append({"role": "user", "content": markdown_note(other["draft"])})
+            elif other["run"]:
+                history += self._what_ran(other["run"])
+                above.append((other["id"], other["run"]["id"]))
+        return history, above
+
+    @staticmethod
+    def _fingerprint(history: list[dict]) -> str:
+        return hashlib.sha256(json.dumps(history, sort_keys=True).encode()).hexdigest()
+
+    def stale_cells(self, notebook_id: str) -> set[str]:
+        """The ids of the notebook's AI Cells that are stale: the context each would be sent now differs from
+        the one its latest Run was sent. SQL Cells (which store no fingerprint), cells that never ran and cells
+        still running are never stale."""
+        stale = set()
+        for cell in self.notebooks.cells(notebook_id):
+            run = cell["run"]
+            if cell["kind"] == AI and run and run["status"] != "running" and run["context_fingerprint"]:
+                if self._fingerprint(self._context_above(notebook_id, cell["id"])[0]) != run["context_fingerprint"]:
+                    stale.add(cell["id"])
+        return stale
+
+    def _start_cell_run(
+        self, notebook_id: str, cell: dict,
+    ) -> tuple[asyncio.Task, _TurnQueue, Callable[[], None]]:
+        cell_id, draft = cell["id"], cell["draft"]
+        history, above = self._context_above(notebook_id, cell_id)
+        fingerprint = self._fingerprint(history)
+        settings = {"model": draft.get("model") or self.config.model, "effort": draft.get("effort"),
+                    "max_rows": draft.get("max_rows") or DEFAULT_MAX_ROWS}
+        run_id = self.notebooks.start_run(cell_id, draft["prompt"], settings, fingerprint)
+        sink = _CellSink(self.notebooks, notebook_id, cell_id, run_id)
+
+        def prompt_tables() -> list[Table]:
+            tables = [t for c, r in above for t in self.tables.tables_of_run(c, r)]
+            tables += self.tables.tables_of_run(cell_id, run_id)
+            return sorted(tables, key=lambda t: (t.created_at_ms, t.name))
+
+        queue = _TurnQueue()
+        task = asyncio.create_task(self._produce_cell(
+            history, prompt_tables, sink, draft["prompt"], queue, settings))
+        self._turn_tasks.add(task)
+        task.add_done_callback(self._turn_tasks.discard)
+        self._keyed_turns[cell_id] = task
+
+        def release(_t: asyncio.Task | None = None) -> None:
+            """The cell is no longer running: free the notebook, and close a Run the task could not."""
+            if self._keyed_turns.get(cell_id) is task:
+                del self._keyed_turns[cell_id]
+            if self._running_cells.get(notebook_id) == cell_id:
+                del self._running_cells[notebook_id]
+            if task.done() and self.notebooks.status_of(run_id) == "running":  # cancelled or crashed first
+                self.notebooks.finish_run(run_id, "stopped" if task in self._stopped_turns else "failed")
+        task.add_done_callback(release)
+        return task, queue, release
+
+    @staticmethod
+    def _what_ran(run: dict) -> list[dict]:
+        """A finished Run's messages as the cells below are sent them: a stopped or failed Run counts as having
+        run, with what it streamed plus "(stopped by the user)" or "failed: <value-free error>"."""
+        messages = repair_history(run["messages"])
+        if run["status"] not in ("stopped", "failed"):
+            return messages
+        last = messages[-1] if messages and messages[-1]["role"] == "assistant" else None
+        text = (last.get("content") or "") if last else ""
+        if run["status"] == "stopped":
+            note = "(stopped by the user)"
+            text = text.removesuffix(STOPPED_NOTE).rstrip()
+        else:
+            errors = [e["message"] for e in (run["trace"] or {}).get("entries", []) if e["kind"] == "error"]
+            note = f"failed: {errors[0] if errors else 'the Run did not finish'}"
+            if errors and text == errors[0]:
+                text = ""  # the error message was recorded as the answer: say it once
+        if last:
+            messages = messages[:-1]
+        return messages + [{"role": "assistant", "content": f"{text}\n\n{note}" if text else note}]
+
+    async def _produce_cell(
+        self, history: list[dict], prompt_tables: Callable[[], list[Table]], sink: _CellSink, prompt: str,
+        queue: _TurnQueue, settings: dict,
+    ):
+        def end(trace: dict) -> TraceReady:
+            kinds = {e["kind"] for e in trace["entries"]}
+            self.notebooks.finish_run(sink.run_id, "stopped" if "stopped" in kinds else "failed" if "error" in kinds else "ok")
+            return TraceReady(trace)
+
+        try:
+            sink.record(history, {"role": "user", "content": prompt})
+            await self._exchange(history, prompt_tables, sink, prompt, queue, settings["max_rows"],
+                                 settings["model"], settings["effort"], end=end)
+            await queue.put(TurnEnd())
+        except asyncio.CancelledError:
+            raise
+        except BaseException as e:  # surfaced to the consumer
+            await queue.put(e)
+
+    # --- SQL Cells --------------------------------------------------------------------------------------
+
+    async def _run_sql_cell(self, notebook_id: str, cell: dict) -> AsyncIterator[Event]:
+        """Run a SQL Cell's statement without the LLM, through the query path Refresh uses. A bare count gives
+        a Count Display; anything else becomes a table (a re-run swaps the new rows in under the same name). The
+        Run keeps the labelled message an AI Cell below is sent, with its Query Metadata as it is now."""
+        cell_id, draft = cell["id"], cell["draft"]
+        sql, max_rows = draft.get("sql", ""), draft.get("max_rows") or DEFAULT_MAX_ROWS
+        command, table = draft.get("command") or "", draft.get("table") or ""
+        statement = statement_of(command, table) if command else sql
+        last = cell["run"]  # the table a re-run replaces: the latest Run's own Result Table, if still live; never a Saved Table
+        prior = next((t for t in (self.tables.tables_of_run(cell_id, last["id"]) if last else []) if t.kind == "result"), None)
+        run_id = self.notebooks.start_run(cell_id, statement, {"max_rows": max_rows, "command": command}, "")
+        stop = self._sql_stops[cell_id] = threading.Event()
+        started = time.monotonic()
+        try:
+            try:
+                outcome: dict[str, Any] = await asyncio.to_thread(self._execute_sql, sql, max_rows, stop, prior, CellRun(cell_id, run_id), command, table)
+            except asyncio.CancelledError:  # the client left: abandon the query
+                stop.set()
+                self.notebooks.finish_run(run_id, "stopped")
+                raise
+            except Exception:
+                log.exception("SQL Cell %s crashed", cell_id)
+                msg = "The query could not be run."
+                outcome = {"status": "failed", "error": msg, "raw_error": msg}
+        finally:
+            self._sql_stops.pop(cell_id, None)
+        outcome["elapsed_s"] = round(time.monotonic() - started, 3)
+        label = f"[SHOW Cell, run by the user] {statement}" if command else f"[SQL Cell, run by the user] {sql}"
+        displays: list[tuple] = []
+        event: Event | None = None
+        if outcome["status"] == "stopped":
+            detail = "(stopped by the user)"  # as an AI Cell's stopped Run reads below
+        elif outcome["status"] == "failed":
+            detail = f"Failed: {outcome['error']}"
+        elif "rows" in outcome:
+            detail = self._show_message(outcome["columns"], outcome["rows"])
+        elif "count" in outcome:
+            detail = f"Count: {outcome['count']}"
+            computed, title = self.config.clock(), queries.shorten_sql(sql)
+            displays.append((COUNT_KIND, None, {"title": title, "value": outcome["count"], "sql": sql, "computed_at_ms": computed}))
+            event = CountEvent(title, outcome["count"], sql, computed)
+        else:
+            meta = {"result_table": outcome["table"], "columns": outcome["columns"], "row_count": outcome["row_count"]}
+            if outcome.get("truncated_to"):
+                meta["truncated_to"] = outcome["truncated_to"]
+            detail = f"Query Metadata: {json.dumps(meta)}"
+            names = [c["name"] for c in outcome["columns"]]
+            displays.append(("table", outcome["table"], {"columns": names}))
+            event = DisplayEvent("table", outcome["table"], names)
+        # The message is stored once, so what AI Cells below are sent is frozen at this Run.
+        self.notebooks.add_step(run_id, [({"role": "user", "content": f"{label}\n{detail}"}, displays)])
+        self.notebooks.save_result(run_id, {k: v for k, v in outcome.items() if k != "columns" or "rows" in outcome})
+        self.notebooks.finish_run(run_id, outcome["status"])
+        if event is not None:
+            yield event
+        if outcome["status"] == "failed":
+            yield TurnError(outcome["raw_error"], "sql cell failed")
+        yield TurnEnd()
+
+    @staticmethod
+    def _show_message(columns: list[str], rows: list[list]) -> str:
+        """A SHOW Cell result as an AI Cell below is sent it: the columns and up to SHOW_ROWS_TO_AI rows, with a
+        note when rows were left out."""
+        lines = [" | ".join(columns)] + [" | ".join("" if v is None else str(v) for v in r) for r in rows[:SHOW_ROWS_TO_AI]]
+        if len(rows) > SHOW_ROWS_TO_AI:
+            lines.append(f"(first {SHOW_ROWS_TO_AI} of {len(rows)} rows; the other rows were left out)")
+        return "\n".join(lines)
+
+    def _execute_sql(self, sql: str, max_rows: int, stop: threading.Event, prior: Table | None, owner: CellRun,
+                     command: str = "", table: str = "") -> dict:
+        """The blocking part of a SQL Cell Run (it runs in a thread): the outcome as a dict with `status` ok, failed
+        or stopped, then `count`, or `table`, `columns`, `row_count` and `truncated_to`, or `error` (value-free) and
+        `raw_error` (for the user, and logged)."""
+        cfg, readable = self.config, self.tables.readable()
+        if command:  # SHOW / DESCRIBE: no table, no row cap; the rows are kept with the Run
+            try:
+                names, rows = run_show(command, table, cfg.telemetry_db, cfg.results_db, self.tables.listing())
+            except ShowFailed as e:
+                log.warning("SQL Cell %s failed: %s", owner.cell_id, e)
+                return {"status": "failed", "error": str(e), "raw_error": str(e)}
+            return {"status": "ok", "columns": names, "rows": rows, "row_count": len(rows), "command": command}
+        if is_show_statement(sql):
+            return {"status": "failed", "error": SHOW_IN_TEXTBOX, "raw_error": SHOW_IN_TEXTBOX}
+
+        def failure(result: dict) -> dict:
+            if result.get("stopped"):
+                return {"status": "stopped"}
+            raw = result.get("raw_error") or result["error"]
+            log.warning("SQL Cell %s failed: %s", owner.cell_id, raw)
+            return {"status": "failed", "error": result["error"], "raw_error": raw}
+
+        if queries.looks_like_count(sql):
+            counted = queries.run_count_query(cfg.telemetry_db, cfg.results_db, sql, cfg.query_timeout_s, readable, stop)
+            if counted["success"]:
+                return {"status": "ok", "count": counted["count"]}
+            if counted.get("stopped") or counted["error"] != queries.COUNT_GUIDANCE:
+                return failure(counted)  # a real failure; only the wrong shape falls back to a table
+        title = queries.shorten_sql(sql)
+        result = queries.run_query(cfg.telemetry_db, cfg.results_db, sql, cfg.query_timeout_s, max_rows, readable, title, stop)
+        if not result["success"]:
+            return failure(result)
+        temp = name = result["result_table"]
+        before = None
+        if prior is not None:
+            try:  # Catalog first (it refuses a table a sweep has expired), then the atomic swap
+                before = self.tables.record_refresh(prior.name, result["columns"], result.get("truncated_to"))
+            except TableExpired:
+                prior = None
+        try:
+            if prior is None:
+                self.tables.register_for(owner, temp, title, result["columns"], table_names.SQL_CELL_REQUEST,
+                                         result.get("truncated_to"), sql, max_rows)
+            else:
+                queries.swap_table(cfg.results_db, temp, prior.name)
+                name = prior.name
+                self.tables.reown_for_rerun(name, owner, title, sql, max_rows)
+        except BaseException:
+            if before is not None:
+                self.tables.restore_refresh(before)
+            queries.drop_table(cfg.results_db, temp)
+            raise
+        return {"status": "ok", "table": name, "columns": result["columns"], "row_count": result["row_count"],
+                "truncated_to": result.get("truncated_to")}
+
+    def running_cell(self, notebook_id: str) -> str | None:
+        """The id of the cell running in this notebook now, or None."""
+        return self._running_cells.get(notebook_id)
+
+    def stop_cell(self, cell_id: str) -> bool:
+        """Stop a running cell now. What it had streamed is kept and its Run is recorded as stopped.
+        False if the cell is not running."""
+        flag = self._sql_stops.get(cell_id)
+        if flag is not None:  # a SQL Cell: its query's progress handler sees the flag and aborts it
+            flag.set()
+            return True
+        return self.stop_turn(cell_id)
 
     def fetch_rows(self, result_table: str, columns: list[str] | None = None, **page_args) -> dict:
         """Internal data path used by the row-JSON endpoint. Not an LLM tool.
@@ -475,8 +909,9 @@ class Agent:
         """Refresh a Count Display: run its stored count query again, without the LLM, under the same checks
         and timeout as the original, and overwrite its number and "as of" time. Returns the new
         {"value", "computed_at_ms"}. KeyError if unknown, `RefreshInProgress` if already refreshing,
-        `RefreshFailed` (plain message) if the query fails, in which case the old number is kept."""
-        definition = self.store.count_display(display_id)
+        `RefreshFailed` (plain message) if the query fails, in which case the old number is kept.
+        A Refresh is never a Run."""
+        definition = self.notebooks.count_display(display_id)
         if definition is None:
             raise KeyError(display_id)
         label = f'Count Display "{definition["title"]}"'
@@ -488,7 +923,7 @@ class Agent:
             if not result["success"]:
                 raise RefreshFailed(self._refresh_error(label, result))
             computed_at_ms = self.config.clock()
-            self.store.update_count(display_id, result["count"], computed_at_ms)
+            self.notebooks.update_count(display_id, result["count"], computed_at_ms)
             return {"value": result["count"], "computed_at_ms": computed_at_ms}
 
     def iter_all_rows(self, result_table: str):
@@ -499,28 +934,10 @@ class Agent:
         """Internal data path for the chart-rows endpoint (chart cap). Not an LLM tool."""
         return queries.fetch_records(self.config.results_db, self.tables[result_table].name, self.config.chart_row_cap)
 
-    async def run_turn(
-        self, conversation: Conversation, user_message: str, max_result_rows: int, model: str | None = None,
-        effort: str | None = None, turn_key: str | None = None,
-    ) -> AsyncIterator[Event]:
-        """Run one turn on the Agent's MCP connection (`start()` first).
-
-        The turn runs in a producer task. If the consumer stops early (client disconnect), the
-        producer is cancelled and awaited; the MCP server keeps running.
-
-        `max_result_rows` is the row cap for this turn's queries; the user chooses it in the UI.
-        `model` is the Model Choice for this turn (an id the client factory knows); the default model when None.
-        `effort` is the Effort level the user picked; it reaches the provider only when it is not the model's default.
-        `turn_key` names the turn for `stop_turn`, which ends it early but cleanly (the events still finish with a Trace)."""
-        if self._connection is None:
-            raise RuntimeError("Agent not started: call `await agent.start()` or use `async with agent`")
-        queue = _TurnQueue()
-        task = asyncio.create_task(self._produce(conversation, user_message, queue, max_result_rows, model or self.config.model, effort))
-        self._turn_tasks.add(task)
-        task.add_done_callback(self._turn_tasks.discard)
-        if turn_key is not None:
-            self._keyed_turns[turn_key] = task
-            task.add_done_callback(lambda _t: self._keyed_turns.pop(turn_key, None))
+    @staticmethod
+    async def _consume(task: asyncio.Task, queue: _TurnQueue) -> AsyncIterator[Event]:
+        """Yield a producer task's events until its end. If the consumer stops early, the task is cancelled
+        and awaited."""
         finished = False
         try:
             while True:
@@ -547,42 +964,29 @@ class Agent:
         task.cancel()
         return True
 
-    async def _produce(
-        self, conversation: Conversation, user_message: str, queue: _TurnQueue, max_result_rows: int, model: str,
-        effort: str | None = None,
+    async def _exchange(
+        self, history: list[dict], prompt_tables: Callable[[], list[Table]], sink: ExchangeSink, request: str,
+        queue: _TurnQueue, max_result_rows: int, model: str, effort: str | None, end: Callable[[dict], object],
     ):
-        try:
-            await self._run(conversation, user_message, queue, max_result_rows, model, effort)
-            await queue.put(TurnEnd())
-        except asyncio.CancelledError:
-            raise
-        except BaseException as e:  # surfaced to the consumer
-            await queue.put(e)
-
-    async def _run(
-        self, conversation: Conversation, user_message: str, queue: _TurnQueue, max_result_rows: int, model: str,
-        effort: str | None = None,
-    ):
-        if conversation.id is None:
-            conversation.id = self.create_conversation()
-        turn_id = self.store.start_turn(conversation.id, user_message)
-        self._record(conversation, turn_id, {"role": "user", "content": user_message})
+        """The one path an LLM exchange runs through: `history` (already ending in the user's message, extended
+        in place), `prompt_tables` (the Result Tables the system prompt lists, asked before every step), and
+        `sink` (where messages, Displays, Trace and new Result Tables are recorded, whatever owns them)."""
         trace = TraceBuilder(model, on_add=lambda entry: queue.put_nowait(TraceLive(entry)))
         live = _LiveStep()
         try:
-            await self._converse(conversation, turn_id, user_message, trace, queue, max_result_rows, model, effort, live)
+            await self._converse(history, prompt_tables, sink, request, trace, queue, max_result_rows, model, effort, live)
         except asyncio.CancelledError:
             if asyncio.current_task() not in self._stopped_turns:  # the client left or the app is closing
-                self.store.save_trace(turn_id, trace.finish())
+                sink.save_trace(trace.finish())
                 raise
-            self._record_stop(conversation, turn_id, live, trace, queue)
+            self._record_stop(history, sink, live, trace, queue)
         except Exception as e:
-            await self._fail_turn(conversation, turn_id, trace, queue, e)
+            await self._fail_turn(history, sink, trace, queue, e)
         finished = trace.finish()
-        self.store.save_trace(turn_id, finished)
-        await queue.put(TraceReady(finished, turn_id))
+        sink.save_trace(finished)
+        await queue.put(end(finished))
 
-    def _record_stop(self, conversation, turn_id, live: _LiveStep, trace: TraceBuilder, queue: _TurnQueue) -> None:
+    def _record_stop(self, history, sink: ExchangeSink, live: _LiveStep, trace: TraceBuilder, queue: _TurnQueue) -> None:
         """The user stopped the turn: keep the text of the step in progress, and say so, in the page,
         the history and the Trace. A step cut off before its tool calls were answered keeps only its text."""
         partial = live.text if live.open else ""
@@ -590,10 +994,10 @@ class Agent:
             trace.llm_step(live.system_prompt, live.text, [], None, live.started)
         trace.add("stopped")
         message = (partial.rstrip() + "\n\n" if partial.strip() else "") + STOPPED_NOTE
-        self._record(conversation, turn_id, {"role": "assistant", "content": message})
+        sink.record(history, {"role": "assistant", "content": message})
         queue.put_nowait(TextDelta(queue.paragraph_break() + STOPPED_NOTE))
 
-    async def _fail_turn(self, conversation, turn_id, trace: TraceBuilder, queue: _TurnQueue, error: BaseException) -> None:
+    async def _fail_turn(self, history, sink: ExchangeSink, trace: TraceBuilder, queue: _TurnQueue, error: BaseException) -> None:
         """A turn failed partway: tell the user, record it in the Trace and in the history."""
         error = _unwrap(error)
         detail = f"{type(error).__name__}: {error}"
@@ -602,28 +1006,27 @@ class Agent:
         else:
             message = f"Sorry, something went wrong while handling that request ({type(error).__name__}). Please try again."
         trace.add("error", message=message, detail=detail)
-        self._record(conversation, turn_id, {"role": "assistant", "content": message})
+        sink.record(history, {"role": "assistant", "content": message})
         await queue.put_notice(message)
         await queue.put(TurnError(message, detail))
 
     async def _converse(
-        self, conversation, turn_id, user_message, trace: TraceBuilder, queue: _TurnQueue, max_result_rows: int,
-        model: str, effort: str | None = None, live: _LiveStep | None = None,
+        self, history: list[dict], prompt_tables: Callable[[], list[Table]], sink: ExchangeSink, user_message: str,
+        trace: TraceBuilder, queue: _TurnQueue, max_result_rows: int, model: str, effort: str | None = None, live: _LiveStep | None = None,
     ):
         live = live or _LiveStep()
         llm = self.client_for(model)
         spec = self.config.spec_of(model)
         # Only a non-default Effort is sent; the default sends nothing extra.
         reasoning = {"effort": effort} if effort and spec and effort != spec.default_effort else None
-        # Lets OpenRouter route every step of this conversation to one cache (the client decides per model).
-        session_id = f"conversation-{conversation.id}"
+        session_id = sink.session_id  # the client decides per model whether to send it
         connection = await self._ensure_connection()
         tools = connection.tools
         failed_attempts = 0
         for call_number in range(1, self.config.max_llm_steps + 1):
-            system_prompt = self.semantic_layer.system_prompt(self.tables.tables_of(conversation.id))
+            system_prompt = self.semantic_layer.system_prompt(prompt_tables())
             messages = [{"role": "system", "content": system_prompt}]
-            messages += conversation.messages
+            messages += history
             text, calls, usage = "", [], None
             step_started = time.monotonic()
             live.text, live.system_prompt, live.started, live.in_trace, live.open = "", system_prompt, step_started, False, True
@@ -663,12 +1066,12 @@ class Agent:
             for c in calls:
                 call_started = time.monotonic()
                 content, args, executed_sql, failed = await self._run_tool(
-                    connection, c, queue, trace, conversation.id, turn_id, user_message, max_result_rows
+                    connection, c, queue, trace, sink, user_message, max_result_rows
                 )
                 failed_attempts += failed
                 trace.tool_call(c.name, args, content, call_started, executed_sql)
                 self._trace_result_table(trace, content)
-                displays, events = self._prepare_displays(conversation, content, args, trace)
+                displays, events = self._prepare_displays(content, args, trace)
                 step_displays += [(e, len(items)) for e in events]
                 count = self._count_display(c.name, content, args)
                 if count:
@@ -676,29 +1079,29 @@ class Agent:
                                                      "computed_at_ms": count.computed_at_ms}))
                     step_displays.append((count, len(items)))
                 items.append(({"role": "tool", "tool_call_id": c.id, "content": content}, displays))
-            _, display_ids = self.store.add_step(conversation.id, turn_id, items)
+            _, display_ids = sink.add_step(items)
             for event, index in step_displays:
                 if isinstance(event, CountEvent):
                     event.display_id = display_ids[index][-1]  # a call makes one Display: its count is the last
                 await queue.put(event)
-            conversation.messages.extend(m for m, _ in items)
+            history.extend(m for m, _ in items)
             live.open = False
             if not calls:
                 break
             if failed_attempts >= self.config.max_failed_attempts:
-                await self._end_with_notice(conversation, turn_id, GIVE_UP_MESSAGE, queue)
+                await self._end_with_notice(history, sink, GIVE_UP_MESSAGE, queue)
                 break
         else:
             trace.add("step_limit", max_steps=self.config.max_llm_steps)
-            await self._end_with_notice(conversation, turn_id, STEP_LIMIT_MESSAGE, queue)
+            await self._end_with_notice(history, sink, STEP_LIMIT_MESSAGE, queue)
 
-    async def _end_with_notice(self, conversation, turn_id, message: str, queue: _TurnQueue) -> None:
-        self._record(conversation, turn_id, {"role": "assistant", "content": message})
+    async def _end_with_notice(self, history: list[dict], sink: ExchangeSink, message: str, queue: _TurnQueue) -> None:
+        sink.record(history, {"role": "assistant", "content": message})
         await queue.put_notice(message)
 
     async def _run_tool(
         self, connection: McpConnection, c: ToolCallChunk, queue: asyncio.Queue, trace: TraceBuilder,
-        conversation_id: str, turn_id: int, request: str, max_result_rows: int,
+        sink: ExchangeSink, request: str, max_result_rows: int,
     ) -> tuple[str, dict, str | None, int]:
         """Execute one LLM tool call. Returns (content, args, executed_sql, failed 0/1).
 
@@ -721,7 +1124,7 @@ class Agent:
             else:
                 args = parsed
                 try:
-                    result = await connection.call_tool(c.name, args, conversation_id, max_result_rows)
+                    result = await connection.call_tool(c.name, args, max_result_rows)
                 except Exception as e:  # a broken tool call must not corrupt or abort the turn
                     trace.add("tool_error", name=c.name, detail=f"{type(_unwrap(e)).__name__}: {_unwrap(e)}")
                     return _fail("The tool failed to run. Try again."), args, None, 1
@@ -729,7 +1132,7 @@ class Agent:
                 try:
                     # Straight after the call returns, before any other await, so a turn stopped here
                     # still has its table registered (and so listed and swept).
-                    self._register_result_table(conversation_id, turn_id, content, args, request, max_result_rows)
+                    self._register_result_table(sink.owner, content, args, request, max_result_rows)
                 except Exception as e:  # the tool ran; only recording its table failed
                     trace.add("registration_error", name=c.name, detail=f"{type(e).__name__}: {e}")
                     return _fail("The query ran but its Result Table could not be recorded. Try again."), args, None, 1
@@ -769,17 +1172,17 @@ class Agent:
         await queue.put(FlagEvent([i["token"] for i in items], items))
 
     def _register_result_table(
-        self, conversation_id: str, turn_id: int, content: str, args: dict, request: str, max_result_rows: int
+        self, owner: Owner, content: str, args: dict, request: str, max_result_rows: int
     ) -> None:
-        """Record the Result Table a successful query tool call made, with the turn that made it."""
+        """Record the Result Table a successful query tool call made, with the owner that made it."""
         try:
             payload = json.loads(content)
         except ValueError:
             return
         if isinstance(payload, dict) and payload.get("success") and payload.get("result_table") and "display" not in payload:
             title = args.get("title", "")
-            self.tables.register(
-                payload["result_table"], conversation_id, turn_id, title if isinstance(title, str) else "",
+            self.tables.register_for(
+                owner, payload["result_table"], title if isinstance(title, str) else "",
                 payload.get("columns", []), request, payload.get("truncated_to"), args.get("sql"), max_result_rows,
             )
 
@@ -821,17 +1224,11 @@ class Agent:
             trace.add("query_error", sql=args.get("sql"), raw_error=raw, sanitized_error=meta.get("error"))
         return json.dumps(meta), 1
 
-    def _record(self, conversation: Conversation, turn_id: int, message: dict) -> int:
-        assert conversation.id is not None  # run_turn persists the Conversation first
-        conversation.messages.append(message)
-        return self.store.add_message(conversation.id, turn_id, message)
-
     def _prepare_displays(
-        self, conversation: Conversation, tool_content: str, args: dict, trace: TraceBuilder,
+        self, tool_content: str, args: dict, trace: TraceBuilder,
     ) -> tuple[list[tuple], list[DisplayEvent]]:
         """The Display a tool call made: the definitions [(kind, result_table, definition)] to persist with
         the tool message, and the events to send the user once the step is saved."""
-        assert conversation.id is not None  # run_turn persists the Conversation first
         try:
             payload = json.loads(tool_content)
         except ValueError:
@@ -843,7 +1240,7 @@ class Agent:
             return [], []
         table = display["result_table"]
         # Any live Result Table may be shown (ADR 0003); the Display is saved with this
-        # Conversation, but the table stays owned by the one that created it.
+        # Cell, but the table stays owned by the one that created it.
         live = table in self.tables
         if display["kind"] == "chart":
             source = display["spec"]
@@ -858,7 +1255,7 @@ class Agent:
 
     def _count_display(self, tool: str, content: str, args: dict) -> CountEvent | None:
         """A successful run_count_query makes a Count Display (shown once it is saved). It has no result
-        table (so no Retention) and lives and dies with its Conversation."""
+        table (so no Retention) and lives and dies with its Run."""
         if tool != "run_count_query":
             return None
         try:

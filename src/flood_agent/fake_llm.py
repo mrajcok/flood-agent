@@ -25,7 +25,7 @@ _PLACEHOLDER = re.compile(r"\{result_table(?::(-\d+))?\}")
 
 
 class ParentNotRun(Exception):
-    """A follow-up was picked before its parent Canned Prompt ran in this Conversation."""
+    """A follow-up was picked before its parent Canned Prompt ran in this notebook."""
 
     def __init__(self, parent: "CannedPrompt"):
         self.parent = parent
@@ -141,7 +141,7 @@ class FakeClient:
 
     def _scope(self, canned: CannedPrompt | None, messages: list[dict], last_user: int) -> list[dict]:
         """The messages placeholders resolve from: this turn's own queries, or for a follow-up,
-        everything from its parent's latest run in this Conversation."""
+        everything from its parent's latest run in this notebook."""
         parent = parent_of(canned, self.canned_prompts)
         if parent is None:
             return messages[last_user:]

@@ -40,10 +40,10 @@ async def test_an_exchange_runs_from_a_given_history_and_records_against_a_cell_
     asked = []
 
     await agent._exchange(history, lambda: asked.append(1) or [], sink, "ports please", queue, 1000,
-                          agent.config.model, None, end=lambda trace: TraceReady(trace, 0))
+                          agent.config.model, None, end=lambda trace: TraceReady(trace))
 
     assert [m["role"] for m in history] == ["user", "user", "assistant", "tool", "assistant"]
     assert len(sink.steps) == 2 and len(sink.traces) == 1
     assert len(asked) == 2  # the table list is asked before every LLM step
     [table] = agent.tables.tables_of_run("cell-1", "run-1")
-    assert table.owner == CellRun("cell-1", "run-1") and table.conversation_id is None
+    assert table.owner == CellRun("cell-1", "run-1")

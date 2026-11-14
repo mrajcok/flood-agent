@@ -1,6 +1,6 @@
-"""The Agent: runs the LLM tool loop for one turn and emits an event stream.
+"""The Agent: runs the LLM tool loop for one AI Cell Run and emits an event stream.
 
-The HTTP/SSE layer is a thin adapter over `Agent.run_turn`. The LLM client is injected.
+The HTTP/SSE layer is a thin adapter over `Agent.run_cell`. The LLM client is injected.
 """
 
 import asyncio
@@ -19,15 +19,14 @@ from mcp import StdioServerParameters
 from mcp.types import TextContent
 
 from flood_agent import flagging, queries, table_names
-from flood_agent.catalog import Catalog, CellRun, ConversationTurn, Owner, Table, TableExpired, canonical
+from flood_agent.catalog import Catalog, CellRun, Owner, Table, TableExpired, canonical
 from flood_agent.llm import LLMClient, LLMError, ModelSpec, TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
 from flood_agent.mcp_protocol import QUERY_TOOLS
 from flood_agent.mcp_server import ServerSettings
-from flood_agent.notebooks import AI, DEFAULT_MAX_ROWS, MARKDOWN, MARKDOWN_NOTE_LABEL, SQL, NotebookStore
+from flood_agent.notebooks import AI, COUNT_KIND, DEFAULT_MAX_ROWS, MARKDOWN, MARKDOWN_NOTE_LABEL, SQL, NotebookStore
 from flood_agent.semantic_layer import SemanticLayer
 from flood_agent.show_commands import SHOW_IN_TEXTBOX, ShowFailed, is_show_statement, run_show, statement_of
-from flood_agent.store import COUNT_KIND, ConversationStore
 from flood_agent.trace import TraceBuilder, context_tokens
 from flood_agent.upgrade import drop_pre_notebook_data
 
@@ -52,7 +51,7 @@ class RefreshFailed(Exception):
     """A Refresh did not complete; the message is plain text safe to show the user."""
 
 
-# Whether deleting a Conversation or exchange also drops its live Result Tables (those still named
+# Whether deleting a Notebook or Cell also drops its live Result Tables (those still named
 # rt_*). Its Saved Tables are always kept (ADR 0004).
 TablesChoice = Literal["keep", "delete_rt"]
 
@@ -67,7 +66,7 @@ class AgentConfig:
     semantic_layer: Path
     model: str  # the default model: runs a turn that names none
     models: tuple[ModelSpec, ...]  # the curated list; window_of looks a model's window up here
-    result_ttl_ms: int  # Result Tables expire this long after last Conversation activity
+    result_ttl_ms: int  # Result Tables expire this long after they are made
     query_timeout_s: float
     chart_row_cap: int
     max_failed_attempts: int
@@ -92,48 +91,20 @@ ClientFactory = Callable[[str], LLMClient]
 """Gives the client that runs a model id: the real OpenRouter client (made lazily, reused) or a scripted fake."""
 
 
-@dataclass
-class Conversation:
-    """A Conversation's message history. `id` is None until first persisted by `run_turn`."""
-
-    id: str | None = None
-    messages: list[dict] = field(default_factory=list)
-
-
 class ExchangeSink(Protocol):
     """Where one LLM exchange is stored: its messages, Displays and Trace, and the owner its Result Tables
-    are recorded against. A Conversation turn is one; an AI Cell's Run will be another."""
+    are recorded against. An AI Cell's Run is one."""
 
     @property
     def owner(self) -> Owner: ...
     @property
-    def key(self) -> str: ...  # names the exchange to the MCP server (a Conversation id for a turn)
+    def key(self) -> str: ...  # names the exchange (the cell id)
     @property
     def session_id(self) -> str: ...  # lets OpenRouter route every step of the exchange to one cache
 
     def record(self, history: list[dict], message: dict) -> int: ...
     def add_step(self, items: list[tuple[dict, list[tuple]]]) -> tuple[list[int], list[list[int]]]: ...
     def save_trace(self, trace: dict) -> None: ...
-
-
-class _TurnSink:
-    """Stores a Conversation turn in the ConversationStore."""
-
-    def __init__(self, store: ConversationStore, conversation_id: str, turn_id: int):
-        self.store, self.turn_id = store, turn_id
-        self.owner = ConversationTurn(conversation_id, turn_id)
-        self.key = conversation_id
-        self.session_id = f"conversation-{conversation_id}"
-
-    def record(self, history: list[dict], message: dict) -> int:
-        history.append(message)
-        return self.store.add_message(self.owner.conversation_id, self.turn_id, message)
-
-    def add_step(self, items):
-        return self.store.add_step(self.owner.conversation_id, self.turn_id, items)
-
-    def save_trace(self, trace: dict) -> None:
-        self.store.save_trace(self.turn_id, trace)
 
 
 class _CellSink:
@@ -223,7 +194,6 @@ class TraceReady:
     """The finished Trace for the turn (already persisted); for the UI only, never for the LLM."""
 
     trace: dict
-    turn_id: int | None = None
 
 
 @dataclass
@@ -358,7 +328,6 @@ class Agent:
         self.client_for = client_for
         self.semantic_layer = SemanticLayer(config.semantic_layer)
         drop_pre_notebook_data(config.app_db, config.results_db)  # before anything creates the new schema
-        self.store = ConversationStore(config.app_db, config.clock)
         self.notebooks = NotebookStore(config.app_db, config.clock)
         self.tables = Catalog(
             config.app_db, config.clock, config.result_ttl_ms, telemetry_tables=self.semantic_layer.table_names(),
@@ -367,7 +336,7 @@ class Agent:
         self._connection: McpConnection | None = None
         self._restart_lock = asyncio.Lock()
         self._turn_tasks: set[asyncio.Task] = set()
-        self._keyed_turns: dict[str, asyncio.Task] = {}  # running turns by the key `run_turn` was given
+        self._keyed_turns: dict[str, asyncio.Task] = {}  # running cell runs by cell id
         self._stopped_turns: set[asyncio.Task] = set()  # turns `stop_turn` cancelled
         self._running_cells: dict[str, str] = {}  # notebook id -> the cell running in it now
         self._sql_stops: dict[str, threading.Event] = {}  # SQL Cell id -> its running query's stop flag
@@ -375,15 +344,9 @@ class Agent:
         self._refreshing_lock = threading.Lock()
         self.tables.sweep()
 
-    def create_conversation(self) -> str:
-        """Persist a new, empty Conversation and return its id. Also sweeps the Table Catalog (expired
-        and orphaned tables), which runs only here and at startup."""
-        self.tables.sweep()
-        return self.store.create_conversation()
-
     async def start(self) -> None:
-        """Launch the long-lived MCP server. Needed before `run_turn`, not for row fetches,
-        PSV export or Conversation listing."""
+        """Launch the long-lived MCP server. Needed before `run_cell`, not for row fetches
+        or PSV export."""
         if self._connection is not None:
             raise RuntimeError("Agent already started")
         connection = McpConnection(self._transport())
@@ -425,12 +388,12 @@ class Agent:
         await self.aclose()
 
     def _server_settings(self) -> ServerSettings:
-        # Static settings only. The Conversation id travels in each call's `_meta`, not here
-        # and not as a tool argument, so the LLM can't name another Conversation.
+        # Static settings only. The row cap travels in each call's `_meta`, not here
+        # and not as a tool argument, so the LLM can't choose it.
         return ServerSettings(
             telemetry_db=self.config.telemetry_db,
             results_db=self.config.results_db,
-            app_db=self.store.path,
+            app_db=self.config.app_db,
             query_timeout_s=self.config.query_timeout_s,
             chart_row_cap=self.config.chart_row_cap,
             telemetry_tables=tuple(self.semantic_layer.table_names()),
@@ -471,8 +434,7 @@ class Agent:
             notebook_id, SQL, {"sql": sql, "max_rows": max_rows, "command": command, "table": table}, after, before)
 
     def _follow_rename(self, con, old: str, new: str) -> None:
-        """Every Display, in a Conversation, a Run or a Markdown Cell, follows a table's new name."""
-        self.store.follow_rename(con, old, new)
+        """Every Display, in a Run or a Markdown Cell, follows a table's new name."""
         self.notebooks.follow_rename(con, old, new)
 
     def _copyable_run(self, notebook_id: str, cell_id: str) -> tuple[str, list[dict]]:
@@ -875,42 +837,6 @@ class Agent:
             return True
         return self.stop_turn(cell_id)
 
-    def open_conversation(self, conversation_id: str) -> Conversation:
-        """Load a saved Conversation (KeyError if unknown)."""
-        if not self.store.exists(conversation_id):
-            raise KeyError(conversation_id)
-        return Conversation(conversation_id, repair_history(self.store.messages(conversation_id)))
-
-    def delete_preview(self, conversation_id: str, turn_id: int | None = None) -> dict:
-        """Counts for the delete dialog: the live Result Tables that delete_rt would drop (`result`) and
-        the live Saved Tables that are always kept (`saved`). KeyError if the Conversation, or the turn
-        in it, is unknown."""
-        if not self.store.exists(conversation_id) or (
-                turn_id is not None and not self.store.has_turn(conversation_id, turn_id)):
-            raise KeyError(turn_id if turn_id is not None else conversation_id)
-        owned = self.tables.owned(conversation_id, turn_id)
-        return {"result": len(owned.result), "saved": len(owned.saved)}
-
-    def delete_conversation(self, conversation_id: str, tables: TablesChoice = "keep") -> None:
-        """Delete a saved Conversation; `tables` (keep or delete_rt) says whether to drop its live
-        Result Tables. Its Saved Tables are always kept (KeyError if unknown). The tables go first, so a
-        store failure leaves the Conversation in place and the delete can be retried."""
-        if not self.store.exists(conversation_id):
-            raise KeyError(conversation_id)
-        if tables == "delete_rt":
-            self.tables.drop_owned(conversation_id)
-        self.store.delete_conversation(conversation_id)
-
-    def delete_turn(self, conversation_id: str, turn_id: int, tables: TablesChoice = "keep") -> None:
-        """Delete one prompt/answer exchange; `tables` says whether to drop the Result Tables it
-        created. Saved Tables are always kept (KeyError if unknown)."""
-        if not self.store.has_turn(conversation_id, turn_id):
-            raise KeyError(turn_id)
-        if tables == "delete_rt":
-            self.tables.drop_owned(conversation_id, turn_id)
-        self.store.delete_turn(conversation_id, turn_id)
-
-
     def fetch_rows(self, result_table: str, columns: list[str] | None = None, **page_args) -> dict:
         """Internal data path used by the row-JSON endpoint. Not an LLM tool.
 
@@ -978,18 +904,17 @@ class Agent:
             error = "A table this query reads has expired or been deleted. Ask again to regenerate it."
         return error
 
-    def refresh_count(self, display_id: int, in_notebook: bool = False) -> dict:
+    def refresh_count(self, display_id: int) -> dict:
         """Refresh a Count Display: run its stored count query again, without the LLM, under the same checks
         and timeout as the original, and overwrite its number and "as of" time. Returns the new
         {"value", "computed_at_ms"}. KeyError if unknown, `RefreshInProgress` if already refreshing,
         `RefreshFailed` (plain message) if the query fails, in which case the old number is kept.
-        `in_notebook`: the Display is an AI Cell's, not a Conversation's. Either way a Refresh is never a Run."""
-        store = self.notebooks if in_notebook else self.store
-        definition = store.count_display(display_id)
+        A Refresh is never a Run."""
+        definition = self.notebooks.count_display(display_id)
         if definition is None:
             raise KeyError(display_id)
         label = f'Count Display "{definition["title"]}"'
-        with self._refresh_guard(("notebook-count" if in_notebook else "count", display_id), label):
+        with self._refresh_guard(("count", display_id), label):
             result = queries.run_count_query(
                 self.config.telemetry_db, self.config.results_db, definition["sql"], self.config.query_timeout_s,
                 self.tables.readable(),
@@ -997,7 +922,7 @@ class Agent:
             if not result["success"]:
                 raise RefreshFailed(self._refresh_error(label, result))
             computed_at_ms = self.config.clock()
-            store.update_count(display_id, result["count"], computed_at_ms)
+            self.notebooks.update_count(display_id, result["count"], computed_at_ms)
             return {"value": result["count"], "computed_at_ms": computed_at_ms}
 
     def iter_all_rows(self, result_table: str):
@@ -1007,31 +932,6 @@ class Agent:
     def fetch_chart_rows(self, result_table: str) -> list[dict]:
         """Internal data path for the chart-rows endpoint (chart cap). Not an LLM tool."""
         return queries.fetch_records(self.config.results_db, self.tables[result_table].name, self.config.chart_row_cap)
-
-    async def run_turn(
-        self, conversation: Conversation, user_message: str, max_result_rows: int, model: str | None = None,
-        effort: str | None = None, turn_key: str | None = None,
-    ) -> AsyncIterator[Event]:
-        """Run one turn on the Agent's MCP connection (`start()` first).
-
-        The turn runs in a producer task. If the consumer stops early (client disconnect), the
-        producer is cancelled and awaited; the MCP server keeps running.
-
-        `max_result_rows` is the row cap for this turn's queries; the user chooses it in the UI.
-        `model` is the Model Choice for this turn (an id the client factory knows); the default model when None.
-        `effort` is the Effort level the user picked; it reaches the provider only when it is not the model's default.
-        `turn_key` names the turn for `stop_turn`, which ends it early but cleanly (the events still finish with a Trace)."""
-        if self._connection is None:
-            raise RuntimeError("Agent not started: call `await agent.start()` or use `async with agent`")
-        queue = _TurnQueue()
-        task = asyncio.create_task(self._produce(conversation, user_message, queue, max_result_rows, model or self.config.model, effort))
-        self._turn_tasks.add(task)
-        task.add_done_callback(self._turn_tasks.discard)
-        if turn_key is not None:
-            self._keyed_turns[turn_key] = task
-            task.add_done_callback(lambda _t: self._keyed_turns.pop(turn_key, None))
-        async for item in self._consume(task, queue):
-            yield item
 
     @staticmethod
     async def _consume(task: asyncio.Task, queue: _TurnQueue) -> AsyncIterator[Event]:
@@ -1062,32 +962,6 @@ class Agent:
         self._stopped_turns.add(task)
         task.cancel()
         return True
-
-    async def _produce(
-        self, conversation: Conversation, user_message: str, queue: _TurnQueue, max_result_rows: int, model: str,
-        effort: str | None = None,
-    ):
-        try:
-            await self._run(conversation, user_message, queue, max_result_rows, model, effort)
-            await queue.put(TurnEnd())
-        except asyncio.CancelledError:
-            raise
-        except BaseException as e:  # surfaced to the consumer
-            await queue.put(e)
-
-    async def _run(
-        self, conversation: Conversation, user_message: str, queue: _TurnQueue, max_result_rows: int, model: str,
-        effort: str | None = None,
-    ):
-        if conversation.id is None:
-            conversation.id = self.create_conversation()
-        turn_id = self.store.start_turn(conversation.id, user_message)
-        sink = _TurnSink(self.store, conversation.id, turn_id)
-        sink.record(conversation.messages, {"role": "user", "content": user_message})
-        await self._exchange(
-            conversation.messages, lambda: self.tables.tables_of(sink.key), sink, user_message, queue, max_result_rows,
-            model, effort, end=lambda trace: TraceReady(trace, turn_id),
-        )
 
     async def _exchange(
         self, history: list[dict], prompt_tables: Callable[[], list[Table]], sink: ExchangeSink, request: str,
@@ -1249,7 +1123,7 @@ class Agent:
             else:
                 args = parsed
                 try:
-                    result = await connection.call_tool(c.name, args, sink.key, max_result_rows)
+                    result = await connection.call_tool(c.name, args, max_result_rows)
                 except Exception as e:  # a broken tool call must not corrupt or abort the turn
                     trace.add("tool_error", name=c.name, detail=f"{type(_unwrap(e)).__name__}: {_unwrap(e)}")
                     return _fail("The tool failed to run. Try again."), args, None, 1
@@ -1365,7 +1239,7 @@ class Agent:
             return [], []
         table = display["result_table"]
         # Any live Result Table may be shown (ADR 0003); the Display is saved with this
-        # Conversation, but the table stays owned by the one that created it.
+        # Cell, but the table stays owned by the one that created it.
         live = table in self.tables
         if display["kind"] == "chart":
             source = display["spec"]
@@ -1380,7 +1254,7 @@ class Agent:
 
     def _count_display(self, tool: str, content: str, args: dict) -> CountEvent | None:
         """A successful run_count_query makes a Count Display (shown once it is saved). It has no result
-        table (so no Retention) and lives and dies with its Conversation."""
+        table (so no Retention) and lives and dies with its Run."""
         if tool != "run_count_query":
             return None
         try:

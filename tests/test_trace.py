@@ -228,23 +228,24 @@ def test_trace_shows_kilobytes_sent_after_each_llm_call(build_agent, web_client)
 
 
 def render_trace(totals, usage):
+    """What a cell's Trace shows when opened (its steps; the totals are in the cell's footer line)."""
     from flood_agent.web import TEMPLATES
     trace = {"model": "m", "system_prompt": "", "totals": totals,
              "entries": [{"kind": "llm_step", "duration_ms": 1, "usage": usage,
                          "raw_response": {"content": "", "tool_calls": []}}]}
-    return TEMPLATES.get_template("trace.html").render(trace=trace)
+    return TEMPLATES.get_template("trace_body.html").render(trace=trace)
 
 
 def test_an_old_stored_trace_without_cache_write_tokens_still_renders():
     old = {"prompt_tokens": 10, "completion_tokens": 2, "cost": 0.001, "duration_ms": 5, "cached_tokens": 4}
     html = render_trace(old, {"prompt_tokens": 10, "completion_tokens": 2, "cost": 0.001, "cached_tokens": 4})
-    assert "10 tokens in / 2 out &middot; 4 cached &middot;" in html and "cache write" not in html
+    assert "4 cached" in html and "cache write" not in html
 
 
-def test_cache_write_tokens_show_in_totals_and_steps():
+def test_cache_write_tokens_show_in_the_steps():
     new = {"prompt_tokens": 10, "completion_tokens": 2, "cost": None, "duration_ms": 5, "cache_write_tokens": 7}
     html = render_trace(new, {"prompt_tokens": 10, "completion_tokens": 2, "cost": None, "cache_write_tokens": 7})
-    assert html.count("7 cache write") == 2
+    assert html.count("7 cache write") == 1
 
 
 def test_a_stored_trace_lacking_both_cache_fields_renders_with_zero_totals():
@@ -265,26 +266,7 @@ def test_usage_total_sums_across_values_and_keeps_cost_none_when_unreported():
     assert UsageChunk.total([]) == UsageChunk()
 
 
-def test_trace_summary_shows_total_time_in_secs():
-    html = render_trace({"prompt_tokens": 1, "completion_tokens": 1, "cost": None, "duration_ms": 5974}, None)
-    assert "6.0 secs" in html and "5974" not in html
-
-
-def test_trace_summary_names_the_turn_and_its_llm_call_count():
-    totals = {"llm_steps": 3, "prompt_tokens": 9, "completion_tokens": 1, "cost": None, "duration_ms": 1000}
-    html = render_trace(totals, None)
-    assert "3 LLM calls &middot;" in html and "Billed tokens for this turn" in html
-    assert "1 LLM call &middot;" in render_trace({**totals, "llm_steps": 1}, None)
-
-
-def test_trace_summary_shows_the_short_model_name():
+def test_short_model_names():
     from flood_agent.trace import short_model
     assert short_model("anthropic/claude-haiku-5.5") == "Haiku-5.5"
     assert short_model("deepseek/deepseek-v4-pro-0813") == "deepseek-v4-pro-0813"
-    html = render_trace({"prompt_tokens": 1, "completion_tokens": 1, "cost": None, "duration_ms": 1000}, None)
-    assert "m &middot;" in html  # the fixture's model "m" is shown as is
-    from flood_agent.web import TEMPLATES
-    t = {"model": "anthropic/claude-haiku-5.5", "system_prompt": "", "entries": [],
-         "totals": {"prompt_tokens": 1, "completion_tokens": 1, "cost": None, "duration_ms": 1000}}
-    shown = TEMPLATES.get_template("trace.html").render(trace=t)
-    assert "Haiku-5.5 &middot;" in shown and "anthropic/" not in shown

@@ -2,10 +2,9 @@
 
 import re
 
-from conftest import ScriptedLLM, last_tool_result, tool_call
+from conftest import GatedLLM, ScriptedLLM, last_tool_result, tool_call
 from playwright.sync_api import expect
 from test_notebooks import SQL
-from test_stop_button_browser import GatedLLM
 from test_stop_turn import HangingLLM
 
 from flood_agent.llm import TextChunk
@@ -34,9 +33,10 @@ def run_in_new_notebook(page, prompt):
 
 
 def test_the_sidebar_plus_makes_notebook_n_with_one_empty_ai_cell_and_opens_it(live_page):
-    page = live_page()
-    expect(page.locator(".notebook-list li")).to_have_count(0)
-    cell = open_new_notebook(page)
+    page = live_page()  # the home page makes and opens a first notebook when there is none
+    expect(page).to_have_url(re.compile(r"/n/\w+$"))
+    expect(page.locator(".notebook-list li")).to_have_count(1)
+    cell = page.locator(".cellblock").first
 
     expect(page.locator(".notebook-list li.current a")).to_have_text("Notebook 1")
     expect(page.locator(".cellblock")).to_have_count(1)
@@ -240,3 +240,34 @@ def test_with_no_key_every_real_model_is_disabled_in_the_chip(live_page):
         expect(options.nth(i)).to_have_attribute("disabled", "disabled")
         expect(options.nth(i)).to_contain_text("needs OPENROUTER_API_KEY")
     expect(options.last).not_to_have_attribute("disabled", "disabled")
+
+
+def test_running_a_real_model_without_an_api_key_shows_the_refusal_in_the_cell(build_agent, live_page):
+    llm = ScriptedLLM([TextChunk("never")])
+    agent = build_agent(llm)
+    notebook = agent.create_notebook()
+    agent.add_ai_cell(notebook, prompt="hello", model="anthropic/claude-sonnet-5.5")
+    page = live_page(f"/n/{notebook}", agent=agent, has_api_key=False)
+    cell = page.locator(".cellblock").first
+
+    run(cell)
+
+    expect(cell.locator(".cell-error").first).to_contain_text("OPENROUTER_API_KEY")
+    expect(cell).to_have_attribute("data-state", "not-run")
+    assert llm.calls == []
+
+
+def test_shift_enter_in_the_prompt_runs_the_cell_and_enter_adds_a_line(live_page, build_agent):
+    page = live_page(agent=build_agent(ScriptedLLM([TextChunk("Done.")])))
+    cell = open_new_notebook(page)
+    prompt = cell.get_by_label("Prompt")
+    prompt.fill("first line")
+
+    prompt.press("Enter")
+    prompt.type("second line")
+    expect(prompt).to_have_value("first line\nsecond line")
+    expect(cell.locator(".gutter .num")).to_have_text("[ ]")  # Enter did not run it
+
+    prompt.press("Shift+Enter")
+    expect(cell.locator(".output")).to_contain_text("Done.")
+    expect(cell.locator(".gutter .num")).to_have_text("[1]")

@@ -240,7 +240,7 @@ async def run_notebook(model: str, questions: list[Question], settings: Settings
 
 
 def tool_activity(steps: list[Step]) -> str:
-    """What the later requests added to the conversation: the model's tool calls and the tool results fed back."""
+    """What the later requests added to the exchange: the model's tool calls and the tool results fed back."""
     if len(steps) < 2 or not steps[0].body or not steps[-1].body:
         return "no tool activity (the turn made fewer than 2 LLM calls)"
     added = steps[-1].body["messages"][len(steps[0].body["messages"]):]

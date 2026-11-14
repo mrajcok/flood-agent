@@ -52,14 +52,8 @@
     </form>
   </dialog>
   <script>
-    // Deleting a Conversation or exchange always asks in this dialog: whether to keep or delete its
+    // Deleting a Notebook or Cell always asks in this dialog: whether to keep or delete its
     // live Result Tables (rt_*) if it has any, and that its Saved Tables are kept (ADR 0004).
-    try {
-      if (sessionStorage.getItem("collapseTurns")) {
-        sessionStorage.removeItem("collapseTurns");
-        document.querySelectorAll("details.turn").forEach(d => d.open = false);
-      }
-    } catch (e) { /* no storage */ }
     // Ask in the dialog; resolves to "keep" or "delete_rt", or null if cancelled. `counts` is {result, saved}.
     function askDeleteChoice(title, counts) {
       return new Promise((resolve) => {
@@ -89,20 +83,16 @@
       if (!field) { field = document.createElement("input"); field.type = "hidden"; field.name = "tables"; form.appendChild(field); }
       field.value = choice;
       form.dataset.confirmed = "1";
-      // Deleting a turn reloads the page; keep the turns collapsed if the user had collapsed them all.
-      try {
-        if (form.classList.contains("turn-delete") && !document.querySelector("details.turn[open]")) sessionStorage.setItem("collapseTurns", "1");
-      } catch (e) { /* no storage: turns reopen */ }
       form.submit();
     }, true);
   </script>
   <script>
-    // Copy a table name to the clipboard and insert it into the chat box at the cursor, spaced from
+    // Copy a table name to the clipboard and insert it into a prompt box at the cursor, spaced from
     // the words around it; used by the Tables dialog and each table Display.
-    function insertIntoChat(name) {
+    function insertIntoPrompt(name) {
       try { navigator.clipboard.writeText(name).catch(() => {}); } catch (e) { /* no clipboard: still insert */ }
-      // A notebook page has no chat box: the prompt box last used (or the first AI Cell's) takes the name.
-      const input = document.querySelector("textarea[name=message]") || window.lastPromptBox || document.querySelector("textarea.cell-prompt");
+      // The prompt box last used (or the first AI Cell's) takes the name.
+      const input = window.lastPromptBox || document.querySelector("textarea.cell-prompt");
       if (!input) return;
       const value = input.value;
       const before = value.slice(0, input.selectionStart), after = value.slice(input.selectionEnd);

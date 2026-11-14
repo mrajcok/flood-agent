@@ -40,9 +40,40 @@ def test_the_sidebar_plus_creates_notebook_n_with_one_empty_ai_cell(build_agent,
     assert 'class="current"' in page.text  # the sidebar marks it
     assert f'href="/n/{nb}"' in page.text
     assert "[ ]" in page.text  # never run
-    assert "Notebook 1" in client.get("/").text  # listed beside Conversations
+    assert "Notebook 1" in client.get("/").text  # listed in the sidebar
     second, _ = new_notebook(client)
     assert "Notebook 2" in client.get(f"/n/{second}").text
+
+
+def test_the_home_page_opens_the_most_recent_notebook(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM()))
+    first, _ = new_notebook(client)
+    second, _ = new_notebook(client)
+
+    assert client.get("/", follow_redirects=False).headers["location"] == f"/n/{second}"
+    client.post(f"/n/{first}/cells", data={"kind": "markdown"})  # activity in the first one makes it the most recent
+    assert client.get("/", follow_redirects=False).headers["location"] == f"/n/{first}"
+    assert len(client.get("/api/notebooks").json()) == 2  # nothing new was made
+
+
+def test_the_home_page_makes_a_first_notebook_when_there_is_none(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM()))
+
+    home = client.get("/", follow_redirects=False)
+    assert home.status_code == 303 and home.headers["location"].startswith("/n/")
+    page = client.get(home.headers["location"])
+    assert "Notebook 1" in page.text and page.text.count('data-kind="ai"') == 1
+    assert client.get("/", follow_redirects=False).headers["location"] == home.headers["location"]  # it is reused
+
+
+def test_deleting_a_notebook_lands_on_the_home_page_which_opens_another(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM()))
+    first, _ = new_notebook(client)
+    second, _ = new_notebook(client)
+
+    deleted = client.post(f"/n/{second}/delete", follow_redirects=False)
+    assert deleted.headers["location"] == "/"
+    assert client.get("/", follow_redirects=False).headers["location"] == f"/n/{first}"
 
 
 def test_an_unknown_notebook_or_cell_is_404(build_agent, web_client):

@@ -1,9 +1,6 @@
-"""Context Usage: how much of the model's window a cell's context fills, shown under the prompt box."""
-
-import re
+"""Context Usage: how much of the model's window a cell's context fills, shown in its footer (see test_notebook_page)."""
 
 import pytest
-from conftest import ScriptedLLM
 
 from flood_agent.context_usage import context_usage, format_tokens
 from flood_agent.trace import context_tokens
@@ -48,17 +45,3 @@ def test_context_tokens_is_the_latest_llm_steps_prompt_tokens():
     assert context_tokens(trace) == 250
     assert context_tokens({"entries": [{"kind": "llm_step", "usage": None}]}) is None
     assert context_tokens({"entries": []}) is None
-
-
-def meter(html):
-    return re.search(r'<span id="context-meter"[^>]*>(.*?)</span>', html, re.S)
-
-
-def test_a_new_page_shows_zero_used(build_agent, web_client):
-    page = web_client(build_agent(ScriptedLLM())).get("/").text
-    assert "0 tokens of 1.05M" in meter(page).group(1)
-
-
-def test_no_model_has_no_context_window(build_agent, web_client):
-    page = web_client(build_agent(ScriptedLLM()), has_api_key=False).get("/").text
-    assert "no context used" in meter(page).group(1)

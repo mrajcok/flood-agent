@@ -1,4 +1,4 @@
-"""Context Usage: the share of the model's context window a Conversation occupies (see GLOSSARY.md).
+"""Context Usage: the share of the model's context window an AI Cell's context occupies (see GLOSSARY.md).
 
 The number is the provider's token count for the latest LLM call; the window comes from config.
 The page shows it as "187k tokens of 1M" with a bar that turns amber at 40% and red at 70%.

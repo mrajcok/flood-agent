@@ -15,8 +15,7 @@ def row(page, title):
 
 
 def test_rename_a_notebook_from_its_menu(live_page):
-    page = live_page()
-    open_new_notebook(page)
+    page = live_page()  # the home page opens a first notebook, "Notebook 1"
     row(page, "Notebook 1").get_by_role("button", name="Notebook options").click()
     page.get_by_role("menuitem", name="Rename").click()
     box = page.get_by_label("Notebook name")
@@ -28,8 +27,7 @@ def test_rename_a_notebook_from_its_menu(live_page):
 
 
 def test_delete_a_notebook_through_the_choice_dialog(live_page):
-    page = live_page()
-    open_new_notebook(page)
+    page = live_page()  # opens "Notebook 1"
     page.get_by_role("button", name="New notebook").click()
     expect(page.locator(".notebook-list li")).to_have_count(2)
     row(page, "Notebook 2").get_by_role("button", name="Notebook options").click()
@@ -46,8 +44,8 @@ def test_delete_a_notebook_through_the_choice_dialog(live_page):
 
 
 def test_search_filters_as_you_type_by_title_and_cell_text(live_page):
-    page = live_page()
-    cell = open_new_notebook(page)
+    page = live_page()  # opens "Notebook 1"
+    cell = page.locator(".cellblock").first
     write_prompt(cell, "why is circuit A1B2 slow?")
     cell.get_by_label("Prompt").blur()
     page.wait_for_timeout(300)  # the draft's save lands before the search asks

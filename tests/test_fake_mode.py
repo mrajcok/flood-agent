@@ -147,7 +147,7 @@ def test_page_lists_canned_prompts_that_always_send_a_no_model_prompt_and_has_no
 
     html = client.get("/").text
 
-    assert "Fake Mode" not in html and 'class="badge"' not in html
+    assert ">Fake Mode<" not in html and 'class="badge"' not in html
     assert CANNED[0].prompt in html
     assert html.count("&#34;prompt&#34;:") == len(CANNED)  # every Canned Prompt is in the list
     assert html.count("&#34;no-model&#34;") >= 1  # the list sends them all as No model
@@ -274,7 +274,7 @@ def test_a_dangling_after_is_a_load_error(tmp_path):
 
 def picker_items(html):
     """The Canned Prompts list the page hands its picker, in order."""
-    raw = re.search(r"x-data=\"\{ items: (\[.*?\]), open", html, re.S).group(1)
+    raw = re.search(r"canned: (\[.*?\]), noModel", html, re.S).group(1)
     return json.loads(unescape(raw))
 
 

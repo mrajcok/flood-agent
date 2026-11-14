@@ -1,7 +1,7 @@
 """Settings, layered from defaults.toml, then a .env file, then the real environment.
 
-The Conversation id is deliberately not a setting: the Agent sends it with every MCP tool
-call (in request `_meta`), and it scopes which Result Tables a call may use.
+The row cap is deliberately not a setting here: the Agent sends the AI Cell's with every MCP tool
+call (in request `_meta`).
 """
 
 import tomllib
@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     )
     results_db: Path = Field(description="Writable database holding Result Tables.")
     app_db: Path = Field(
-        description="Conversations, messages, Displays and Traces."
+        description="Notebooks, Cells, Runs, Displays and Traces, and the table registry."
     )
     semantic_layer: Path = Field(
         description="Hand-authored Semantic Layer."

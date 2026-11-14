@@ -1,6 +1,6 @@
 """FastAPI adapter: server-rendered Jinja + htmx + Alpine, streaming over SSE.
 
-A thin layer over `Agent.run_turn`. The row-JSON endpoint is the Agent's internal data
+A thin layer over `Agent.run_cell`. The row-JSON endpoint is the Agent's internal data
 path to the browser; it is a plain HTTP route, never registered as an MCP tool.
 """
 
@@ -9,7 +9,6 @@ import io
 import json
 import sqlite3
 import time
-import uuid
 from contextlib import aclosing, asynccontextmanager
 from dataclasses import dataclass, field
 from html import escape
@@ -26,7 +25,6 @@ from flood_agent.agent import (
     NO_MODEL,
     STOPPED_NOTE,
     Agent,
-    Conversation,
     CountEvent,
     DisplayEvent,
     FlagEvent,
@@ -38,18 +36,16 @@ from flood_agent.agent import (
     TablesChoice,
     TextDelta,
     TraceLive,
-    TraceReady,
     TurnEnd,
     resolve_chart_data,
 )
 from flood_agent.catalog import TableExpired
 from flood_agent.context_usage import context_usage
 from flood_agent.lookup_tables import InvalidLookupTable
-from flood_agent.notebooks import DEFAULT_MAX_ROWS, MARKDOWN
+from flood_agent.notebooks import COUNT_KIND, DEFAULT_MAX_ROWS, MARKDOWN
 from flood_agent.queries import InvalidSort
 from flood_agent.show_commands import DESCRIBE_TABLE, SHOW_COMMANDS, SHOW_IN_TEXTBOX, is_show_statement
-from flood_agent.store import COUNT_KIND
-from flood_agent.trace import context_tokens, short_model, split_system_prompt
+from flood_agent.trace import short_model, split_system_prompt
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 TEMPLATES.env.filters["split_system_prompt"] = split_system_prompt
@@ -82,18 +78,18 @@ class PickerEntry:
 
 @dataclass
 class LiveCounter:
-    """The number of the LLM call a streaming turn or cell is in, for the live entries."""
+    """The number of the LLM call a streaming cell is in, for the live entries."""
 
     call: int = 0
 
 
-NOTEBOOK_COUNT_REFRESH = "/api/notebook-displays/{}/refresh"  # a notebook Count Display's id is not a Conversation's
+NOTEBOOK_COUNT_REFRESH = "/api/notebook-displays/{}/refresh"
 
 
 def live_event_sse(ev, key: str, live: LiveCounter, refreshable_counts: bool = True, notebook: bool = False) -> str | None:
-    """The SSE message a streamed event becomes in the live view (text, Displays, steps, flags), shared by
-    Conversation turns and Notebook cells; None for the events a caller handles itself (Trace, end).
-    `key` names the turn or cell in the ids of its live steps. Count Displays are only refreshable
+    """The SSE message a streamed event becomes in the live view (text, Displays, steps, flags), for
+    Notebook cells; None for the events a caller handles itself (Trace, end).
+    `key` names the cell in the ids of its live steps. Count Displays are only refreshable
     (display_id); `notebook` says it is a cell's, which refreshes through the notebook endpoint."""
     if isinstance(ev, TextDelta):
         return _sse("text", f'<span class="md-delta">{escape(ev.text)}</span>')  # markdown.js renders it
@@ -114,7 +110,7 @@ def live_event_sse(ev, key: str, live: LiveCounter, refreshable_counts: bool = T
         return _sse("display", html)
     if isinstance(ev, LlmCallStarted):
         live.call = ev.number
-        return _sse("live-step", TEMPLATES.get_template("live_step.html").render(number=ev.number, turn_id=key).strip())
+        return _sse("live-step", TEMPLATES.get_template("live_step.html").render(number=ev.number, key=key).strip())
     if isinstance(ev, TraceLive):
         entry_html = TEMPLATES.get_template("trace_entry.html").render(e=ev.entry, step=live.call).strip()
         oob = f'<div hx-swap-oob="beforeend:#live-body-{key}-{live.call}">{entry_html}</div>'
@@ -165,11 +161,9 @@ def create_app(
         return JSONResponse({"detail": str(exc)}, 422)
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-    pending: dict[str, tuple[Conversation, str, int, str, str | None]] = {}
 
-    def sidebar(current: str | None, current_notebook: str | None = None) -> dict:
+    def sidebar(current_notebook: str | None = None) -> dict:
         return {
-            "conversations": agent.store.list_conversations(), "current_id": current,
             "notebooks": agent.notebooks.list_notebooks(), "current_notebook_id": current_notebook,
             "picker": picker or [], "dev": dev,
         }
@@ -182,16 +176,6 @@ def create_app(
     def usage(tokens: int | None, model: str | None = None) -> dict:
         """The Context Usage for `model` (the default when None); No model has no window."""
         return context_usage(tokens, agent.config.window_of(model or default_model))
-
-    def last_real_tokens(traces: list[dict]) -> int | None:
-        """The latest real LLM call's prompt tokens: fake (No model) turns do not count."""
-        real = [t for t in traces if t["model"] != NO_MODEL]
-        return context_tokens(real[-1]) if real else None
-
-    def latest_tokens(conversation_id: str | None) -> int | None:
-        if not conversation_id or not agent.store.exists(conversation_id):
-            return None
-        return last_real_tokens([i["trace"] for i in agent.store.transcript(conversation_id) if i["type"] == "trace"])
 
     def known_model(choice: str) -> str:
         """`choice` if it is in the curated list or NO_MODEL (422 otherwise)."""
@@ -226,91 +210,10 @@ def create_app(
             extra["spec_json"] = json.dumps(resolve_chart_data(item["spec"], item["result_table"]))
         return {**item, **extra}
 
-    def history(conversation_id: str) -> list[dict]:
-        items = []
-        transcript = agent.store.transcript(conversation_id)
-        shown = {i["result_table"] for i in transcript if i["type"] == "display" and i["result_table"]}
-        expired = shown - agent.tables.live_among(shown)
-        prompt_at = None  # where the current turn's prompt is in `items`
-        for item in transcript:
-            if item["type"] == "display":
-                items.append(display_item(item, expired))
-            elif item["type"] == "trace":
-                # The Trace goes right after the prompt, where the live view of the turn was; the note about
-                # unseen values belongs to the reply, so it stays after it.
-                flags = [e for e in item["trace"]["entries"] if e["kind"] == "flag"]
-                if flags:
-                    items.append({"type": "flags", "flags": flags})
-                items.insert(prompt_at + 1 if prompt_at is not None else len(items), item)
-            else:
-                m = item["message"]
-                if m["role"] in ("user", "assistant") and m.get("content"):
-                    items.append({"type": m["role"], "text": m["content"], "turn_id": item["turn_id"]})
-                    if m["role"] == "user":
-                        prompt_at = len(items) - 1
-        return items
-
     def model_picker() -> dict:
         return {"models": models, "default_model": default_model, "needs_key": NEEDS_KEY, "no_model": NO_MODEL,
                 "canned_items": [{"prompt": c.prompt, "fails": c.fails_on_purpose, "follow": n > 0}
                                  for top in picker or [] for n, c in enumerate([top, *top.follow_ups])]}
-
-    @app.get("/context-meter", response_class=HTMLResponse)
-    def context_meter(model: str, conversation_id: str = ""):
-        """The meter for the model selected for the next prompt (the Conversation's tokens, that model's window)."""
-        known_model(model)
-        return TEMPLATES.get_template("context_meter.html").render(context=usage(latest_tokens(conversation_id), model))
-
-    @app.get("/", response_class=HTMLResponse)
-    def index(request: Request):
-        return TEMPLATES.TemplateResponse(request, "index.html", {**sidebar(None), "context": usage(None), **model_picker(), "items": []})
-
-    @app.get("/c/{conversation_id}", response_class=HTMLResponse)
-    def open_conversation(request: Request, conversation_id: str):
-        if not agent.store.exists(conversation_id):
-            raise HTTPException(404, "unknown conversation")
-        items = history(conversation_id)
-        traces = [i["trace"] for i in items if i["type"] == "trace"]
-        return TEMPLATES.TemplateResponse(
-            request, "index.html",
-            {**sidebar(conversation_id), "context": usage(last_real_tokens(traces)),
-             **model_picker(), "items": items, "current_id": conversation_id},
-        )
-
-    @app.get("/c/{conversation_id}/delete-preview")
-    def delete_preview(conversation_id: str, turn_id: int | None = None):
-        if not agent.store.exists(conversation_id):
-            raise HTTPException(404, "unknown conversation")
-        try:
-            return agent.delete_preview(conversation_id, turn_id)
-        except KeyError:
-            raise HTTPException(404, "unknown turn")
-
-    @app.post("/c/{conversation_id}/delete")
-    def delete_conversation(conversation_id: str, tables: TablesChoice = Form("keep")):
-        try:
-            agent.delete_conversation(conversation_id, tables)
-        except KeyError:
-            raise HTTPException(404, "unknown conversation")
-        return RedirectResponse("/", status_code=303)
-
-    @app.post("/c/{conversation_id}/turns/{turn_id}/delete")
-    def delete_turn(conversation_id: str, turn_id: int, tables: TablesChoice = Form("keep")):
-        try:
-            agent.delete_turn(conversation_id, turn_id, tables)
-        except KeyError:
-            raise HTTPException(404, "unknown turn")
-        return RedirectResponse(f"/c/{conversation_id}", status_code=303)
-
-    @app.post("/c/{conversation_id}/rename")
-    def rename_conversation(conversation_id: str, title: str = Form("")):
-        if not agent.store.exists(conversation_id):
-            raise HTTPException(404, "unknown conversation")
-        title = title.strip()[:60]
-        if not title:
-            raise HTTPException(422, "a conversation name cannot be blank")
-        agent.store.rename_conversation(conversation_id, title)
-        return RedirectResponse(f"/c/{conversation_id}", status_code=303)
 
     # --- Notebooks -------------------------------------------------------------------------------------
 
@@ -449,12 +352,21 @@ def create_app(
             raise HTTPException(422, f"unknown command {command!r}")
         return {"command": command, "table": table.strip()}
 
+    def new_notebook() -> str:
+        notebook_id = agent.create_notebook()
+        add_ai_cell(notebook_id)
+        return notebook_id
+
+    @app.get("/")
+    def home():
+        """The landing page: the notebook with the most recent activity, or a new one if there is none yet."""
+        existing = agent.notebooks.list_notebooks()
+        return RedirectResponse(f"/n/{existing[0]['id'] if existing else new_notebook()}", status_code=303)
+
     @app.post("/notebooks")
     def create_notebook():
         """The sidebar's "+": a new "Notebook N" with one empty AI Cell, opened."""
-        notebook_id = agent.create_notebook()
-        add_ai_cell(notebook_id)
-        return RedirectResponse(f"/n/{notebook_id}", status_code=303)
+        return RedirectResponse(f"/n/{new_notebook()}", status_code=303)
 
     @app.get("/api/notebooks")
     def search_notebooks(q: str = ""):
@@ -497,8 +409,8 @@ def create_app(
         stale = agent.stale_cells(notebook_id)
         cells = [cell_view(c, stale=c["id"] in stale) for c in agent.notebooks.cells(notebook_id)]
         return TEMPLATES.TemplateResponse(request, "notebook.html", {
-            **sidebar(None, notebook_id), **model_picker(), "notebook_id": notebook_id,
-            "title": agent.notebooks.title_of(notebook_id), "cells": cells, "stale_ids": sorted(stale), "notebook_page": True,
+            **sidebar(notebook_id), **model_picker(), "notebook_id": notebook_id,
+            "title": agent.notebooks.title_of(notebook_id), "cells": cells, "stale_ids": sorted(stale),
         })
 
     @app.get("/n/{notebook_id}/stale")
@@ -740,61 +652,6 @@ def create_app(
             raise HTTPException(404, "unknown table")
         return {"name": agent.tables.canonical(name), "kind": kind, "columns": columns}
 
-    @app.post("/chat", response_class=HTMLResponse)
-    def chat(request: Request, message: str = Form(...), conversation_id: str = Form(""), max_rows: str = Form(...),
-             model: str | None = Form(None), effort: str | None = Form(None)):
-        max_result_rows = _parse_max_rows(max_rows)
-        chosen_model = model_choice(model)
-        chosen_effort = effort_choice(chosen_model, effort)
-        if conversation_id:
-            try:
-                conversation = agent.open_conversation(conversation_id)
-            except KeyError:
-                raise HTTPException(404, "unknown conversation")
-        else:
-            conversation = Conversation()
-        turn_id = uuid.uuid4().hex
-        pending[turn_id] = (conversation, message, max_result_rows, chosen_model, chosen_effort)
-        if conversation.id is None:  # persist now so the sidebar and form can reference it
-            conversation.id = agent.create_conversation()
-        return TEMPLATES.TemplateResponse(
-            request, "turn.html",
-            {"turn_id": turn_id, "message": message, **sidebar(conversation.id)},
-        )
-
-    @app.get("/chat/stream/{turn_id}")
-    async def stream(request: Request, turn_id: str):
-        entry = pending.pop(turn_id, None)
-        if entry is None:
-            raise HTTPException(404)
-        conversation, message, max_result_rows, chosen_model, chosen_effort = entry
-
-        async def events():
-            live = LiveCounter()
-            try:
-                async for ev in agent.run_turn(conversation, message, max_result_rows, chosen_model, chosen_effort, turn_key=turn_id):
-                    sse = live_event_sse(ev, turn_id, live)
-                    if sse is not None:
-                        yield sse
-                    if isinstance(ev, TraceReady):
-                        if ev.turn_id is not None and conversation.id:
-                            yield _sse("turn", TEMPLATES.get_template("turn_delete.html").render(
-                                conversation_id=conversation.id, turn_id=ev.turn_id))
-                        trace_html = TEMPLATES.get_template("trace.html").render(trace=ev.trace)
-                        yield _sse("trace", trace_html)
-                    elif isinstance(ev, TurnEnd):
-                        break
-            except Exception as e:  # keep the stream well-formed for the browser
-                yield _sse("text", f'<span class="md-delta">{escape(f" [error: {type(e).__name__}]")}</span>')
-            yield _sse("end", "done")
-
-        return StreamingResponse(events(), media_type="text/event-stream")
-
-    @app.post("/chat/stop/{turn_id}", status_code=204)
-    async def stop(turn_id: str):  # async: it touches the event loop's tasks
-        """Stop a running turn now; its stream still ends with the Trace. Does nothing if it already ended."""
-        agent.stop_turn(turn_id)
-
     @app.get("/api/results/{result_table}/rows")
     def rows(
         result_table: str,
@@ -844,22 +701,13 @@ def create_app(
             raise HTTPException(422, str(e))
         return {"plan": plan}
 
-    @app.post("/api/displays/{display_id}/refresh")
-    def refresh_count_display(display_id: int):
-        """Refresh a Count Display: run its stored count query again and overwrite the number and "as of"
-        time. Plain HTTP, never an MCP tool; the LLM is not involved. 404 unknown, 409 already refreshing,
-        422 the query failed (the old number is then kept). Returns {value, computed_at_ms}."""
-        try:
-            return agent.refresh_count(display_id)
-        except KeyError:
-            raise HTTPException(404, "unknown Count Display")
-
     @app.post("/api/notebook-displays/{display_id}/refresh")
     def refresh_notebook_count_display(display_id: int):
-        """Refresh an AI Cell's Count Display, as `refresh_count_display` does. Never a Run: the cell's Run
-        and what cells below are sent are untouched."""
+        """Refresh an AI Cell's Count Display: run its stored count query again and overwrite the number and "as of"
+        time. Plain HTTP, never an MCP tool; the LLM is not involved. 404 unknown, 409 already refreshing, 422 the
+        query failed (the old number is then kept). Never a Run: the cell's Run and what cells below are sent are untouched."""
         try:
-            return agent.refresh_count(display_id, in_notebook=True)
+            return agent.refresh_count(display_id)
         except KeyError:
             raise HTTPException(404, "unknown Count Display")
 

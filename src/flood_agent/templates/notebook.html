@@ -76,7 +76,7 @@
   </div>
   {% include "_dialogs.html" %}
   <script>
-    // The prompt box last used takes a table name copied from the Tables dialog or a Display (insertIntoChat).
+    // The prompt box last used takes a table name copied from the Tables dialog or a Display (insertIntoPrompt).
     document.addEventListener("focusin", (e) => { if (e.target.matches && e.target.matches("textarea.cell-prompt")) window.lastPromptBox = e.target; });
   </script>
 </body>

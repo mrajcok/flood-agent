@@ -43,41 +43,8 @@
     .toggle-all { font: inherit; color: #2a4ba0; background: #eef3fd; border: 1px solid #b9c7e6; border-radius: 999px; padding: .25rem .8rem; }
     .toggle-all:hover { background-color: #dce7fb; }
     .toggle-all:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
-    /* The strip under the prompt box: model and context on the left, the row cap on the right.
-       Controls read as plain text until hovered; they open rounded popovers above. */
-    .strip { position: relative; margin-top: .3rem; color: #444; font-size: .9rem; }
-    .strip .row { display: flex; align-items: center; flex-wrap: wrap; gap: .15rem .5rem; white-space: nowrap; }
-    .strip .spacer { flex: 1; min-width: .5rem; }
-    .strip .sep { color: #b4b8c2; }
-    .strip .dd { position: relative; }
-    .strip .trig { font: inherit; color: inherit; background: transparent; border: 0; border-radius: .4rem; padding: .1rem .3rem; margin: 0 -.3rem; cursor: pointer; line-height: 1.5; }
-    .strip .trig:hover, .strip .trig.open { background: #e3e8f4; }
-    .strip .trig:disabled { cursor: default; color: #8a91a3; background: transparent; }
-    .strip .trig:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
-    .strip .meter { display: inline-block; width: 4.5rem; height: .4rem; background: #e3e7ef; border-radius: 999px; overflow: hidden; vertical-align: middle; }
-    .strip .meter i { display: block; height: 100%; background: #4a6fd3; }
-    .strip .amber .meter i { background: #d98e04; } .strip .red .meter i { background: #c0392b; }
-    .strip .ctx.amber { color: #8a5a00; } .strip .ctx.red { color: #a52a1e; font-weight: 600; }
-    .strip .panel { position: absolute; bottom: calc(100% + .45rem); right: -.4rem; z-index: 10; background: #fff; border: 1px solid #cfd5e2; border-radius: 1rem;
-                    box-shadow: 0 8px 24px rgba(30,40,80,.18); padding: .5rem; min-width: 12rem; display: grid; gap: .1rem; white-space: nowrap; }
-    .strip .panel.left { right: auto; left: -.4rem; }
-    .strip .item:disabled { color: #8a91a3; cursor: not-allowed; background: transparent; }
-    .strip .item small { color: #8a91a3; }
-    .strip .panel h6 { margin: .2rem .7rem .15rem; font-size: .7rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #8a91a3; }
-    .strip .panel h6.sentence { text-transform: none; letter-spacing: 0; font-size: .75rem; }
-    .strip .item { display: flex; align-items: center; gap: .5rem; width: 100%; text-align: left; font: inherit; color: #333; background: transparent; border: 0;
-                   border-radius: .6rem; cursor: pointer; padding: .4rem .7rem; }
-    .strip .item:hover { background: #e9eefb; }
-    .strip .item .tick { width: 1em; color: #4a6fd3; }
-    .strip .panel input[type=text] { font: inherit; width: 8ch; margin: .2rem .7rem; padding: .25rem .5rem; border: 1px solid #cfd5e2; border-radius: .5rem; text-align: right; }
     .toggle-all { cursor: pointer; font-size: .9rem; }
     .scroll-y { overflow-y: auto; min-height: 0; }
-    .user { margin: 1.25rem 0 .45rem; padding: .6rem .9rem; background: #e8f0fe; border-radius: .75rem; white-space: pre-wrap; }
-    summary.user { cursor: pointer; position: relative; padding-right: 2.2rem; }
-    .turn-actions { position: absolute; top: .45rem; right: .6rem; }
-    .turn-actions form { margin: 0; display: block; }
-    .turn-delete button { background: none; border: 0; color: #667; cursor: pointer; font-size: 1.1rem; line-height: 1; padding: 0 .2rem; }
-    .turn-delete button:hover { color: #a00; }
     /* Reply text is Markdown rendered by markdown.js into .md segments. */
     .reply .md-plain, .reply .md-delta { white-space: pre-wrap; }
     .reply .md { line-height: 1.5; }
@@ -110,7 +77,7 @@
     .sidebar-hidden .layout { gap: .5rem; }
     main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
     #prompt-area { flex: 1; padding-right: .5rem; }
-    /* Two sections: Tables (its actions as links), then Conversations (its heading carries New chat). */
+    /* Two sections: Tables (its actions as links), then Notebooks (its heading carries New notebook). */
     aside .sec-head { display: flex; align-items: center; justify-content: space-between; margin: 1rem .2rem .3rem .6rem;
                       font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #6b7280; }
     aside .sec-head:first-child { margin-top: .1rem; }
@@ -178,7 +145,7 @@
     aside ul { list-style: none; padding: 0; margin: .5rem 0; }
     aside li { display: flex; align-items: center; gap: .25rem; padding: 0 .4rem 0 .6rem; }
     aside li a { display: block; flex: 1; min-width: 0; padding: .25rem 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    /* Conversations read as a list, not links or buttons: plain text, gray on hover, darker gray for the open one. */
+    /* Notebooks read as a list, not links or buttons: plain text, gray on hover, darker gray for the open one. */
     aside > ul > li { border-radius: .4rem; }
     aside > ul > li a { color: #1f2937; text-decoration: none; }
     aside > ul > li:hover { background: #f4f5f7; }
@@ -271,39 +238,20 @@
     .canned li.follow { padding-left: 1.6rem; }
     .canned .fails { color: #a40; font-size: .8em; }
     .refusal { margin: .4rem 0; padding: .4rem .6rem; border-left: 4px solid #b00; background: #fdecec; font-size: .9rem; }
-    .chat-box { flex: 1; position: relative; display: flex; }
-    textarea[name=message] { flex: 1; box-sizing: border-box; padding: .5rem 2.4rem .5rem .5rem; font: inherit; line-height: 1.4;
-                             resize: none; overflow-y: auto; max-height: 40vh; border: 1px solid #999; border-radius: .5rem; }
-    .chat-box .send { position: absolute; right: .3rem; bottom: .3rem; width: 1.9rem; height: 1.9rem; padding: 0; border: 0; border-radius: .4rem;
-                      background: #4a6fd3; color: #fff; font-size: 1.1rem; line-height: 1; cursor: pointer;
-                      display: inline-flex; align-items: center; justify-content: center; }
-    .chat-box .send:hover { background: #2a4ba0; }
-    .chat-box .send.stop:disabled { opacity: .6; cursor: default; }
-    /* Send and Stop share one spot and cross-fade as the turn starts and ends (the form's data-busy). */
-    .chat-box .send { transition: opacity var(--fade) ease, transform var(--fade) ease, background .15s; }
-    form:not([data-busy]) .send.stop, form[data-busy] .send:not(.stop) {
-      opacity: 0; transform: scale(.7); pointer-events: none; visibility: hidden;
-      transition: opacity var(--fade) ease, transform var(--fade) ease, visibility 0s linear var(--fade);
-    }
-    /* While busy, the Stop icon's dashed ring turns slowly. */
-    .send.stop circle { transform-box: fill-box; transform-origin: center; stroke-dasharray: 10 6; }
-    form[data-busy] .send.stop circle { animation: ring-turn 3s linear infinite; }
-    @keyframes ring-turn { to { transform: rotate(360deg); } }
     /* A turn's live trace: each LLM call fades in, the one before folds away smoothly, and the whole block
        fades and folds away when the turn's Trace line fades in. (Folding needs Chrome 131+; elsewhere it is abrupt.) */
     :root { --fade: .35s; --appear: .4s; --collapse: .5s; --leave: .6s; interpolate-size: allow-keywords; }
     @keyframes fade-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
-    .live-step, .live-step section, .turn[data-turn-id] details.trace { animation: fade-in var(--appear) ease-out; }
+    .live-step, .live-step section { animation: fade-in var(--appear) ease-out; }
     .live-step::details-content { height: 0; overflow: clip; transition: height var(--collapse) ease, content-visibility var(--collapse) allow-discrete; }
     .live-step[open]::details-content { height: auto; }
-    /* A turn, and a finished Trace, slide and fade as they collapse and expand. */
-    details.turn::details-content, details.trace::details-content { height: 0; overflow: clip; opacity: 0;
+    /* A finished Trace slides and fade as they collapse and expand. */
+    details.trace::details-content { height: 0; overflow: clip; opacity: 0;
       transition: height var(--collapse) ease, opacity var(--collapse) ease, content-visibility var(--collapse) allow-discrete; }
-    details.turn[open]::details-content, details.trace[open]::details-content { height: auto; opacity: 1; }
+    details.trace[open]::details-content { height: auto; opacity: 1; }
     /* Closing starts and ends gently: scrolled into a tall Trace, the shrinking chat drags its scroll position with it, which
        the default curve's fast start made a lurch. Opening keeps `ease`. */
-    details.turn:not([open])::details-content, details.trace:not([open])::details-content { transition-timing-function: ease-in-out; }
-    /* Opening another conversation is a page load: cross-fade the chat pane and keep the sidebar still. */
+    /* Opening another notebook is a page load: cross-fade the chat pane and keep the sidebar still. */
     @view-transition { navigation: auto; }
     #sidebar { view-transition-name: sidebar; }
     #prompt-area { view-transition-name: chat; }
@@ -316,7 +264,5 @@
                           transition: opacity var(--leave) ease, max-height var(--leave) ease, margin var(--leave) ease; }
     @media (prefers-reduced-motion: reduce) {
       :root { --fade: 0s; --appear: 0s; --collapse: 0s; --leave: 0s; }
-      form[data-busy] .send.stop circle { animation-duration: 12s; }
     }
-    .chat-box .send:focus-visible { outline: 2px solid #2a4ba0; outline-offset: 2px; }
   </style>

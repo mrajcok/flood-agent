@@ -1,12 +1,12 @@
 """The Agent's connection to its one long-lived MCP server.
 
-Interface: `start()`, `tools`, `alive`, `call_tool(name, arguments, conversation_id)`, `aclose()`.
+Interface: `start()`, `tools`, `alive`, `call_tool(name, arguments, max_result_rows)`, `aclose()`.
 A connection starts once and cannot be restarted after `aclose()`; make a new one. The MCP client's stdio and session contexts must be entered and
 exited in the same task, so a dedicated owner task does both; `start()` and `aclose()` only
 signal it and wait, so they may be called from any task. Tool calls from any task share the one
 session (the MCP client multiplexes concurrent requests by id).
 
-The Conversation id travels in each call's request `_meta`, never in the launch environment
+The row cap travels in each call's request `_meta`, never in the launch environment
 or in tool arguments (ADR 0002).
 """
 
@@ -18,7 +18,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.types import CallToolResult
 
-from flood_agent.mcp_protocol import META_CONVERSATION_ID, META_MAX_RESULT_ROWS
+from flood_agent.mcp_protocol import META_MAX_RESULT_ROWS
 
 
 def _openai_tool(t) -> dict:
@@ -103,12 +103,12 @@ class McpConnection:
             self._ready.set()
 
     async def call_tool(
-        self, name: str, arguments: dict, conversation_id: str, max_result_rows: int
+        self, name: str, arguments: dict, max_result_rows: int
     ) -> CallToolResult:
-        """Call a tool, sending the Conversation id and this turn's row cap in request `_meta`."""
+        """Call a tool, sending the AI Cell's row cap in request `_meta`."""
         if self._session is None:
             raise RuntimeError("MCP connection is not running")
-        meta: dict = {META_CONVERSATION_ID: conversation_id, META_MAX_RESULT_ROWS: max_result_rows}
+        meta: dict = {META_MAX_RESULT_ROWS: max_result_rows}
         return await self._session.call_tool(name, arguments, meta=meta)
 
     async def aclose(self) -> None:

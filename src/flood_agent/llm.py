@@ -73,7 +73,7 @@ Chunk = TextChunk | ToolCallChunk | UsageChunk
 class LLMClient(Protocol):
     def stream_chat(self, messages: list[dict], tools: list[dict], reasoning: dict | None = None,
                     session_id: str | None = None) -> AsyncIterator[Chunk]: ...
-    # `reasoning` is set only when the user picked a non-default Effort; `session_id` names the conversation.
+    # `reasoning` is set only when the user picked a non-default Effort; `session_id` names the exchange.
 
 
 class LLMError(Exception):
@@ -87,7 +87,7 @@ SESSION_ID_PREFIXES = ("anthropic/", "openai/", "qwen/", "deepseek/", "z-ai/")
 def caching_fields(model: str, session_id: str | None = None) -> dict:
     """Extra request-body fields a model needs for prompt caching, keyed on model-ID prefix.
     Claude only caches when the request carries cache_control. Claude, GPT-5.6, Qwen and GLM hit
-    more often when OpenRouter can route a conversation to one endpoint by `session_id`;
+    more often when OpenRouter can route an exchange to one endpoint by `session_id`;
     DeepSeek caches on every endpoint, so it is harmless there.
 
     Claude also prefers Anthropic's own endpoint. Measured on OpenRouter (#65): Google Vertex cannot

@@ -1,7 +1,7 @@
 // Render the LLM's reply text as Markdown, sanitised (the text comes from the model).
 //
 // The server sends reply text as <span class="md-delta">escaped text</span>: one per streamed chunk in a
-// live turn, one per message when a Conversation is reopened. Each delta is folded into a segment
+// live Run, one per message when a notebook is reopened. Each delta is folded into a segment
 // (<div class="md">) that keeps the raw source in data-src and is re-rendered as a whole, so Markdown
 // split across chunks (`**fix` + `es**`) renders once the closing part arrives. A Display between two
 // deltas ends the segment, so text after a table or chart starts a new one below it.

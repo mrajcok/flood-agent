@@ -444,22 +444,60 @@ class Agent:
 
     def add_ai_cell(
         self, notebook_id: str, prompt: str = "", model: str | None = None, effort: str | None = None,
-        max_rows: int = DEFAULT_MAX_ROWS, after: str | None = None,
+        max_rows: int = DEFAULT_MAX_ROWS, after: str | None = None, before: str | None = None,
     ) -> str:
         """Add an AI Cell (after cell `after`, or at the end) whose Draft holds its prompt and settings."""
         return self.notebooks.add_ai_cell(
-            notebook_id, {"prompt": prompt, "model": model, "effort": effort, "max_rows": max_rows}, after)
+            notebook_id, {"prompt": prompt, "model": model, "effort": effort, "max_rows": max_rows}, after, before)
 
     def add_sql_cell(
         self, notebook_id: str, sql: str = "", max_rows: int = DEFAULT_MAX_ROWS, after: str | None = None,
+        before: str | None = None,
     ) -> str:
         """Add a SQL Cell (after cell `after`, or at the end) whose Draft holds its SQL and row cap."""
-        return self.notebooks.add_cell(notebook_id, SQL, {"sql": sql, "max_rows": max_rows}, after)
+        return self.notebooks.add_cell(notebook_id, SQL, {"sql": sql, "max_rows": max_rows}, after, before)
 
     def add_markdown_cell(self, notebook_id: str, text: str = "", send_to_ai: bool = False,
-                          after: str | None = None) -> str:
+                          after: str | None = None, before: str | None = None) -> str:
         """Add a Markdown Cell. Its text reaches the AI Cells below only while `send_to_ai` is ticked."""
-        return self.notebooks.add_cell(notebook_id, MARKDOWN, {"text": text, "send_to_ai": send_to_ai}, after)
+        return self.notebooks.add_cell(notebook_id, MARKDOWN, {"text": text, "send_to_ai": send_to_ai}, after, before)
+
+    def _idle_cell(self, notebook_id: str, cell_id: str) -> dict:
+        """The cell, for an operation that cannot touch a running one: KeyError if it is not in the notebook,
+        `NotebookBusy` if it is running."""
+        cell = self.notebooks.cell(cell_id)
+        if cell["notebook_id"] != notebook_id:
+            raise KeyError(cell_id)
+        if self.running_cell(notebook_id) == cell_id:
+            raise NotebookBusy("This cell is running; stop it first")
+        return cell
+
+    def move_cell(self, notebook_id: str, cell_id: str, direction: Literal["up", "down"]) -> None:
+        """Swap a cell with the one above or below it (nothing at either end). Staleness follows from the new order."""
+        self._idle_cell(notebook_id, cell_id)
+        self.notebooks.move_cell(cell_id, direction)
+
+    def copy_cell(self, notebook_id: str, cell_id: str) -> str:
+        """Insert a copy of a cell's Draft just below it and return its id: an AI Cell's prompt and settings, a SQL
+        Cell's SQL and row cap, a Markdown Cell's text and Send to AI. The copy has no Run."""
+        cell = self._idle_cell(notebook_id, cell_id)
+        return self.notebooks.add_cell(notebook_id, cell["kind"], dict(cell["draft"]), after=cell_id)
+
+    def cell_delete_preview(self, notebook_id: str, cell_id: str) -> dict:
+        """Counts for the delete dialog: the live Result Tables `delete_rt` would drop (any Run's) and the live
+        Saved Tables that are always kept."""
+        self._idle_cell(notebook_id, cell_id)
+        tables = self.tables.tables_of_cell(cell_id)
+        return {"result": sum(t.kind == "result" for t in tables), "saved": sum(t.kind == "saved" for t in tables)}
+
+    def delete_cell(self, notebook_id: str, cell_id: str, tables: TablesChoice = "keep") -> None:
+        """Delete a cell. `tables` (keep or delete_rt) says whether to drop the `rt_` tables its Runs made; kept
+        ones expire per their Retention. Saved Tables are always kept. The tables go first, so a failure leaves
+        the cell in place and the delete can be retried."""
+        self._idle_cell(notebook_id, cell_id)
+        if tables == "delete_rt":
+            self.tables.drop_of_cell(cell_id)
+        self.notebooks.delete_cell(cell_id)
 
     async def run_cell(self, notebook_id: str, cell_id: str) -> AsyncIterator[Event]:
         """Run a cell, with what its Draft holds, and stream its events (`start()` first). A SQL Cell runs its

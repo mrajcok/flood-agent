@@ -320,13 +320,13 @@ def create_app(
         effort = last["effort"] if spec and last["effort"] in spec.efforts else (spec.default_effort if spec else None)
         return {"model": last["model"], "effort": effort, "max_rows": last["max_rows"]}
 
-    def add_ai_cell(notebook_id: str, after: str | None = None) -> str:
+    def add_ai_cell(notebook_id: str, after: str | None = None, before: str | None = None) -> str:
         s = new_cell_settings()
-        return agent.add_ai_cell(notebook_id, model=s["model"], effort=s["effort"], max_rows=s["max_rows"], after=after)
+        return agent.add_ai_cell(notebook_id, model=s["model"], effort=s["effort"], max_rows=s["max_rows"], after=after, before=before)
 
-    def add_sql_cell(notebook_id: str, after: str | None = None) -> str:
+    def add_sql_cell(notebook_id: str, after: str | None = None, before: str | None = None) -> str:
         last = agent.notebooks.last_settings("sql")
-        return agent.add_sql_cell(notebook_id, max_rows=last["max_rows"] if last else DEFAULT_MAX_ROWS, after=after)
+        return agent.add_sql_cell(notebook_id, max_rows=last["max_rows"] if last else DEFAULT_MAX_ROWS, after=after, before=before)
 
     def output_items(run: dict) -> list[dict]:
         """What a finished (or stopped) Run shows under its prompt: the answer's text and its Displays, in order."""
@@ -442,21 +442,52 @@ def create_app(
         return [c["id"] for c in agent.notebooks.cells(notebook_id) if c["id"] in stale]
 
     @app.post("/n/{notebook_id}/cells", response_class=HTMLResponse)
-    def add_cell(notebook_id: str, kind: str = Form("ai"), after: str | None = Form(None)):
-        """Insert a cell after `after` (or at the end); returns it, with its "add a cell" bar, for htmx to place."""
+    def add_cell(notebook_id: str, kind: str = Form("ai"), after: str | None = Form(None), at: str = Form("")):
+        """Insert a cell after `after` (or at the end; at the very top with `at=start`); returns it, with its
+        "add a cell" bar, for htmx to place."""
         if not agent.notebooks.exists(notebook_id):
             raise HTTPException(404, "unknown notebook")
         if kind not in ("ai", "sql", MARKDOWN):
             raise HTTPException(422, f"unknown cell kind {kind!r}")
         if after:
             known_cell(notebook_id, after)
+        before = None
+        if at == "start" and not after:
+            first = agent.notebooks.cells(notebook_id)
+            before = first[0]["id"] if first else None
         if kind == MARKDOWN:
-            cell_id = agent.add_markdown_cell(notebook_id, after=after or None)
+            cell_id = agent.add_markdown_cell(notebook_id, after=after or None, before=before)
         elif kind == "sql":
-            cell_id = add_sql_cell(notebook_id, after or None)
+            cell_id = add_sql_cell(notebook_id, after or None, before)
         else:
-            cell_id = add_ai_cell(notebook_id, after or None)
+            cell_id = add_ai_cell(notebook_id, after or None, before)
         return cell_html(notebook_id, cell_id, "notebook_slot.html")
+
+    def cell_operation(notebook_id: str, cell_id: str, operation):
+        """Run a cell operation; a running cell cannot be moved, copied or deleted (409)."""
+        known_cell(notebook_id, cell_id)
+        try:
+            return operation()
+        except NotebookBusy as e:
+            raise HTTPException(409, str(e))
+
+    @app.post("/n/{notebook_id}/cells/{cell_id}/move", status_code=204)
+    def move_cell(notebook_id: str, cell_id: str, direction: Literal["up", "down"] = Form(...)):
+        cell_operation(notebook_id, cell_id, lambda: agent.move_cell(notebook_id, cell_id, direction))
+
+    @app.post("/n/{notebook_id}/cells/{cell_id}/copy", response_class=HTMLResponse)
+    def copy_cell(notebook_id: str, cell_id: str):
+        """Copy the cell's Draft into a new cell just below it; returns it with its bar, for htmx to place."""
+        new_id = cell_operation(notebook_id, cell_id, lambda: agent.copy_cell(notebook_id, cell_id))
+        return cell_html(notebook_id, new_id, "notebook_slot.html")
+
+    @app.get("/n/{notebook_id}/cells/{cell_id}/delete-preview")
+    def cell_delete_preview(notebook_id: str, cell_id: str):
+        return cell_operation(notebook_id, cell_id, lambda: agent.cell_delete_preview(notebook_id, cell_id))
+
+    @app.post("/n/{notebook_id}/cells/{cell_id}/delete", status_code=204)
+    def delete_cell(notebook_id: str, cell_id: str, tables: TablesChoice = Form("keep")):
+        cell_operation(notebook_id, cell_id, lambda: agent.delete_cell(notebook_id, cell_id, tables))
 
     @app.get("/n/{notebook_id}/cells/{cell_id}", response_class=HTMLResponse)
     def get_cell(notebook_id: str, cell_id: str):

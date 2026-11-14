@@ -450,6 +450,14 @@ class Catalog(CatalogView):
         self._mark_expired(names)
         return names
 
+    def drop_of_cell(self, cell_id: str) -> list[str]:
+        """Drop the Result Tables any Run of a Cell made that are still named `rt_*` (its current Run's and
+        earlier ones'), never a Saved Table. They stay registered as expired. Returns the names dropped."""
+        names = [t.name for t in self.tables_of_cell(cell_id) if t.kind == "result"]
+        self._drop_physical(names)
+        self._mark_expired(names)
+        return names
+
     def delete(self, name: str) -> None:
         """Delete a Lookup, Saved or Result Table. A Saved or Result Table stays registered as expired,
         so Displays of it render as expired (ADR 0004). ValueError for a Telemetry table; KeyError for any

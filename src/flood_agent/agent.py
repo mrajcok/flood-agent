@@ -887,16 +887,18 @@ class Agent:
             error = "A table this query reads has expired or been deleted. Ask again to regenerate it."
         return error
 
-    def refresh_count(self, display_id: int) -> dict:
+    def refresh_count(self, display_id: int, in_notebook: bool = False) -> dict:
         """Refresh a Count Display: run its stored count query again, without the LLM, under the same checks
         and timeout as the original, and overwrite its number and "as of" time. Returns the new
         {"value", "computed_at_ms"}. KeyError if unknown, `RefreshInProgress` if already refreshing,
-        `RefreshFailed` (plain message) if the query fails, in which case the old number is kept."""
-        definition = self.store.count_display(display_id)
+        `RefreshFailed` (plain message) if the query fails, in which case the old number is kept.
+        `in_notebook`: the Display is an AI Cell's, not a Conversation's. Either way a Refresh is never a Run."""
+        store = self.notebooks if in_notebook else self.store
+        definition = store.count_display(display_id)
         if definition is None:
             raise KeyError(display_id)
         label = f'Count Display "{definition["title"]}"'
-        with self._refresh_guard(("count", display_id), label):
+        with self._refresh_guard(("notebook-count" if in_notebook else "count", display_id), label):
             result = queries.run_count_query(
                 self.config.telemetry_db, self.config.results_db, definition["sql"], self.config.query_timeout_s,
                 self.tables.readable(),
@@ -904,7 +906,7 @@ class Agent:
             if not result["success"]:
                 raise RefreshFailed(self._refresh_error(label, result))
             computed_at_ms = self.config.clock()
-            self.store.update_count(display_id, result["count"], computed_at_ms)
+            store.update_count(display_id, result["count"], computed_at_ms)
             return {"value": result["count"], "computed_at_ms": computed_at_ms}
 
     def iter_all_rows(self, result_table: str):

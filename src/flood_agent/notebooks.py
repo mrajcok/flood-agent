@@ -14,6 +14,8 @@ from contextlib import closing
 from pathlib import Path
 from typing import Callable
 
+from .store import COUNT_KIND
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS notebooks (
   id TEXT PRIMARY KEY,
@@ -316,6 +318,22 @@ class NotebookStore:
                      **{k: v for k, v in d.items() if k not in ("id", "after_message_id")}}
                     for d in displays if d["after_message_id"] == row["id"]]
         return out
+
+    def count_display(self, display_id: int) -> dict | None:
+        """A Run's Count Display definition ({title, value, sql, computed_at_ms}), or None if there is none with that id."""
+        with closing(self._connect()) as con:
+            row = con.execute("SELECT definition FROM run_displays WHERE id=? AND kind=?", (display_id, COUNT_KIND)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def update_count(self, display_id: int, value: int, computed_at_ms: int) -> None:
+        """Overwrite a Count Display's number and "as of" time (a Refresh): nothing of its Run changes, and the
+        Run's saved message, which cells below are sent, stays as it was. KeyError if it no longer exists."""
+        with closing(self._connect()) as con, con:
+            row = con.execute("SELECT definition FROM run_displays WHERE id=? AND kind=?", (display_id, COUNT_KIND)).fetchone()
+            if row is None:
+                raise KeyError(display_id)
+            definition = {**json.loads(row[0]), "value": value, "computed_at_ms": computed_at_ms}
+            con.execute("UPDATE run_displays SET definition=? WHERE id=?", (json.dumps(definition), display_id))
 
     def displays(self, run_id: str) -> list[dict]:
         """The Display definitions of a Run: {id, after_message_id, kind, result_table, **definition}."""

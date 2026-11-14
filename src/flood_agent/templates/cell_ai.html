@@ -125,7 +125,7 @@
           {%- if f.trace %} &middot; {% if f.cost is not none %}${{ "%.3f"|format(f.cost) }}{% else %}cost n/a{% endif %}{% endif %}</span>
           {%- with context=f.context, in_cell=true %} &middot; {% include "context_meter.html" %}{% endwith %}
           {%- if f.stopped %} <span class="badge stopped">stopped</span>{% elif f.failed %} <span class="badge failed">failed</span>{% endif %}
-          <span class="badge edited" x-show="edited" {% if not cell.edited %}x-cloak{% endif %} title="The prompt or settings changed since this ran; the cells below were sent what ran">edited, not run</span></summary>
+          <template x-if="edited"><span class="badge edited" title="The prompt or settings changed since this ran; the cells below were sent what ran">edited, not run</span></template></summary>
         {% if f.trace %}{% with trace=f.trace %}{% include "trace_body.html" %}{% endwith %}{% endif %}
       </details>
     </div>

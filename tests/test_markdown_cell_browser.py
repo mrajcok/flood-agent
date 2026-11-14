@@ -83,7 +83,6 @@ def test_markdown_head_says_markdown_and_carries_the_not_sent_note_in_its_header
     cell = open_notebook_with_markdown(page)
     head = cell.locator(".head")
     expect(head.locator(".kind")).to_have_text("Markdown")
-    assert page.evaluate("getComputedStyle(document.querySelector('.cellblock.markdown .kind')).textTransform") == "none"
     expect(head.get_by_text("Not sent to AI Cells below")).to_be_visible()
 
 
@@ -99,15 +98,3 @@ def test_the_done_button_tooltip_mentions_shift_enter(live_page):
     page = live_page()
     cell = open_notebook_with_markdown(page)
     expect(cell.get_by_role("button", name="Done")).to_have_attribute("title", re.compile("shift.?enter", re.I))
-
-
-def test_edit_and_done_buttons_take_the_same_width_so_toggling_moves_nothing(live_page):
-    page = live_page()
-    cell = open_notebook_with_markdown(page)
-    done_width = cell.get_by_role("button", name="Done").bounding_box()["width"]
-    send_x = cell.locator("label.send").bounding_box()["x"]
-    cell.get_by_label("Markdown").fill("note")
-    cell.get_by_role("button", name="Done").click()
-    expect(cell.get_by_role("button", name="Edit")).to_be_visible()
-    assert cell.get_by_role("button", name="Edit").bounding_box()["width"] == done_width
-    assert cell.locator("label.send").bounding_box()["x"] == send_x

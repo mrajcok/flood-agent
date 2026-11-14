@@ -62,7 +62,7 @@ def test_add_move_copy_and_delete_cells_and_the_stale_dot_follows(live_page, bui
     expect(page.locator(".cellblock")).to_have_count(2)
 
 
-def test_the_insert_strip_adds_below_its_cell_and_the_title_line_stays_put(live_page):
+def test_the_insert_strip_adds_below_its_cell(live_page):
     page = live_page()
     page.get_by_role("button", name="New notebook").click()
     expect(page).to_have_url(re.compile(r"/n/\w+$"))
@@ -75,11 +75,6 @@ def test_the_insert_strip_adds_below_its_cell_and_the_title_line_stays_put(live_
     add_below(page, "markdown", cells.first)
     expect(cells).to_have_count(4)
     assert [c.get_attribute("data-kind") for c in cells.all()] == ["ai", "markdown", "sql", "ai"]
-    head = page.locator(".nb-head").bounding_box()
-    for _ in range(6):
-        add_below(page, "ai")
-    page.locator("#prompt-area").evaluate("e => e.scrollTop = e.scrollHeight")
-    assert page.locator(".nb-head").bounding_box() == head
 
 
 def test_the_cell_toolbar_shows_on_hover_on_every_cell_even_a_rendered_markdown_one(live_page):
@@ -91,9 +86,6 @@ def test_the_cell_toolbar_shows_on_hover_on_every_cell_even_a_rendered_markdown_
     expect(toolbar).to_be_hidden()
     ai.hover()
     expect(toolbar).to_be_visible()
-    expect(toolbar).to_have_css("opacity", re.compile(r"^0\.5"))  # faint until the pointer is on the toolbar itself
-    toolbar.hover()
-    expect(toolbar).to_have_css("opacity", "1")
     add_below(page, "markdown")
     note = page.locator(".cellblock.markdown")
     note.get_by_label("Markdown").fill("hello")

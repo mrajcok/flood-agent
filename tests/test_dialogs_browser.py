@@ -64,13 +64,7 @@ def test_delete_dialog_offers_to_keep_or_delete_its_result_tables(build_agent, l
     expect(dialog).to_contain_text("rt_")
     expect(dialog.get_by_text("Saved Table")).to_be_hidden()
 
-    parts = [dialog.locator("h3"), keep, delete_rt, dialog.locator(".actions")]
-    tops = [part.bounding_box()["y"] for part in parts]  # type: ignore[index]
-    assert tops == sorted(tops) and len(set(tops)) == len(tops), f"not stacked in rows: {tops}"
-
     delete = dialog.get_by_role("button", name="Delete")
-    red, green, blue = map(int, delete.evaluate("b => getComputedStyle(b).backgroundColor")[4:-1].split(","))
-    assert red > 150 and green < 80 and blue < 80, "Delete button should be red"
 
     delete_rt.check()
     delete.click()

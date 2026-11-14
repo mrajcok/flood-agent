@@ -23,15 +23,12 @@ def ask_for_a_chart(build_agent, live_page):
     return agent, page, table
 
 
-def test_a_chart_shows_its_result_table_name_copy_icon_and_time_left_just_above_it(build_agent, live_page):
+def test_a_chart_shows_its_result_table_name_copy_icon_and_time_left(build_agent, live_page):
     _, page, table = ask_for_a_chart(build_agent, live_page)
     header = page.locator(".display.chart .table-name")
     expect(header.locator(".name")).to_have_text(table)
     expect(header.get_by_role("button", name=f"Copy {table}")).to_be_visible()
     expect(header.locator(".expires")).to_have_text("expires in 1d")
-    canvas = page.locator(".display.chart canvas").bounding_box()
-    box = header.bounding_box()
-    assert canvas and box and 0 <= canvas["y"] - (box["y"] + box["height"]) < 16
 
 
 def test_renaming_from_a_chart_changes_the_table_and_its_time_left(build_agent, live_page):

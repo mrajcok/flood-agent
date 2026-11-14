@@ -35,6 +35,12 @@
                  this.maxRows = String(this.maxRows).replace(/\D/g, '').replace(/^0+/, '') || '{{ cell.max_rows }}';
                  this.save();
                },
+               rowPresets: [10, 50, 100, 1000, 10000, 100000, 1000000], customRows: false,
+               get rowsIsCustom() { return this.customRows || !this.rowPresets.includes(Number(this.maxRows)); },
+               pickRows(v) {
+                 if (v === 'custom') { this.customRows = true; this.$nextTick(() => this.$refs.rowsCustom.focus()); return; }
+                 this.customRows = false; this.maxRows = v; this.save();
+               },
                saving: null,
                save() {
                  /* Keep the Draft, so a reload shows what was typed; a failure is not worth interrupting for.
@@ -101,8 +107,7 @@
               <option value="" x-show="!efforts.length">no effort</option>
               <template x-for="e in efforts" :key="e"><option :value="e" x-text="e" :selected="e === effort"></option></template>
             </select></label>
-          <label class="f">Max rows
-            <input type="text" inputmode="numeric" x-model="maxRows" @change="cleanRows()" aria-label="Max rows"></label>
+          {% include "row_cap_field.html" %}
           <small>New AI Cells start with the last settings you ran.</small>
         </div>
       </span>

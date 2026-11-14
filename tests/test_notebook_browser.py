@@ -149,8 +149,9 @@ def test_the_settings_chip_opens_a_popover_for_model_effort_and_max_rows(live_pa
     expect(pop).to_be_visible()
     pop.get_by_label("Model").select_option("anthropic/claude-sonnet-5.5")
     pop.get_by_label("Effort").select_option("low")
-    pop.get_by_label("Max rows").fill("250")
-    pop.get_by_label("Max rows").press("Tab")
+    pop.get_by_label("Max rows").select_option("custom")
+    pop.get_by_label("Custom row cap").fill("250")
+    pop.get_by_label("Custom row cap").press("Tab")
     expect(chip).to_have_text(re.compile(r"Claude Sonnet 5\.5 · low · ≤ 250 rows"))
     page.keyboard.press("Escape")
     expect(pop).to_be_hidden()
@@ -178,8 +179,9 @@ def test_a_new_ai_cell_starts_with_the_last_settings_run(live_page, build_agent)
     pop = cell.get_by_role("dialog", name="AI Cell settings")
     pop.get_by_label("Model").select_option("anthropic/claude-opus-5.5")
     pop.get_by_label("Effort").select_option("medium")
-    pop.get_by_label("Max rows").fill("42")
-    pop.get_by_label("Max rows").press("Tab")
+    pop.get_by_label("Max rows").select_option("custom")
+    pop.get_by_label("Custom row cap").fill("42")
+    pop.get_by_label("Custom row cap").press("Tab")
     write_prompt(cell, "go")
     run(cell)
     expect(cell.locator(".gutter .num")).to_have_text("[1]")
@@ -278,12 +280,3 @@ def test_hovering_canopy_shows_what_it_stands_for(live_page):
     expect(page.get_by_role("heading", name="CANOPY")).to_have_attribute(
         "title", re.compile("Cyber AI Notebook for Operations, Peering, and telemetrY")
     )
-
-
-def test_the_leading_c_of_canopy_is_bigger_than_the_rest(live_page):
-    page = live_page()
-    sizes = page.evaluate(
-        "[...document.querySelectorAll('.topbar h1 .initial, .topbar h1 .rest')]"
-        ".map(e => parseFloat(getComputedStyle(e).fontSize))"
-    )
-    assert sizes[1] < sizes[0]

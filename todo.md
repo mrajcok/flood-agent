@@ -1,15 +1,7 @@
 # work items
-- tests are taking too long to run. We need a way for you to only run targeted tests after a change, instead of running all tests.
-- markdown cell: Edit and Done should take up the same amount of space so clicking one doesn't shift the layout
-- in an AI cell, when I hover over "Open as SQL Cell" the background color should change
 - sql cell should also have a "Send to AI" checkbox. It should be ticked by default.
 - how to handle a "limit 50" in an sql cell when the row count is set to a different value
-- make the "Explain" button in the SQL cells and in traces in AI cells have a green background.
-- when selecting a table in an SQL cell, don't insert the table name into the prompt.
-- after clicking "Collapse outputs" there is no way to uncollapse an individual cell
-- in an SQL cell, when a table is selected, remove the border from each column name. Keep the background color change on hover though. Don't use a fixed-width font for the table name or the column names, since a fixed width font takes up more space
 - report mode: removes all buttons and cell borders, and makes the notebook read-only. Maybe a "Report" button in the top area that toggles this mode.
-- sorting IP addresses in tables needs to be fixed. The current sort is lexicographic, not numeric.
 - add the ability to add secondary indexes to a table
 - toggle (off by default) for prompt results to go to the LLM
 - Per J Legg, how can I add workflows to this agent?

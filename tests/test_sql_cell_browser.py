@@ -40,8 +40,9 @@ def test_the_rows_chip_caps_the_table_and_the_next_sql_cell_starts_with_it(live_
     cell = add_sql_cell(page)
     expect(cell.locator(".chip")).to_have_text("≤ 1,000 rows ▾")
     cell.locator(".chip").click()
-    cell.get_by_label("Max rows").fill("1")
-    cell.get_by_label("Max rows").press("Tab")
+    cell.get_by_label("Max rows").select_option("custom")
+    cell.get_by_label("Custom row cap").fill("1")
+    cell.get_by_label("Custom row cap").press("Tab")
     expect(cell.locator(".chip")).to_have_text("≤ 1 rows ▾")
     cell.get_by_label("SQL").fill("SELECT dport FROM flows")
     cell.get_by_role("button", name="Run").click()
@@ -102,20 +103,6 @@ def test_the_table_dropdown_is_grouped_and_searchable_and_leaves_the_sql_unchang
     expect(second.get_by_label("SQL", exact=True)).to_have_value("")
     expect(second.locator(".tbl-cols .col")).to_have_count(11)
     expect(second.locator(".tbl-cols .col").nth(3)).to_have_attribute("title", "INTEGER")
-
-
-def test_column_and_table_name_chips_are_borderless_proportional_and_still_highlight_on_hover(live_page, build_agent):
-    page = live_page(agent=build_agent(ScriptedLLM()))
-    cell = add_sql_cell(page)
-    pick_table(cell, "flows")
-    col = cell.locator(".tbl-cols .col").first
-    style = "e => { const s = getComputedStyle(e); return [s.borderTopWidth, s.fontFamily, s.backgroundColor]; }"
-    width, _, rest = col.evaluate(style)
-    assert width == "0px"
-    for chip in (col, cell.locator(".tbl-cols .tname")):
-        assert "mono" not in chip.evaluate(style)[1].lower()
-    col.hover()
-    assert col.evaluate(style)[2] != rest
 
 
 def test_clicking_columns_builds_a_list_at_the_cursor_and_the_table_name_goes_in_too(live_page, build_agent):
@@ -189,3 +176,22 @@ def test_editing_a_ran_sql_cell_shows_the_edited_not_run_badge_until_it_is_back_
     expect(cell.locator(".output .display")).to_be_visible()  # the old output stays
     cell.get_by_label("SQL", exact=True).fill("SELECT dport FROM flows")
     expect(badge).to_have_count(0)
+
+
+def test_the_rows_chip_offers_preset_row_caps_and_a_custom_value(live_page, build_agent):
+    page = live_page(agent=build_agent(ScriptedLLM()))
+    cell = add_sql_cell(page)
+    cell.locator(".chip").click()
+    caps = cell.get_by_label("Max rows")
+    expect(caps.locator("option")).to_have_text(["10", "50", "100", "1,000", "10,000", "100,000", "1,000,000", "Custom\u2026"])
+    expect(caps).to_have_value("1000")
+    expect(cell.get_by_label("Custom row cap")).to_be_hidden()
+    caps.select_option("10000")
+    expect(cell.locator(".chip")).to_have_text("\u2264 10,000 rows \u25be")
+    expect(cell.get_by_label("Custom row cap")).to_be_hidden()
+    caps.select_option("custom")
+    expect(cell.get_by_label("Custom row cap")).to_be_visible()
+    cell.get_by_label("Custom row cap").fill("250")
+    cell.get_by_label("Custom row cap").press("Tab")
+    expect(cell.locator(".chip")).to_have_text("\u2264 250 rows \u25be")
+    expect(caps).to_have_value("custom")

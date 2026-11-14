@@ -1,0 +1,8 @@
+{# The Max rows field in a cell's popover: a list of common caps, or Custom for a typed value. Needs the cell's maxRows, rowPresets, rowsIsCustom, pickRows and cleanRows. #}
+<label class="f">Max rows
+  <select aria-label="Max rows" @change="pickRows($event.target.value)">
+    <template x-for="n in rowPresets" :key="n"><option :value="String(n)" :selected="!rowsIsCustom && n === Number(maxRows)" x-text="n.toLocaleString('en-US')"></option></template>
+    <option value="custom" :selected="rowsIsCustom">Custom&hellip;</option>
+  </select></label>
+<label class="f" x-show="rowsIsCustom" x-cloak>Custom
+  <input type="text" inputmode="numeric" x-ref="rowsCustom" x-model="maxRows" @change="cleanRows()" aria-label="Custom row cap"></label>

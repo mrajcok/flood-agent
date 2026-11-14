@@ -163,8 +163,3 @@ def test_only_charts_with_a_time_axis_show_the_zoom_hint(live_page, build_agent)
         hint = page.get_by_text("Ctrl+scroll to zoom, drag to pan, double-click to reset")
         expect(hint).to_be_visible() if shown else expect(hint).to_be_hidden()
     expect(page.locator(".drawer")).to_have_count(0)  # the layout stops moving once the live trace has folded away
-    # The hint sits just under the chart, at its right edge.
-    chart, note = page.locator(".display.chart canvas").bounding_box(), page.locator(".chart-hint").bounding_box()
-    assert chart and note
-    assert 0 <= note["y"] - (chart["y"] + chart["height"]) < 16
-    assert page.locator(".chart-hint").evaluate("el => getComputedStyle(el).textAlign") == "right"

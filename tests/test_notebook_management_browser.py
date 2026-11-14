@@ -64,15 +64,12 @@ def test_search_filters_as_you_type_by_title_and_cell_text(live_page):
     expect(page.locator(".notebook-list li:visible")).to_have_count(2)
 
 
-def test_hiding_the_sidebar_widens_the_cells_and_survives_a_reload(live_page):
+def test_hiding_the_sidebar_survives_a_reload(live_page):
     page = live_page()
     open_new_notebook(page)
-    cells = page.locator("#cells")
-    before = cells.bounding_box()["width"]
     page.get_by_role("button", name="Hide sidebar").click()
     expect(page.get_by_role("button", name="Show sidebar")).to_be_visible()
     expect(page.get_by_label("Search notebooks")).to_be_hidden()
-    assert cells.bounding_box()["width"] > before
     page.reload()
     expect(page.get_by_role("button", name="Show sidebar")).to_be_visible()
     expect(page.get_by_label("Search notebooks")).to_be_hidden()

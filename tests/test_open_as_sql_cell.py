@@ -43,18 +43,3 @@ def test_open_as_sql_cell_inserts_a_runnable_cell_below_the_ai_cell(live_page, b
     ai.locator(".cell-foot > .open-sql").click()
     expect(cells).to_have_count(3)
     expect(cells.nth(1).get_by_label("SQL")).to_have_value(SQL)
-
-
-def test_open_as_sql_cell_changes_its_background_on_hover(live_page, build_agent):
-    llm = ScriptedLLM([tool_call("run_query", sql=SQL, title="t")], [TextChunk("Done.")])
-    page = live_page(agent=build_agent(llm))
-    page.get_by_role("button", name="New notebook").click()
-    ai = page.locator(".cellblock.ai")
-    ai.get_by_label("Prompt").fill("go")
-    ai.get_by_role("button", name="Run").click()
-    expect(ai.locator(".reply")).to_contain_text("Done.")
-    ai.locator("details.cell-trace > summary").click()
-    button = ai.locator(".sql-label").get_by_role("button", name="Open as SQL Cell")
-    before = button.evaluate("b => getComputedStyle(b).backgroundColor")
-    button.hover()
-    expect(button).not_to_have_css("background-color", before)

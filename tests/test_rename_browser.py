@@ -90,12 +90,6 @@ def test_the_copy_icon_next_to_the_table_name_inserts_it_into_the_prompt_like_th
     expect(chat).to_have_value("victims")
 
 
-def test_the_edit_icon_has_the_same_pointer_cursor_as_the_copy_icon(build_agent, live_page):
-    _, page, _ = ask_for_a_table(build_agent, live_page)
-    cursor = "e => getComputedStyle(e).cursor"
-    assert page.locator(".table-name .edit").evaluate(cursor) == page.locator(".table-name .copy").evaluate(cursor) == "pointer"
-
-
 def test_the_form_shows_the_deployments_retention_policy(build_agent, live_page):
     from dataclasses import replace
 

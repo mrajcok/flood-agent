@@ -44,6 +44,12 @@
                  this.maxRows = String(this.maxRows).replace(/\D/g, '').replace(/^0+/, '') || '{{ cell.max_rows }}';
                  this.save();
                },
+               rowPresets: [10, 50, 100, 1000, 10000, 100000, 1000000], customRows: false,
+               get rowsIsCustom() { return this.customRows || !this.rowPresets.includes(Number(this.maxRows)); },
+               pickRows(v) {
+                 if (v === 'custom') { this.customRows = true; this.$nextTick(() => this.$refs.rowsCustom.focus()); return; }
+                 this.customRows = false; this.maxRows = v; this.save();
+               },
                saving: null,
                save() {
                  /* Keep the Draft, so a reload shows what was typed; a failure is not worth interrupting for.
@@ -97,8 +103,7 @@
                 {% if cell.running %}disabled{% else %}:disabled="running || !!command"{% endif %} @click.stop="pop = !pop"
                 x-text="chip">&#x2264; {{ "{:,}".format(cell.max_rows) }} rows &#x25BE;</button>
         <div class="pop" role="dialog" aria-label="Row cap" x-show="pop" x-cloak @click.outside="pop = false">
-          <label class="f">Max rows
-            <input type="text" inputmode="numeric" x-model="maxRows" @change="cleanRows()" aria-label="Max rows"></label>
+          {% include "row_cap_field.html" %}
           <small>New SQL Cells start with the last row cap you ran.</small>
         </div>
       </span>

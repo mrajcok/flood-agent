@@ -123,22 +123,26 @@ def test_with_outputs_collapsed_one_cell_can_show_and_hide_its_own_output(live_p
     expect(second.locator(".reply")).to_be_hidden()
 
 
-def test_traces_off_hides_only_the_trace_not_the_footer_line_or_context_meter(live_page, build_agent):
+def test_traces_off_hides_the_trace_line_and_context_meter_but_keeps_status_badges(live_page, build_agent):
     llm = ScriptedLLM([tool_call("run_query", sql=SQL, title="ports")], [TextChunk("Done.")])
     page = live_page(agent=build_agent(llm))
     cell = open_new_notebook(page)
     write_prompt(cell, "ports")
     run(cell)
-    expect(cell.locator(".cell-foot")).to_be_visible()
     meter = cell.locator(".cell-foot .ctx")
     expect(meter).to_be_visible()
     expect(cell.locator(".cell-trace .trace-only").first).to_be_visible()
     page.get_by_label("Traces", exact=True).uncheck()
-    expect(cell.locator(".cell-trace .trace-only").first).to_be_hidden()
-    expect(cell.locator(".cell-foot")).to_be_visible()
-    expect(meter).to_be_visible()
+    expect(cell.locator(".cell-foot")).to_be_hidden()
+    expect(meter).to_be_hidden()
+    expect(cell.get_by_role("button", name="Open as SQL Cell")).to_be_visible()  # the actions stay
+    cell.get_by_label("Prompt").fill("something else")
+    expect(cell.locator(".cell-foot .badge.edited")).to_be_visible()  # status badges stay
+    cell.get_by_label("Prompt").fill("ports")
+    expect(cell.locator(".cell-foot")).to_be_hidden()
     page.get_by_label("Traces", exact=True).check()
     expect(cell.locator(".cell-trace .trace-only").first).to_be_visible()
+    expect(meter).to_be_visible()
 
 
 def test_table_info_off_hides_a_cells_table_name_line(live_page, build_agent):

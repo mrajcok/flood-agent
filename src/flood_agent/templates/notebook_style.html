@@ -62,7 +62,10 @@
   .cell-canned li.follow { padding-left: 1.6rem; }
   .cell-canned .fails { color: #a40; font-size: .8em; }
   .cellblock textarea.cell-prompt[readonly] { background: #f6f7fa; }
-  .cellblock .copy-md { margin-top: .3rem; }
+  .cellblock .cell-actions { display: flex; flex-wrap: wrap; align-items: baseline; gap: .1rem 1rem; margin-top: .3rem; }
+  .cellblock .copy-md { display: contents; }  /* its button joins the row; its save offer and error take a line of their own, below */
+  .cellblock .copy-md .save-offer, .cellblock .copy-md .cell-error { flex-basis: 100%; order: 1; }
+  .cellblock .cell-actions .linkish { padding: 0; }
   .cellblock .save-offer { margin: .3rem 0; padding: .5rem .7rem; border: 1px solid #d5dbe8; border-radius: .4rem; font-size: .85rem; }
   .cellblock .save-offer label.f { display: block; margin: .25rem 0; }
   .cellblock .cell-error { color: #a52a1e; margin: .3rem 0 0; font-size: .85rem; }
@@ -75,6 +78,11 @@
   .cellblock .cell-trace { margin: 0; }
   .cellblock .cell-trace > summary { display: flex; flex-wrap: wrap; gap: .25rem .4rem; align-items: center; }
   .cellblock .cell-trace > summary .trace-totals { white-space: normal; }
+  /* The flex layout drops the browser's disclosure marker, so draw one: right-pointing when closed, down when open. */
+  .cellblock .cell-trace > summary { list-style: none; }
+  .cellblock .cell-trace > summary::-webkit-details-marker { display: none; }
+  .cellblock .cell-trace > summary::before { content: "\25B6"; font-size: .65em; color: #6b7280; transition: transform .15s; }
+  .cellblock .cell-trace[open] > summary::before { transform: rotate(90deg); }
   .cellblock .badge { font-size: .75rem; border-radius: 999px; padding: .05rem .55rem; white-space: nowrap; }
   .cellblock .badge.stopped { background: #f3e8fd; color: #6b2fa0; }
   .cellblock .badge.edited { background: #fdf3d8; color: #8a5a00; }

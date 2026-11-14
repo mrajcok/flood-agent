@@ -40,6 +40,6 @@ def test_open_as_sql_cell_inserts_a_runnable_cell_below_the_ai_cell(live_page, b
     assert len(llm.calls) == calls  # no LLM
 
     # The footer has the same action.
-    ai.locator(".cell-foot > .open-sql").click()
+    ai.locator(".cell-actions").get_by_role("button", name="Open as SQL Cell").click()
     expect(cells).to_have_count(3)
     expect(cells.nth(1).get_by_label("SQL")).to_have_value(SQL)

@@ -32,7 +32,10 @@
     /* View toggles: sliders that hide traces, live traces and table info. On = shown. */
     .hide-traces details.trace:not(.cell-trace), .hide-traces .live-trace, .hide-live .live-trace, .hide-tables .table-name { display: none !important; }
     /* A cell's footer line keeps its stopped badge and Context Usage meter: only the trace itself goes. */
-    .hide-traces .cell-trace .trace-only, .hide-traces .cell-trace > :not(summary) { display: none !important; }
+    /* The Trace line, context meter and all, goes; its status badges (stopped, failed, edited) stay, and the line with them. */
+    .hide-traces .cell-trace > :not(summary), .hide-traces .cell-trace > summary > :not(.badge), .hide-traces .cell-trace > summary::before { display: none !important; }
+    .hide-traces .cell-trace > summary { pointer-events: none; }
+    .hide-traces .cell-foot:has(> .cell-trace):not(:has(.badge)) { display: none !important; }
     /* Collapse outputs: every cell's output area is hidden, its prompt or SQL stays; a running cell shows its output. */
     .outputs-collapsed .cellblock:not(.running):not(.output-shown) .output { display: none; }
     /* Each cell's own Show output / Hide output control: offered only while outputs are collapsed. */

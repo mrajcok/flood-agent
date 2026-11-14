@@ -13,11 +13,14 @@ def test_the_sliders_start_on_and_traces_off_hides_every_trace_and_greys_live_tr
     for s in (traces, live, names):
         expect(s).to_be_checked()
     expect(cell.locator(".cell-trace .trace-only").first).to_be_visible()
+    expect(cell.locator(".cell-foot .ctx")).to_be_visible()
     traces.uncheck()
     expect(cell.locator(".cell-trace .trace-only").first).to_be_hidden()
+    expect(cell.locator(".cell-foot .ctx")).to_be_hidden()  # the context used goes with the rest of the Trace line
     expect(live).to_be_disabled()
     traces.check()
     expect(cell.locator(".cell-trace .trace-only").first).to_be_visible()
+    expect(cell.locator(".cell-foot .ctx")).to_be_visible()
     expect(live).to_be_enabled()
 
 

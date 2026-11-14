@@ -18,7 +18,7 @@
                get edited() {
                  /* The Draft differs from what ran: the old output stays, marked, and cells below are sent what ran. */
                  const r = this.ran;
-                 return !!r && (this.prompt !== r.prompt || this.model !== r.model || this.effort !== r.effort || String(this.maxRows) !== String(r.max_rows));
+                 return !!r && (squash(this.prompt) !== squash(r.prompt) || this.model !== r.model || this.effort !== r.effort || String(this.maxRows) !== String(r.max_rows));
                },
                running: {{ cell.running | tojson }},
                get stale() { return staleIds.includes('{{ cell.id }}'); },

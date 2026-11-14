@@ -11,7 +11,7 @@
                get edited() {
                  /* The Draft differs from what ran: the old output stays, marked, and cells below are sent what ran. */
                  const r = this.ran;
-                 return !!r && (this.statement !== r.statement || this.command !== r.command || String(this.maxRows) !== String(r.max_rows));
+                 return !!r && (squash(this.statement) !== squash(r.statement) || this.command !== r.command || String(this.maxRows) !== String(r.max_rows));
                },
                get statement() { return this.command ? (this.command === this.describe ? this.command + ' ' + this.tbl.trim() : this.command) : this.sql; },
                command: {{ cell.command | tojson | forceescape }}, describe: 'DESCRIBE TABLE',

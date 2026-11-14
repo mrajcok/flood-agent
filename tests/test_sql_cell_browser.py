@@ -162,7 +162,9 @@ def test_editing_a_ran_sql_cell_shows_the_edited_not_run_badge_until_it_is_back_
     cell = add_sql_cell(page)
     badge = cell.get_by_text("edited, not run")
     cell.get_by_label("SQL", exact=True).fill("SELECT dport FROM flows")
-    expect(badge).to_have_count(0)  # never run
+    expect(badge).to_have_count(0)
+    cell.get_by_label("SQL", exact=True).fill("SELECT   dport\nFROM flows  ")
+    expect(badge).to_have_count(0)  # spacing alone is not an edit  # never run
     cell.get_by_role("button", name="Run").click()
     expect(cell.locator(".sql-status")).to_be_visible()
     expect(badge).to_have_count(0)  # no element when not edited

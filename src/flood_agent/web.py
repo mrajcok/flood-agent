@@ -123,6 +123,11 @@ def live_event_sse(ev, key: str, live: LiveCounter, refreshable_counts: bool = T
     return None
 
 
+def _squash(text: str) -> str:
+    """Text with every run of whitespace as one space and none at the ends: spacing alone is not an edit."""
+    return " ".join(str(text).split())
+
+
 def _table_display_urls(result_table: str) -> dict:
     """The URLs a table Display (display_table.html) loads and saves through."""
     base = f"/api/results/{result_table}"
@@ -309,12 +314,14 @@ def create_app(
                            "max_rows": run["settings"]["max_rows"]}
             now = (statement_of(view["command"], view["table"]) if view["command"] else view["sql"],
                    view["command"], view["max_rows"])
-            view["edited"] = now != tuple(view["ran"].values())
+            ran_sql = tuple(view["ran"].values())
+            view["edited"] = (_squash(now[0]), *now[1:]) != (_squash(ran_sql[0]), *ran_sql[1:])
             return view
         ran = run["settings"]
         view["ran"] = {"prompt": run["prompt"], "model": ran["model"], "effort": ran["effort"] or "",
                        "max_rows": ran["max_rows"]}
-        view["edited"] = (draft["prompt"], model, view["effort"], view["max_rows"]) != tuple(view["ran"].values())
+        ran_prompt, *ran_settings = view["ran"].values()
+        view["edited"] = (_squash(draft["prompt"]), model, view["effort"], view["max_rows"]) != (_squash(ran_prompt), *ran_settings)
         if not view["running"]:
             view["earlier_tables"] = [
                 {"name": t.name, "settings_url": _table_display_urls(t.name)["settings_url"]}

@@ -47,3 +47,22 @@ def test_a_subquery_step_is_indented_under_its_parent(live_page, build_agent):
     expect(steps).to_have_count(3)
     pad = "e => parseFloat(getComputedStyle(e).paddingLeft)"
     assert steps.nth(2).evaluate(pad) > steps.nth(1).evaluate(pad)
+
+
+def is_green(rgb: str) -> bool:
+    r, g, b = (int(x) for x in rgb.removeprefix("rgb(").removesuffix(")").split(","))
+    return g > r + 20 and g > b + 20
+
+
+def test_explain_buttons_are_green_in_a_trace_and_in_a_sql_cell(live_page, build_agent):
+    page, _ = trace_with(live_page, build_agent, "SELECT 1")
+    trace_button = page.locator("details.trace .sql-label").get_by_role("button", name="Explain")
+    assert is_green(trace_button.evaluate("b => getComputedStyle(b).backgroundColor"))
+    page.get_by_role("button", name="New notebook").click()
+    sql_cell = page.locator(".cellblock").first
+    sql_cell.hover()
+    from conftest import add_below
+
+    add_below(page, "sql")
+    button = page.locator(".cellblock[data-kind=sql]").get_by_role("button", name="Explain")
+    assert is_green(button.evaluate("b => getComputedStyle(b).backgroundColor"))

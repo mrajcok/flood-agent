@@ -12,20 +12,12 @@
   <div class="layout">
   <div class="scroll-y" id="history-area">{% include "sidebar.html" %}</div>
   <main>
-  {# The title line stays put while the cells scroll; its buttons add a cell below the one being worked in. #}
-  <div class="nb-head" x-data>
-    <h2 class="nb-title">{{ title }}</h2>
-    <span class="nb-add" role="group" aria-label="Add a cell below the active cell">
-      {% for kind, label in [("ai", "+ AI"), ("sql", "+ SQL"), ("markdown", "+ Markdown")] %}
-      <button type="button" data-add="{{ kind }}" title="Add {{ label[2:] }} Cell below the cell you are in" @click="Alpine.$data(document.getElementById('cells')).addCell('{{ kind }}')">{{ label }}</button>
-      {% endfor %}
-    </span>
-  </div>
+  {# The title line stays put while the cells scroll. #}
+  <div class="nb-head"><h2 class="nb-title">{{ title }}</h2></div>
   <div class="scroll-y nb" id="prompt-area">
-    {# One flat list of cells. The models and the busy flag are the scope every cell reads; `activeId` is the cell last
-       clicked or focused, below which the title line's buttons add. #}
+    {# One flat list of cells. The models and the busy flag are the scope every cell reads; `empty` is whether there are none. #}
     <div id="cells" data-notebook-id="{{ notebook_id }}"
-         x-data="{ models: {{ models | tojson | forceescape }}, busy: false, activeId: null, staleIds: {{ stale_ids | tojson | forceescape }},
+         x-data="{ models: {{ models | tojson | forceescape }}, busy: false, empty: {{ (not cells) | tojson }}, staleIds: {{ stale_ids | tojson | forceescape }},
                    async refreshStale() {
                      /* Which AI Cells are stale can change whenever a cell does: ask the server. */
                      try {
@@ -33,28 +25,14 @@
                        if (r.ok) this.staleIds = await r.json();
                      } catch (e) {}
                    },
-                   note(e) { const block = e.target.closest('.cellblock'); if (block) this.activeId = block.dataset.cellId; },
-                   async addCell(kind) {
-                     /* Add a cell below the active one (at the end when none is, or at the top of an empty notebook). */
-                     const blocks = [...this.$el.querySelectorAll(':scope > .cellblock')];
-                     const anchor = blocks.find((b) => b.dataset.cellId === this.activeId) || blocks[blocks.length - 1];
-                     const body = new URLSearchParams({ kind });
-                     if (anchor) body.set('after', anchor.dataset.cellId);
-                     let html;
-                     try {
-                       const r = await fetch('/n/{{ notebook_id }}/cells', { method: 'POST', body });
-                       if (!r.ok) return;
-                       html = await r.text();
-                     } catch (e) { return; }
-                     /* The anchor may have been re-rendered (a Markdown Cell's Done) while the request ran: find it again. */
-                     const after = anchor && this.$el.querySelector(':scope > #cell-' + anchor.dataset.cellId);
-                     const block = after ? (after.insertAdjacentHTML('afterend', html), after.nextElementSibling)
-                                         : (this.$el.insertAdjacentHTML('afterbegin', html), this.$el.firstElementChild);
-                     htmx.process(block);
-                     this.activeId = block.dataset.cellId;
+                   placed(e) {
+                     /* A cell added by the insert strip or the empty-notebook buttons: show it and put the cursor in it. */
+                     const from = e.detail.requestConfig && e.detail.requestConfig.elt;
+                     if (!from || !from.matches('[data-insert], [data-empty-add]')) return;
+                     const block = e.detail.target.nextElementSibling;
+                     if (!block) return;
                      block.scrollIntoView({ block: 'nearest' });
                      const box = block.querySelector('textarea'); if (box) box.focus();
-                     window.dispatchEvent(new Event('cells-changed'));
                    },
                    async cellOp(button, op) {
                      /* Move, copy or delete the button's cell; the server refuses a running cell. */
@@ -64,7 +42,7 @@
                        if (op === 'delete') {
                          const preview = await fetch(url + '/delete-preview');
                          if (!preview.ok) return;
-                         const choice = await askDeleteChoice('Delete this ' + block.dataset.kind + ' cell?', await preview.json());
+                         const choice = await askDeleteChoice('Delete this ' + ({ ai: 'AI', sql: 'SQL', markdown: 'Markdown' }[block.dataset.kind] || block.dataset.kind) + ' cell?', await preview.json());
                          if (!choice) return;
                          const r = await fetch(url + '/delete', { method: 'POST', body: new URLSearchParams({ tables: choice }) });
                          if (!r.ok) return;
@@ -74,7 +52,6 @@
                          if (!r.ok) return;
                          block.insertAdjacentHTML('afterend', await r.text());
                          htmx.process(block.nextElementSibling);
-                         this.activeId = block.nextElementSibling.dataset.cellId;
                        } else {
                          const r = await fetch(url + '/move', { method: 'POST', body: new URLSearchParams({ direction: op }) });
                          if (!r.ok) return;
@@ -90,12 +67,19 @@
                      window.dispatchEvent(new Event('cells-changed'));
                    },
                    watch() {
-                     const update = () => { this.busy = !!this.$el.querySelector('.cellblock.running'); };
+                     const update = () => { this.busy = !!this.$el.querySelector('.cellblock.running'); this.empty = !this.$el.querySelector('.cellblock'); };
                      new MutationObserver(update).observe(this.$el, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
                      update();
                    } }" x-init="watch()"
-         @htmx:after-swap.window="refreshStale()" @cells-changed.window="refreshStale()"
-         @focusin="note($event)" @mousedown="note($event)">
+         @htmx:after-swap.window="refreshStale()" @htmx:after-swap="placed($event)" @cells-changed.window="refreshStale()">
+      {# A notebook with no cells has no cell to add one under, so it offers the three kinds itself. #}
+      <div class="cells-empty" x-show="empty" {% if cells %}x-cloak{% endif %}>
+        <span>Add a cell:</span>
+        {% for kind, label in [("ai", "+ AI"), ("sql", "+ SQL"), ("markdown", "+ Markdown")] %}
+        <button type="button" data-empty-add="{{ kind }}" hx-post="/n/{{ notebook_id }}/cells" hx-vals='{"kind": "{{ kind }}"}'
+                hx-target="closest .cells-empty" hx-swap="afterend">{{ label }}</button>
+        {% endfor %}
+      </div>
       {% for cell in cells %}{% include "notebook_slot.html" %}{% endfor %}
     </div>
   </div>

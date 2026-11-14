@@ -2,7 +2,7 @@
 
 import re
 
-from conftest import ScriptedLLM
+from conftest import ScriptedLLM, add_below
 from playwright.sync_api import expect
 
 from flood_agent.llm import TextChunk
@@ -12,11 +12,11 @@ def test_the_stale_dot_follows_what_cells_above_send_and_a_rerun_clears_it(live_
     page = live_page(agent=build_agent(ScriptedLLM([TextChunk("One.")], [TextChunk("Two.")])))
     page.get_by_role("button", name="New notebook").click()
     expect(page).to_have_url(re.compile(r"/n/\w+$"))
-    page.locator(".nb-head").get_by_role("button", name="+ Markdown").first.click()
+    add_below(page, "markdown")
     note = page.locator(".cellblock.markdown")
     note.get_by_label("Markdown").fill("Focus on UDP")
     note.get_by_role("button", name="Done").click()
-    page.locator(".nb-head").get_by_role("button", name="+ AI").last.click()
+    add_below(page, "ai")
     cell = page.locator(".cellblock.ai").nth(1)
     cell.get_by_label("Prompt").fill("ask")
     cell.get_by_role("button", name="Run").click()
@@ -41,11 +41,11 @@ def test_the_stale_dot_sits_just_above_and_right_of_the_run_button_in_a_narrow_g
     page = live_page(agent=build_agent(ScriptedLLM([TextChunk("One.")])))
     page.get_by_role("button", name="New notebook").click()
     expect(page).to_have_url(re.compile(r"/n/\w+$"))
-    page.locator(".nb-head").get_by_role("button", name="+ Markdown").click()
+    add_below(page, "markdown")
     note = page.locator(".cellblock.markdown")
     note.get_by_label("Markdown").fill("Focus on UDP")
     note.get_by_role("button", name="Done").click()
-    page.locator(".nb-head").get_by_role("button", name="+ AI").click()
+    add_below(page, "ai")
     cell = page.locator(".cellblock.ai").nth(1)
     cell.get_by_label("Prompt").fill("ask")
     cell.get_by_role("button", name="Run").click()

@@ -2,7 +2,7 @@
 
 import re
 
-from conftest import ScriptedLLM
+from conftest import ScriptedLLM, add_below
 from playwright.sync_api import expect
 
 from flood_agent.llm import TextChunk
@@ -25,7 +25,7 @@ def test_add_move_copy_and_delete_cells_and_the_stale_dot_follows(live_page, bui
     expect(ai.locator(".reply")).to_contain_text("One.")
 
     # Add a Markdown Cell below the AI Cell (the title line's button); sending it to the AI Cell below does nothing yet.
-    page.locator(".nb-head").get_by_role("button", name="+ Markdown").click()
+    add_below(page, "markdown")
     expect(cells).to_have_count(2)
     note = page.locator(".cellblock.markdown")
     expect(cells.nth(1)).to_have_attribute("data-kind", "markdown")
@@ -54,6 +54,7 @@ def test_add_move_copy_and_delete_cells_and_the_stale_dot_follows(live_page, bui
 
     # Delete the note through the dialog: the stale dot goes.
     operate(note, "Delete cell")
+    expect(page.get_by_role("dialog").locator("h3")).to_have_text("Delete this Markdown cell?")
     page.get_by_role("dialog").get_by_role("button", name="Delete", exact=True).click()
     expect(cells).to_have_count(2)
     expect(ai.first.locator(".stale-dot")).to_be_hidden()
@@ -61,23 +62,22 @@ def test_add_move_copy_and_delete_cells_and_the_stale_dot_follows(live_page, bui
     expect(page.locator(".cellblock")).to_have_count(2)
 
 
-def test_the_title_line_stays_put_and_its_buttons_add_below_the_cell_you_are_in(live_page):
+def test_the_insert_strip_adds_below_its_cell_and_the_title_line_stays_put(live_page):
     page = live_page()
     page.get_by_role("button", name="New notebook").click()
     expect(page).to_have_url(re.compile(r"/n/\w+$"))
     cells = page.locator(".cellblock")
-    page.locator(".nb-head").get_by_role("button", name="+ SQL").click()
+    add_below(page, "sql")
     expect(cells).to_have_count(2)
-    page.locator(".nb-head").get_by_role("button", name="+ AI").click()  # the new SQL Cell is the active one
+    add_below(page, "ai")  # below the last cell, the new SQL Cell
     expect(cells).to_have_count(3)
     assert [c.get_attribute("data-kind") for c in cells.all()] == ["ai", "sql", "ai"]
-    cells.first.locator(".head").click()
-    page.locator(".nb-head").get_by_role("button", name="+ Markdown").click()
+    add_below(page, "markdown", cells.first)
     expect(cells).to_have_count(4)
     assert [c.get_attribute("data-kind") for c in cells.all()] == ["ai", "markdown", "sql", "ai"]
     head = page.locator(".nb-head").bounding_box()
     for _ in range(6):
-        page.locator(".nb-head").get_by_role("button", name="+ AI").click()
+        add_below(page, "ai")
     page.locator("#prompt-area").evaluate("e => e.scrollTop = e.scrollHeight")
     assert page.locator(".nb-head").bounding_box() == head
 
@@ -91,7 +91,10 @@ def test_the_cell_toolbar_shows_on_hover_on_every_cell_even_a_rendered_markdown_
     expect(toolbar).to_be_hidden()
     ai.hover()
     expect(toolbar).to_be_visible()
-    page.locator(".nb-head").get_by_role("button", name="+ Markdown").click()
+    expect(toolbar).to_have_css("opacity", re.compile(r"^0\.5"))  # faint until the pointer is on the toolbar itself
+    toolbar.hover()
+    expect(toolbar).to_have_css("opacity", "1")
+    add_below(page, "markdown")
     note = page.locator(".cellblock.markdown")
     note.get_by_label("Markdown").fill("hello")
     note.hover()
@@ -106,9 +109,11 @@ def test_hovering_the_gap_below_a_cell_offers_inserts_that_land_between_cells(li
     page.get_by_role("button", name="New notebook").click()
     expect(page).to_have_url(re.compile(r"/n/\w+$"))
     cells = page.locator(".cellblock")
-    page.locator(".nb-head").get_by_role("button", name="+ Markdown").click()
+    add_below(page, "markdown")
     first = cells.first
     insert = first.get_by_role("group", name="Insert a cell below")
+    page.mouse.move(2, 2)  # away from the strip the add above left the pointer on...
+    page.evaluate("document.activeElement.blur()")  # ...and the focus in
     expect(insert.get_by_role("button", name="+ SQL")).to_be_hidden()
     box = first.locator(".cell").bounding_box()
     assert box
@@ -117,3 +122,24 @@ def test_hovering_the_gap_below_a_cell_offers_inserts_that_land_between_cells(li
     insert.get_by_role("button", name="+ SQL").click()
     expect(cells).to_have_count(3)
     assert [c.get_attribute("data-kind") for c in cells.all()] == ["ai", "sql", "markdown"]
+    expect(cells.nth(1).locator("textarea").first).to_be_focused()  # the new cell is ready to type in
+
+
+def test_a_notebook_with_no_cells_offers_the_three_kinds_in_the_cell_area(live_page):
+    page = live_page()
+    page.get_by_role("button", name="New notebook").click()
+    expect(page).to_have_url(re.compile(r"/n/\w+$"))
+    empty = page.locator(".cells-empty")
+    expect(empty).to_be_hidden()
+    expect(page.locator(".nb-head").get_by_role("button")).to_have_count(0)  # nothing on the title line
+    operate(page.locator(".cellblock"), "Delete cell")
+    page.get_by_role("dialog").get_by_role("button", name="Delete", exact=True).click()
+    expect(page.locator(".cellblock")).to_have_count(0)
+    expect(empty).to_contain_text("Add a cell:")
+    for kind in ("+ AI", "+ SQL", "+ Markdown"):
+        expect(empty.get_by_role("button", name=kind)).to_be_visible()
+    empty.get_by_role("button", name="+ SQL").click()
+    expect(page.locator(".cellblock.sql")).to_have_count(1)
+    expect(empty).to_be_hidden()
+    page.reload()
+    expect(empty).to_be_hidden()

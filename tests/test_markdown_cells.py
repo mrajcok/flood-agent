@@ -78,7 +78,7 @@ def test_plus_markdown_inserts_an_unticked_empty_cell_after_the_given_one(build_
     html, md = add_markdown(client, nb, ai)
 
     assert "Not sent to AI Cells below" in html
-    assert 'data-add="markdown"' in client.get(f"/n/{nb}").text  # the title line offers it
+    assert 'data-insert="markdown"' in client.get(f"/n/{nb}").text  # the insert strip offers it
     assert [c["id"] for c in agent.notebooks.cells(nb)] == [ai, md]
     assert agent.notebooks.cell(md)["draft"] == {"text": "", "send_to_ai": False}
 

@@ -2,7 +2,7 @@
 
 import re
 
-from conftest import ScriptedLLM
+from conftest import ScriptedLLM, add_below
 from playwright.sync_api import expect
 from test_notebook_browser import open_new_notebook, run, write_prompt
 
@@ -59,13 +59,13 @@ def test_a_follow_up_runs_below_its_parent_and_asks_for_it_when_there_is_none_ab
     expect(first.locator(".output")).to_contain_text("first in an AI Cell above")
     expect(first.locator(".gutter .num")).to_have_text("[1]")  # the run has finished and its settings are saved
 
-    page.locator(".nb-head").get_by_role("button", name="+ AI").last.click()  # inherits the last settings: No model
+    add_below(page, "ai")  # inherits the last settings: No model
     second = page.locator(".cellblock.ai").nth(1)
     expect(second.get_by_label(PICKER)).to_be_visible()
     pick(second, PARENT.prompt)
     expect(second.locator(".gutter .num")).to_have_text("[2]")
 
-    page.locator(".nb-head").get_by_role("button", name="+ AI").last.click()
+    add_below(page, "ai")
     third = page.locator(".cellblock.ai").nth(2)
     pick(third, FOLLOW.prompt)
     expect(third.locator(".gutter .num")).to_have_text("[3]")
@@ -113,7 +113,7 @@ def test_one_notebook_mixes_fake_and_real_cells_each_footer_showing_its_model(li
     expect(first.locator(".cell-foot")).to_contain_text("No model")
     expect(first.locator(".cell-foot .ctx")).to_contain_text("no context used")
 
-    page.locator(".nb-head").get_by_role("button", name="+ AI").last.click()
+    add_below(page, "ai")
     second = page.locator(".cellblock.ai").nth(1)
     choose_model(second, "anthropic/claude-opus-5.5")
     write_prompt(second, "now for real")

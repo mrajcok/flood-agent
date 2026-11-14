@@ -22,6 +22,7 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 from mcp.shared.memory import create_client_server_memory_streams
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
 
 from flood_agent.agent import Agent, AgentConfig, TextDelta
@@ -464,3 +465,27 @@ def text_of(events) -> str:
 
 
 __all__ = ["TextChunk"]
+
+
+def add_below(page, kind: str, cell=None):
+    """Add a cell of `kind` ("ai", "sql" or "markdown") with the insert strip under `cell` (the last cell by default):
+    move the pointer into the gap below it, where the strip's buttons appear, and press one. Retried, because a
+    cell that has just finished running or rendering is swapped out under the pointer."""
+    try:
+        page.wait_for_load_state("networkidle", timeout=3000)  # a cell finishing a run or a render is not swapped out mid-click
+    except PlaywrightError:
+        pass
+    for attempt in range(4):  # only the pointer placement is retried; the click that posts is made once
+        try:
+            target = cell or page.locator(".cellblock").last
+            target.scroll_into_view_if_needed()
+            target.locator(".cell-insert").evaluate("e => e.scrollIntoView({ block: 'nearest' })")  # the strip is below the cell
+            box = target.locator(".cell").bounding_box()
+            assert box
+            page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] + 4)
+            break
+        except (PlaywrightError, AssertionError):
+            if attempt == 3:
+                raise
+            page.wait_for_timeout(250)
+    target.locator(f'[data-insert="{kind}"]').click()

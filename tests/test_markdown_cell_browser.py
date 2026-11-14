@@ -2,7 +2,7 @@
 
 import re
 
-from conftest import ScriptedLLM
+from conftest import ScriptedLLM, add_below
 from playwright.sync_api import expect
 
 from flood_agent.llm import TextChunk
@@ -11,7 +11,7 @@ from flood_agent.llm import TextChunk
 def open_notebook_with_markdown(page):
     page.get_by_role("button", name="New notebook").click()
     expect(page).to_have_url(re.compile(r"/n/\w+$"))
-    page.locator(".nb-head").get_by_role("button", name="+ Markdown").first.click()
+    add_below(page, "markdown")
     return page.locator(".cellblock.markdown")
 
 
@@ -56,12 +56,12 @@ def test_a_ticked_note_above_an_ai_cell_is_sent_with_the_run(live_page, build_ag
     page.get_by_role("button", name="New notebook").click()
     expect(page).to_have_url(re.compile(r"/n/\w+$"))
     # a Markdown Cell after the first AI Cell, then a second AI Cell below it
-    page.locator(".nb-head").get_by_role("button", name="+ Markdown").first.click()
+    add_below(page, "markdown")
     note = page.locator(".cellblock.markdown")
     note.get_by_label("Markdown").fill("Focus on UDP")
     note.get_by_label("Send to AI").check()
     note.get_by_role("button", name="Done").click()
-    page.locator(".nb-head").get_by_role("button", name="+ AI").last.click()
+    add_below(page, "ai")
     second = page.locator(".cellblock.ai").nth(1)
     second.get_by_label("Prompt").fill("what now")
     second.get_by_role("button", name="Run").click()
@@ -78,17 +78,13 @@ def test_shift_enter_renders_the_markdown_cell(live_page):
     expect(cell.get_by_label("Markdown")).to_be_hidden()
 
 
-def test_markdown_head_says_markdown_and_carries_the_not_sent_note_and_the_add_buttons_share_the_title_line(live_page):
+def test_markdown_head_says_markdown_and_carries_the_not_sent_note_in_its_header(live_page):
     page = live_page()
     cell = open_notebook_with_markdown(page)
     head = cell.locator(".head")
     expect(head.locator(".kind")).to_have_text("Markdown")
     assert page.evaluate("getComputedStyle(document.querySelector('.cellblock.markdown .kind')).textTransform") == "none"
     expect(head.get_by_text("Not sent to AI Cells below")).to_be_visible()
-    title = page.locator(".nb-title").bounding_box()
-    button = page.locator("[data-add='ai']").bounding_box()
-    assert title and button
-    assert abs((button["y"] + button["height"] / 2) - (title["y"] + title["height"] / 2)) < title["height"]
 
 
 def test_the_edit_button_tooltip_mentions_double_click(live_page):

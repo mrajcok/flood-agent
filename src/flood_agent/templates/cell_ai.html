@@ -130,8 +130,10 @@
           {%- with context=f.context, in_cell=true %}<span class="trace-only"> &middot; </span>{% include "context_meter.html" %}{% endwith %}
           {%- if f.stopped %} <span class="badge stopped">stopped</span>{% elif f.failed %} <span class="badge failed">failed</span>{% endif %}
           <template x-if="edited"><span class="badge edited" title="The prompt or settings changed since this ran; the cells below were sent what ran">edited, not run</span></template></summary>
-        {% if f.trace %}{% with trace=f.trace %}{% include "trace_body.html" %}{% endwith %}{% endif %}
+        {% if f.trace %}{% with trace=f.trace, after_cell=cell.id %}{% include "trace_body.html" %}{% endwith %}{% endif %}
       </details>
+      {% set generated = f.trace.entries|selectattr("sql")|list if f.trace else [] %}
+      {% if generated %}{% from "trace_macros.html" import open_as_sql %}{{ open_as_sql((generated|last).sql, notebook_id, cell.id) }}{% endif %}
     </div>
     {% endif %}
 

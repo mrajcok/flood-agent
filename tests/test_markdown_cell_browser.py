@@ -76,3 +76,16 @@ def test_shift_enter_renders_the_markdown_cell(live_page):
     cell.get_by_label("Markdown").press("Shift+Enter")
     expect(cell.locator(".md-preview h2")).to_have_text("Plan")
     expect(cell.get_by_label("Markdown")).to_be_hidden()
+
+
+def test_markdown_head_says_markdown_and_carries_the_not_sent_note_and_the_add_buttons_share_the_title_line(live_page):
+    page = live_page()
+    cell = open_notebook_with_markdown(page)
+    head = cell.locator(".head")
+    expect(head.locator(".kind")).to_have_text("Markdown")
+    assert page.evaluate("getComputedStyle(document.querySelector('.cellblock.markdown .kind')).textTransform") == "none"
+    expect(head.get_by_text("Not sent to AI Cells below")).to_be_visible()
+    title = page.locator(".nb-title").bounding_box()
+    button = page.locator("[data-add-top='ai']").bounding_box()
+    assert title and button
+    assert abs((button["y"] + button["height"] / 2) - (title["y"] + title["height"] / 2)) < title["height"]

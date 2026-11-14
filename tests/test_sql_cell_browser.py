@@ -104,6 +104,20 @@ def test_the_table_dropdown_is_grouped_and_searchable_and_leaves_the_sql_unchang
     expect(second.locator(".tbl-cols .col").nth(3)).to_have_attribute("title", "INTEGER")
 
 
+def test_column_and_table_name_chips_are_borderless_proportional_and_still_highlight_on_hover(live_page, build_agent):
+    page = live_page(agent=build_agent(ScriptedLLM()))
+    cell = add_sql_cell(page)
+    pick_table(cell, "flows")
+    col = cell.locator(".tbl-cols .col").first
+    style = "e => { const s = getComputedStyle(e); return [s.borderTopWidth, s.fontFamily, s.backgroundColor]; }"
+    width, _, rest = col.evaluate(style)
+    assert width == "0px"
+    for chip in (col, cell.locator(".tbl-cols .tname")):
+        assert "mono" not in chip.evaluate(style)[1].lower()
+    col.hover()
+    assert col.evaluate(style)[2] != rest
+
+
 def test_clicking_columns_builds_a_list_at_the_cursor_and_the_table_name_goes_in_too(live_page, build_agent):
     page = live_page(agent=build_agent(ScriptedLLM()))
     cell = add_sql_cell(page)

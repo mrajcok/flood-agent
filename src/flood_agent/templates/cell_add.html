@@ -1,6 +1,6 @@
 {# The bar after a cell: one button per kind of cell it can add. #}
 <div class="add-bar" data-after="{{ cell.id }}">
-  {% for kind, label in [("ai", "+ AI"), ("markdown", "+ Markdown")] %}
+  {% for kind, label in [("ai", "+ AI"), ("sql", "+ SQL"), ("markdown", "+ Markdown")] %}
   <button type="button" data-add="{{ kind }}" hx-post="/n/{{ notebook_id }}/cells" hx-vals='{"kind": "{{ kind }}", "after": "{{ cell.id }}"}'
           hx-target="closest .add-bar" hx-swap="afterend">{{ label }}</button>
   {% endfor %}

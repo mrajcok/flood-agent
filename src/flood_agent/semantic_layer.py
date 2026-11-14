@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING
 
 import yaml
 
+from flood_agent import table_names
+
 if TYPE_CHECKING:  # annotations only: no import-time coupling to the Catalog
     from flood_agent.catalog import Table
 
@@ -132,5 +134,8 @@ class SemanticLayer:
         ]
         for t in tables:
             cols = ", ".join(f"{c['name']} {c['type']}" for c in t.columns)
-            lines.append(f"- {t.name} ({t.title}): columns {cols}; from request: {t.request!r}")
+            if t.request == table_names.SQL_CELL_REQUEST:
+                lines.append(f"- {t.name} (SQL Cell) {t.title}: columns {cols}")
+            else:
+                lines.append(f"- {t.name} ({t.title}): columns {cols}; from request: {t.request!r}")
         return "\n".join(lines) + "\n"

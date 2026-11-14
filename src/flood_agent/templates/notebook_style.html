@@ -13,6 +13,15 @@
   .cellblock .not-sent { margin: .25rem 0 0; font-size: .78rem; color: #8a91a3; font-style: italic; }
   .cellblock .md-preview { min-height: 1.2rem; cursor: text; }
   .cellblock .cell.ai { border-left-color: #4a6fd3; }
+  .cellblock .cell.sql { border-left-color: #2f9e6e; }
+  .cellblock textarea.cell-sql { font-family: ui-monospace, Menlo, monospace; font-size: .88rem; }
+  .cellblock .head .explain { font: inherit; font-size: .8rem; padding: 0 .5rem; border: 1px solid #e0c36a; border-radius: .4rem; background: #fff4d1; color: #5c4300; cursor: pointer; }
+  .cellblock .head .explain:hover:not(:disabled) { background: #ffe8a3; }
+  .cellblock .head .explain:disabled { opacity: .5; cursor: default; }
+  .cellblock .sql-error { white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace; }
+  .cellblock .badge.truncated { background: #fff4d1; color: #5c4300; }
+  /* A SQL Cell's Run is its refresh: its table has no refresh icon or "as of" time of its own. */
+  .cellblock.sql .table-name .refresh, .cellblock.sql .table-name .as-of { display: none !important; }
   .cellblock.running .cell { box-shadow: 0 0 0 2px #c9d6f6; }
   .cellblock .head { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; font-size: .85rem; }
   .cellblock .kind { font-size: .7rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #8a91a3; }

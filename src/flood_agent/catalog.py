@@ -304,6 +304,13 @@ class CatalogView:
                 "SELECT * FROM result_tables WHERE cell_id=? AND run_id=? ORDER BY created_at, name", (cell_id, run_id))
             return [self._table(r) for r in rows if self._is_live(r, now)]
 
+    def tables_of_cell(self, cell_id: str) -> list[Table]:
+        """The live Result and Saved Tables any Run of a Cell made, oldest first."""
+        now = self._now()
+        with closing(self._connect()) as con:
+            rows = con.execute("SELECT * FROM result_tables WHERE cell_id=? ORDER BY created_at, name", (cell_id,))
+            return [self._table(r) for r in rows if self._is_live(r, now)]
+
     def names(self) -> list[str]:
         """Names of every live Result and Saved Table, across Conversations, sorted."""
         now = self._now()
@@ -393,6 +400,13 @@ class Catalog(CatalogView):
     def restore_refresh(self, before: Table) -> None:
         """Put back what `record_refresh` changed, given the table it returned. Needs no liveness check."""
         self._write_refresh(before.name, before.as_of_ms, before.columns, before.truncated_to)
+
+    def reown_for_rerun(self, name: str, owner: CellRun, title: str, sql: str, max_rows: int) -> None:
+        """A SQL Cell's re-run has put fresh rows under `name` (after `record_refresh`): the table now belongs
+        to the cell's new Run and is described by the SQL that made them."""
+        with closing(self._connect()) as con, con:
+            con.execute("UPDATE result_tables SET cell_id=?, run_id=?, title=?, sql=?, max_rows=? WHERE name=?",
+                        (owner.cell_id, owner.run_id, title, sql, max_rows, canonical(name)))
 
     def _write_refresh(self, name: str, as_of_ms: int, columns: list[dict], truncated_to: int | None) -> None:
         with closing(self._connect()) as con, con:

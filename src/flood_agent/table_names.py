@@ -33,3 +33,7 @@ def is_result_table_name(name: str) -> bool:
 def quote(identifier: str) -> str:
     """`identifier` as a quoted SQL identifier."""
     return '"' + identifier.replace('"', '""') + '"'
+
+
+# The `request` a SQL Cell's Result Table is registered with: no prompt made it, the user's SQL did.
+SQL_CELL_REQUEST = "(SQL Cell)"

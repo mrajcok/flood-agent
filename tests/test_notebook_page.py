@@ -136,7 +136,7 @@ def test_a_new_ai_cell_starts_with_the_last_settings_run(build_agent, web_client
     assert added.text.count('data-kind="ai"') == 1
     page = client.get(f"/n/{nb}").text
     assert page.index(cell) < page.index(re.findall(r'data-cell-id="(\w+)"', added.text)[0])  # after the first cell
-    assert client.post(f"/n/{nb}/cells", data={"kind": "sql"}).status_code == 422  # only AI Cells exist so far
+    assert client.post(f"/n/{nb}/cells", data={"kind": "nonsense"}).status_code == 422
 
 
 def test_a_cells_draft_is_saved_and_shown_when_the_page_is_opened_again(build_agent, web_client):

@@ -324,6 +324,10 @@ def create_app(
         s = new_cell_settings()
         return agent.add_ai_cell(notebook_id, model=s["model"], effort=s["effort"], max_rows=s["max_rows"], after=after)
 
+    def add_sql_cell(notebook_id: str, after: str | None = None) -> str:
+        last = agent.notebooks.last_settings("sql")
+        return agent.add_sql_cell(notebook_id, max_rows=last["max_rows"] if last else DEFAULT_MAX_ROWS, after=after)
+
     def output_items(run: dict) -> list[dict]:
         """What a finished (or stopped) Run shows under its prompt: the answer's text and its Displays, in order."""
         transcript = agent.notebooks.transcript(run["id"])
@@ -351,7 +355,8 @@ def create_app(
                     "text": draft.get("text", ""), "send_to_ai": bool(draft.get("send_to_ai"))}
         model = draft.get("model") or default_model
         view = {
-            "id": cell["id"], "notebook_id": cell["notebook_id"], "kind": cell["kind"], "prompt": draft["prompt"],
+            "id": cell["id"], "notebook_id": cell["notebook_id"], "kind": cell["kind"], "prompt": draft.get("prompt", ""),
+            "sql": draft.get("sql", ""),
             "model": model, "effort": draft.get("effort") or "", "max_rows": draft.get("max_rows") or DEFAULT_MAX_ROWS,
             "running": starting, "streaming": starting, "polling": False, "status": None, "number": None,
             "output": [], "footer": None,
@@ -363,6 +368,11 @@ def create_app(
         if run["status"] == "running" and agent.running_cell(cell["notebook_id"]) == cell["id"]:
             view["running"] = view["polling"] = True  # opened mid-run: nothing streams to this page, so it re-fetches
         view["output"] = output_items(run)
+        if cell["kind"] == "sql":
+            view["result"] = run["result"]
+            view["ran_utc"] = time.strftime("%H:%M UTC", time.gmtime(run["started_at"] / 1000))
+            view["started_at_ms"] = run["started_at"]
+            return view
         ran = run["settings"]
         trace = run["trace"]
         view["footer"] = {
@@ -418,12 +428,14 @@ def create_app(
         """Insert a cell after `after` (or at the end); returns it, with its "add a cell" bar, for htmx to place."""
         if not agent.notebooks.exists(notebook_id):
             raise HTTPException(404, "unknown notebook")
-        if kind not in ("ai", MARKDOWN):
+        if kind not in ("ai", "sql", MARKDOWN):
             raise HTTPException(422, f"unknown cell kind {kind!r}")
         if after:
             known_cell(notebook_id, after)
         if kind == MARKDOWN:
             cell_id = agent.add_markdown_cell(notebook_id, after=after or None)
+        elif kind == "sql":
+            cell_id = add_sql_cell(notebook_id, after or None)
         else:
             cell_id = add_ai_cell(notebook_id, after or None)
         return cell_html(notebook_id, cell_id, "notebook_slot.html")
@@ -435,9 +447,12 @@ def create_app(
 
     @app.post("/n/{notebook_id}/cells/{cell_id}/draft", status_code=204)
     def save_draft(notebook_id: str, cell_id: str, prompt: str = Form(""), model: str = Form(""),
-                   effort: str = Form(""), max_rows: str = Form("")):
-        """Remember an AI Cell's edited prompt and settings without running them."""
-        known_cell(notebook_id, cell_id)
+                   effort: str = Form(""), max_rows: str = Form(""), sql: str = Form("")):
+        """Remember a cell's edited prompt (or SQL) and settings without running them."""
+        cell = known_cell(notebook_id, cell_id)
+        if cell["kind"] == "sql":
+            agent.notebooks.edit_cell(cell_id, sql=sql, max_rows=_parse_max_rows(max_rows))
+            return
         agent.notebooks.edit_ai_cell(cell_id, **posted_settings(prompt, model, effort, max_rows))
 
     @app.post("/n/{notebook_id}/cells/{cell_id}/markdown", status_code=204)
@@ -449,15 +464,20 @@ def create_app(
 
     @app.post("/n/{notebook_id}/cells/{cell_id}/run", response_class=HTMLResponse)
     def run_cell(notebook_id: str, cell_id: str, prompt: str = Form(""), model: str = Form(""),
-                 effort: str = Form(""), max_rows: str = Form("")):
-        """Save the cell's prompt and settings as its Draft and return the cell, running; its stream starts the Run."""
-        if known_cell(notebook_id, cell_id)["kind"] != "ai":
-            raise HTTPException(422, "only AI Cells run")
-        if not prompt.strip():
-            raise HTTPException(422, "Write a prompt to run")
+                 effort: str = Form(""), max_rows: str = Form(""), sql: str = Form("")):
+        """Save the cell's prompt (or SQL) and settings as its Draft and return the cell, running; its stream starts the Run."""
+        cell = known_cell(notebook_id, cell_id)
+        if cell["kind"] not in ("ai", "sql"):
+            raise HTTPException(422, "only AI and SQL Cells run")
+        is_sql = cell["kind"] == "sql"
+        if not (sql if is_sql else prompt).strip():
+            raise HTTPException(422, "Write some SQL to run" if is_sql else "Write a prompt to run")
         if agent.running_cell(notebook_id):
             raise HTTPException(409, "A cell in this notebook is already running")
-        agent.notebooks.edit_ai_cell(cell_id, **posted_settings(prompt, model, effort, max_rows))
+        if is_sql:
+            agent.notebooks.edit_cell(cell_id, sql=sql, max_rows=_parse_max_rows(max_rows))
+        else:
+            agent.notebooks.edit_ai_cell(cell_id, **posted_settings(prompt, model, effort, max_rows))
         return cell_html(notebook_id, cell_id, "notebook_cell.html", starting=True)
 
     @app.get("/n/{notebook_id}/cells/{cell_id}/stream")

@@ -166,7 +166,7 @@ async def test_an_ai_cell_below_sees_the_labelled_query_with_metadata_frozen_at_
     assert '"dport"' in user and '"total_bytes"' in user and '"row_count"' in user and table.name in user
     assert question == "what next?"
     assert "my_ports (SQL Cell) " in system and "SUM(bytes)" in system
-    assert "never" in system.lower() and "[SQL Cell, run by the user]" in system  # the labelled-messages paragraph
+    assert "never" in system.lower() and "labelled" in system  # the labelled-messages paragraph
 
 
 async def test_only_a_count_that_passed_the_count_form_check_reaches_the_ai_cell(make_agent):

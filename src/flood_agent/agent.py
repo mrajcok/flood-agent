@@ -24,7 +24,7 @@ from flood_agent.llm import LLMClient, LLMError, ModelSpec, TextChunk, ToolCallC
 from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
 from flood_agent.mcp_protocol import QUERY_TOOLS
 from flood_agent.mcp_server import ServerSettings
-from flood_agent.notebooks import DEFAULT_MAX_ROWS, SQL, NotebookStore
+from flood_agent.notebooks import DEFAULT_MAX_ROWS, MARKDOWN, MARKDOWN_NOTE_LABEL, SQL, NotebookStore
 from flood_agent.semantic_layer import SemanticLayer
 from flood_agent.store import COUNT_KIND, ConversationStore
 from flood_agent.trace import TraceBuilder, context_tokens
@@ -456,6 +456,11 @@ class Agent:
         """Add a SQL Cell (after cell `after`, or at the end) whose Draft holds its SQL and row cap."""
         return self.notebooks.add_cell(notebook_id, SQL, {"sql": sql, "max_rows": max_rows}, after)
 
+    def add_markdown_cell(self, notebook_id: str, text: str = "", send_to_ai: bool = False,
+                          after: str | None = None) -> str:
+        """Add a Markdown Cell. Its text reaches the AI Cells below only while `send_to_ai` is ticked."""
+        return self.notebooks.add_cell(notebook_id, MARKDOWN, {"text": text, "send_to_ai": send_to_ai}, after)
+
     async def run_cell(self, notebook_id: str, cell_id: str) -> AsyncIterator[Event]:
         """Run a cell, with what its Draft holds, and stream its events (`start()` first). A SQL Cell runs its
         SQL without the LLM (see `_run_sql_cell`); an AI Cell as follows.
@@ -500,7 +505,11 @@ class Agent:
         for other in self.notebooks.cells(notebook_id):
             if other["id"] == cell_id:
                 break
-            if other["run"]:
+            if other["kind"] == MARKDOWN:
+                text = other["draft"].get("text", "").strip()
+                if other["draft"].get("send_to_ai") and text:
+                    history.append({"role": "user", "content": f"{MARKDOWN_NOTE_LABEL} {text}"})
+            elif other["run"]:
                 history += repair_history(other["run"]["messages"])
                 above.append((other["id"], other["run"]["id"]))
         fingerprint = hashlib.sha256(json.dumps(history, sort_keys=True).encode()).hexdigest()

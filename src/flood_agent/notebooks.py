@@ -1,7 +1,7 @@
 """Notebook storage: Notebooks, their ordered Cells (kind + Draft) and each Cell's latest Run.
 
 Lives in the app database beside Conversations. A Cell has at most one Run, its latest: starting a new
-Run replaces the old one (its messages, Displays and Trace) under a new id. Only AI Cells exist so far.
+Run replaces the old one (its messages, Displays and Trace) under a new id. AI and Markdown Cells exist so far (a Markdown Cell never has a Run).
 A Run's Result Tables are the Catalog's, recorded against the `CellRun(cell_id, run_id)` that made them.
 """
 
@@ -61,6 +61,8 @@ CREATE TABLE IF NOT EXISTS run_displays (
 
 AI = "ai"
 SQL = "sql"
+MARKDOWN = "markdown"
+MARKDOWN_NOTE_LABEL = "[Markdown note]"  # prefixes a ticked Markdown Cell's text in an AI Cell's context
 DEFAULT_MAX_ROWS = 1000
 
 
@@ -147,7 +149,7 @@ class NotebookStore:
 
     def edit_cell(self, cell_id: str, **changes) -> None:
         """Change fields of a cell's Draft (an AI Cell's prompt, model, effort, max_rows; a SQL Cell's sql,
-        max_rows). The latest Run is untouched."""
+        max_rows; a Markdown Cell's text, send_to_ai). The latest Run is untouched."""
         with closing(self._connect()) as con, con:
             row = con.execute("SELECT notebook_id, draft FROM cells WHERE id=?", (cell_id,)).fetchone()
             if row is None:

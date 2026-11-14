@@ -1,5 +1,5 @@
 {# One Trace entry; `step` numbers an llm_step. Used by the finished Trace and the live view (which has no `parts`, so no prompt-change notes). #}
-{% from "trace_macros.html" import cache_parts %}
+{% from "trace_macros.html" import cache_parts, open_as_sql %}
 <section class="trace-entry trace-{{ e.kind }}">
     {% if e.kind == "llm_step" %}
       <h4>LLM step {{ step }} &middot; {{ e.duration_ms }} ms{% if e.request_bytes %} &middot; {{ "%.1f"|format(e.request_bytes / 1024) }} KB sent{% endif %}{% if e.usage %} &middot; {{ e.usage.prompt_tokens }} tokens in / {{ e.usage.completion_tokens }} out{{ cache_parts(e.usage) }}{% if e.usage.cost is not none %} &middot; ${{ "%.3f"|format(e.usage.cost) }}{% endif %}{% endif %}</h4>
@@ -12,7 +12,7 @@
       {% for c in e.raw_response.tool_calls %}<p>Tool call {{ c.name }} ({{ c.id }})</p><pre>{{ c.arguments }}</pre>{% endfor %}
     {% elif e.kind == "tool_call" %}
       <h4>Tool {{ e.name }} &middot; {{ e.duration_ms }} ms</h4>
-      {% if e.sql %}<p class="sql-label">Generated SQL <button type="button" class="explain" data-sql="{{ e.sql }}" onclick="explainSql(this)" title="Show how the database would run this query (its Query Plan); no LLM">Explain</button></p><pre>{{ e.sql }}</pre>{% endif %}
+      {% if e.sql %}<p class="sql-label">Generated SQL <button type="button" class="explain" data-sql="{{ e.sql }}" onclick="explainSql(this)" title="Show how the database would run this query (its Query Plan); no LLM">Explain</button>{% if after_cell %}{{ open_as_sql(e.sql, notebook_id, after_cell) }}{% endif %}</p><pre>{{ e.sql }}</pre>{% endif %}
       {% if e.executed_sql %}<p>Executed CTAS</p><pre>{{ e.executed_sql }}</pre>{% endif %}
       <p>Sent to the LLM (Query Metadata / tool result)</p><pre>{{ e.query_metadata }}</pre>
     {% elif e.kind == "query_error" %}

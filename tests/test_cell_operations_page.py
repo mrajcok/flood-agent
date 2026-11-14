@@ -18,7 +18,7 @@ def test_at_start_inserts_above_the_first_cell(build_agent, web_client):
     r = client.post(f"/n/{nb}/cells", data={"kind": "markdown", "at": "start"})
     top = re.search(r'data-cell-id="(\w+)" data-kind="markdown"', r.text).group(1)
     assert order(agent, nb) == [top, ai]
-    assert 'data-add-top="sql"' in client.get(f"/n/{nb}").text
+    assert 'data-add="sql"' in client.get(f"/n/{nb}").text
 
 
 def test_move_copy_and_delete_persist(build_agent, web_client):

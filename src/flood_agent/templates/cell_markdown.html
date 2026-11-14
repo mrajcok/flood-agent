@@ -17,6 +17,7 @@
                } }">
   <div class="gutter"></div>
   <div class="cell md-cell">
+    {% include "cell_tools.html" %}
     <div class="head">
       <span class="kind">Markdown</span>
       <span class="not-sent" x-show="!send" {% if cell.send_to_ai %}x-cloak{% endif %}>Not sent to AI Cells below</span>

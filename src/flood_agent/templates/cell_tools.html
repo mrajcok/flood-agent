@@ -1,0 +1,15 @@
+{# Two hover affordances of a cell. The insert strip sits in the gap below it and shows + AI / + SQL / + Markdown while the
+   pointer is on it, to add a cell between this one and the next. The cell operations are a small toolbar on the cell's top-right edge that shows while the pointer is over the cell
+   (or focus is inside it), on every kind of cell. They wait for any running cell (`busy`, see notebook.html). #}
+<div class="cell-tools" role="group" aria-label="Cell operations">
+  <button type="button" data-op="copy" aria-label="Copy cell" title="Copy this cell below it" :disabled="busy" @click="cellOp($el, 'copy')">&#x29C9;</button>
+  <button type="button" data-op="up" aria-label="Move cell up" title="Move this cell up" :disabled="busy" @click="cellOp($el, 'up')">&#x2191;</button>
+  <button type="button" data-op="down" aria-label="Move cell down" title="Move this cell down" :disabled="busy" @click="cellOp($el, 'down')">&#x2193;</button>
+  <button type="button" data-op="delete" aria-label="Delete cell" title="Delete this cell" :disabled="busy" @click="cellOp($el, 'delete')">&#x1F5D1;&#xFE0E;</button>
+</div>
+<div class="cell-insert" role="group" aria-label="Insert a cell below">
+  {% for kind, label in [("ai", "AI"), ("sql", "SQL"), ("markdown", "Markdown")] %}
+  <button type="button" data-insert="{{ kind }}" title="Insert a {{ label }} Cell below this one"
+          hx-post="/n/{{ notebook_id }}/cells" hx-vals='{"kind": "{{ kind }}", "after": "{{ cell.id }}"}' hx-target="closest .cellblock" hx-swap="afterend">+ {{ label }}</button>
+  {% endfor %}
+</div>

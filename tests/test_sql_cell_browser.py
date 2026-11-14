@@ -10,7 +10,7 @@ from test_sql_cells import SLOW
 def add_sql_cell(page):
     page.get_by_role("button", name="New notebook").click()
     expect(page).to_have_url(re.compile(r"/n/\w+$"))
-    page.locator(".add-bar").first.get_by_role("button", name="+ SQL").click()
+    page.locator(".nb-head").get_by_role("button", name="+ SQL").click()
     cell = page.locator(".cellblock.sql")
     expect(cell).to_have_count(1)
     return cell
@@ -48,7 +48,7 @@ def test_the_rows_chip_caps_the_table_and_the_next_sql_cell_starts_with_it(live_
     expect(cell.locator(".sql-status")).to_contain_text("1 row")
     expect(cell.locator(".sql-status")).to_contain_text("1-row cap")
 
-    page.locator(".add-bar").last.get_by_role("button", name="+ SQL").click()
+    page.locator(".nb-head").get_by_role("button", name="+ SQL").click()
     expect(page.locator(".cellblock.sql").nth(1).locator(".chip")).to_have_text("≤ 1 rows ▾")
 
 
@@ -89,7 +89,7 @@ def test_the_table_dropdown_is_grouped_and_searchable_and_starts_a_query_in_an_e
     expect(cell.locator(".table-name .name")).to_have_text(re.compile(r"rt_\d+"))
     result = cell.locator(".table-name .name").inner_text()
 
-    page.locator(".add-bar").last.get_by_role("button", name="+ SQL").click()
+    page.locator(".nb-head").get_by_role("button", name="+ SQL").click()
     second = page.locator(".cellblock.sql").nth(1)
     second.get_by_role("button", name="Table ▾").click()
     expect(second.locator(".tlabel")).to_have_text(["Telemetry", "Result"])
@@ -144,7 +144,7 @@ def test_a_keyword_column_is_quoted_on_insert_and_unquoted_one_is_rejected_with_
     expect(cell.locator(".table-name .name")).to_have_text(re.compile(r"rt_\d+"))
     result = cell.locator(".table-name .name").inner_text()
 
-    page.locator(".add-bar").last.get_by_role("button", name="+ SQL").click()
+    page.locator(".nb-head").get_by_role("button", name="+ SQL").click()
     second = page.locator(".cellblock.sql").nth(1)
     pick_table(second, result)
     second.locator(".tbl-cols").get_by_role("button", name="analyze", exact=True).click()

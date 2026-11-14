@@ -429,8 +429,8 @@ def create_app(
     @app.post("/n/{notebook_id}/cells", response_class=HTMLResponse)
     def add_cell(notebook_id: str, kind: str = Form("ai"), after: str | None = Form(None), at: str = Form(""),
                  sql: str = Form("")):
-        """Insert a cell after `after` (or at the end; at the very top with `at=start`); returns it, with its
-        "add a cell" bar, for htmx to place. A SQL Cell starts with `sql` as its Draft (Open as SQL Cell)."""
+        """Insert a cell after `after` (or at the end; at the very top with `at=start`); returns it, for the
+        page to place. A SQL Cell starts with `sql` as its Draft (Open as SQL Cell)."""
         if not agent.notebooks.exists(notebook_id):
             raise HTTPException(404, "unknown notebook")
         if kind not in ("ai", "sql", MARKDOWN):
@@ -463,7 +463,7 @@ def create_app(
 
     @app.post("/n/{notebook_id}/cells/{cell_id}/copy", response_class=HTMLResponse)
     def copy_cell(notebook_id: str, cell_id: str):
-        """Copy the cell's Draft into a new cell just below it; returns it with its bar, for htmx to place."""
+        """Copy the cell's Draft into a new cell just below it; returns it, for the page to place."""
         new_id = cell_operation(notebook_id, cell_id, lambda: agent.copy_cell(notebook_id, cell_id))
         return cell_html(notebook_id, new_id, "notebook_slot.html")
 
@@ -478,7 +478,7 @@ def create_app(
     @app.post("/n/{notebook_id}/cells/{cell_id}/copy-to-markdown", response_class=HTMLResponse)
     def copy_to_markdown(notebook_id: str, cell_id: str, save: list[str] = Form([])):
         """Insert a Markdown Cell below the AI Cell with its answer and Displays; each `save` is "rt_name:new_name"
-        (that table is renamed, so a Saved Table). Returns the new cell with its bar, for htmx to place."""
+        (that table is renamed, so a Saved Table). Returns the new cell, for the page to place."""
         pairs = {old: new for old, _, new in (item.partition(":") for item in save)}
         try:
             new_id = cell_operation(notebook_id, cell_id, lambda: agent.copy_to_markdown_cell(notebook_id, cell_id, pairs))

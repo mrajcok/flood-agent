@@ -11,7 +11,7 @@ from flood_agent.llm import TextChunk
 def open_notebook_with_markdown(page):
     page.get_by_role("button", name="New notebook").click()
     expect(page).to_have_url(re.compile(r"/n/\w+$"))
-    page.get_by_role("button", name="+ Markdown").first.click()
+    page.locator(".nb-head").get_by_role("button", name="+ Markdown").first.click()
     return page.locator(".cellblock.markdown")
 
 
@@ -56,12 +56,12 @@ def test_a_ticked_note_above_an_ai_cell_is_sent_with_the_run(live_page, build_ag
     page.get_by_role("button", name="New notebook").click()
     expect(page).to_have_url(re.compile(r"/n/\w+$"))
     # a Markdown Cell after the first AI Cell, then a second AI Cell below it
-    page.get_by_role("button", name="+ Markdown").first.click()
+    page.locator(".nb-head").get_by_role("button", name="+ Markdown").first.click()
     note = page.locator(".cellblock.markdown")
     note.get_by_label("Markdown").fill("Focus on UDP")
     note.get_by_label("Send to AI").check()
     note.get_by_role("button", name="Done").click()
-    page.get_by_role("button", name="+ AI").last.click()
+    page.locator(".nb-head").get_by_role("button", name="+ AI").last.click()
     second = page.locator(".cellblock.ai").nth(1)
     second.get_by_label("Prompt").fill("what now")
     second.get_by_role("button", name="Run").click()
@@ -86,7 +86,7 @@ def test_markdown_head_says_markdown_and_carries_the_not_sent_note_and_the_add_b
     assert page.evaluate("getComputedStyle(document.querySelector('.cellblock.markdown .kind')).textTransform") == "none"
     expect(head.get_by_text("Not sent to AI Cells below")).to_be_visible()
     title = page.locator(".nb-title").bounding_box()
-    button = page.locator("[data-add-top='ai']").bounding_box()
+    button = page.locator("[data-add='ai']").bounding_box()
     assert title and button
     assert abs((button["y"] + button["height"] / 2) - (title["y"] + title["height"] / 2)) < title["height"]
 

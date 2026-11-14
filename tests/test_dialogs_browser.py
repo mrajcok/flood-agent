@@ -101,7 +101,8 @@ def test_deleting_a_cell_with_a_saved_table_says_the_saved_table_is_kept(build_a
     agent.tables.update(table, "keeper")
     page.reload()  # the Saved Table's name shows on the cell's Display
 
-    page.get_by_role("button", name="Delete cell").first.click()
+    cell.hover()
+    cell.get_by_role("button", name="Delete cell").click()
     dialog = page.locator("#delete-dialog")
     expect(dialog).to_have_attribute("open", "")
     expect(dialog.get_by_role("radio")).to_have_count(0)

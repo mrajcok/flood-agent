@@ -1,4 +1,4 @@
 {# Older stored traces have no cache_write_tokens, hence the truthiness tests. #}
 {% macro cache_parts(u) %}{% if u.cached_tokens %} &middot; {{ u.cached_tokens }} cached{% endif %}{% if u.cache_write_tokens %} &middot; {{ u.cache_write_tokens }} cache write{% endif %}{% endmacro %}
-{# "Open as SQL Cell": inserts a SQL Cell holding `sql` just below the AI Cell `cell_id` (above that cell's own add bar). #}
-{% macro open_as_sql(sql, notebook_id, cell_id) %}<button type="button" class="open-sql" hx-post="/n/{{ notebook_id }}/cells" hx-vals="{{ {'kind': 'sql', 'after': cell_id, 'sql': sql}|tojson|forceescape }}" hx-target="#cell-{{ cell_id }} + .add-bar" hx-swap="afterend" title="Insert a SQL Cell below this one holding this SQL, ready to run; no LLM">Open as SQL Cell</button>{% endmacro %}
+{# "Open as SQL Cell": inserts a SQL Cell holding `sql` just below the AI Cell `cell_id` #}
+{% macro open_as_sql(sql, notebook_id, cell_id) %}<button type="button" class="open-sql" hx-post="/n/{{ notebook_id }}/cells" hx-vals="{{ {'kind': 'sql', 'after': cell_id, 'sql': sql}|tojson|forceescape }}" hx-target="#cell-{{ cell_id }}" hx-swap="afterend" title="Insert a SQL Cell below this one holding this SQL, ready to run; no LLM">Open as SQL Cell</button>{% endmacro %}

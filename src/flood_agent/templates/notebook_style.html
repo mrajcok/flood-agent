@@ -1,11 +1,12 @@
 <style>
   .nb { padding-right: .5rem; position: relative; }
   .nb .nb-title { margin: .2rem 0 .4rem; font-size: 1.15rem; }
-  /* The add-at-the-top buttons sit on the title's line (out of flow, so cells still insert after them). */
-  .nb .add-top { position: absolute; top: .2rem; right: .5rem; margin: 0; padding-left: 0; }
-  .cellblock { display: flex; gap: .4rem; margin: .5rem 0 0; }
-  .cellblock .stale-dot { display: inline-block; width: .55rem; height: .55rem; margin-right: .3rem; border-radius: 50%; background: #d98a00; }
-  .cellblock .gutter { width: 3.2rem; flex: none; text-align: right; font-family: ui-monospace, Menlo, monospace; font-size: .78rem; color: #8a91a3; padding-top: .45rem; }
+  .cellblock { display: flex; gap: .4rem; margin: calc(.5rem + 4px) 0 0; }
+  /* Room above the first cell so its hover toolbar is not clipped by the fixed title line. */
+  #cells { padding-top: .6rem; }
+  /* The stale dot sits just above and to the right of the Run button, out of the flow, so the gutter needs no room for it. */
+  .cellblock .stale-dot { position: absolute; top: .3rem; right: -.2rem; z-index: 1; width: .55rem; height: .55rem; border-radius: 50%; background: #d98a00; }
+  .cellblock .gutter { position: relative; width: 2.2rem; flex: none; text-align: right; font-family: ui-monospace, Menlo, monospace; font-size: .78rem; color: #8a91a3; padding-top: .45rem; }
   .cellblock .gbtn { font: inherit; border: 0; background: #eef3fd; color: #2a4ba0; border-radius: 50%; width: 1.7rem; height: 1.7rem; cursor: pointer; }
   .cellblock .gbtn:disabled { opacity: .45; cursor: default; }
   .cellblock .gbtn.stop { background: #fde8e8; color: #a40; }
@@ -82,9 +83,18 @@
   .cellblock .cell-foot .meter { display: inline-block; width: 3.5rem; height: .35rem; background: #e3e7ef; border-radius: 999px; overflow: hidden; vertical-align: middle; }
   .cellblock .cell-foot .meter i { display: block; height: 100%; background: #4a6fd3; }
   .cellblock .cell-foot .amber .meter i { background: #d98e04; } .cellblock .cell-foot .red .meter i { background: #c0392b; }
-  .add-bar, .add-top { display: flex; gap: .5rem; justify-content: center; margin: .25rem 0; opacity: .55; padding-left: 3.6rem; }
-  .add-bar .cell-ops { margin-left: auto; display: inline-flex; gap: .25rem; }
-  .add-bar .cell-ops button { min-width: 1.8rem; }
-  .add-bar:hover, .add-bar:focus-within, .add-top:hover, .add-top:focus-within { opacity: 1; }
-  .add-bar button { font: inherit; font-size: .8rem; color: #2a4ba0; background: #eef3fd; border: 1px solid #b9c7e6; border-radius: 999px; padding: .05rem .7rem; cursor: pointer; }
+  .nb-head { flex: none; display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; padding-right: .5rem; border-bottom: 1px solid #e3e7ef; margin-bottom: .3rem; }
+  .nb-head .nb-title { margin: .2rem 0 .4rem; font-size: 1.15rem; }
+  .nb-add { display: inline-flex; gap: .5rem; padding-bottom: .3rem; }
+  .nb-add button, .cell-tools button { font: inherit; font-size: .8rem; color: #2a4ba0; background: #eef3fd; border: 1px solid #b9c7e6; border-radius: 999px; padding: .05rem .7rem; cursor: pointer; }
+  .nb-add button:hover, .cell-tools button:hover:not(:disabled) { background: #dce7fb; }
+  /* Cell operations: a toolbar straddling the cell's top-right edge, shown while the pointer is over the cell or focus is in it. */
+  .cell-tools { position: absolute; top: -1.4rem; right: .6rem; z-index: 3; display: inline-flex; gap: .15rem; opacity: 0; visibility: hidden; transition: opacity var(--fade, .2s), visibility 0s linear var(--fade, .2s); padding: .15rem; background: #fff; border: 1px solid #c8cfdd; border-radius: .4rem; box-shadow: 0 1px 4px #0002; }
+  .cellblock:hover .cell-tools, .cellblock:focus-within .cell-tools { opacity: 1; visibility: visible; transition-delay: 0s; }
+  /* Insert strip: invisible until the pointer is on the gap below the cell; no line, just the three buttons. */
+  .cell-insert { position: absolute; left: 0; right: 0; bottom: -.75rem; height: .75rem; z-index: 2; display: flex; justify-content: center; align-items: center; gap: .5rem; }
+  .cell-insert button { font: inherit; font-size: .8rem; color: #2a4ba0; background: #eef3fd; border: 1px solid #b9c7e6; border-radius: 999px; padding: .05rem .7rem; cursor: pointer; opacity: 0; visibility: hidden; transition: opacity var(--fade, .2s), visibility 0s linear var(--fade, .2s); }
+  .cell-insert:hover button, .cell-insert:focus-within button, .cellblock:focus-within .cell-insert button { opacity: 1; visibility: visible; transition-delay: 0s; }
+  .cell-tools button { border: 0; background: none; border-radius: .3rem; padding: .1rem .45rem; min-width: 1.8rem; color: #4b5568; font-size: .95rem; }
+  .cell-tools button:disabled { opacity: .45; cursor: default; }
 </style>

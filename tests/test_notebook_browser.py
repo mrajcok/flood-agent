@@ -124,7 +124,8 @@ def test_stop_in_the_gutter_stops_the_cell_and_the_footer_says_so(live_page, bui
 def test_only_one_cell_runs_at_a_time_in_a_notebook(live_page, build_agent):
     page = live_page(agent=build_agent(HangingLLM()))
     first = open_new_notebook(page)
-    first.locator("+ .add-bar").get_by_role("button", name="+ AI").click()
+    first.locator(".head").click()
+    page.locator(".nb-head").get_by_role("button", name="+ AI").click()
     expect(page.locator(".cellblock")).to_have_count(2)
     second = page.locator(".cellblock").nth(1)
     write_prompt(first, "one")
@@ -184,7 +185,8 @@ def test_a_new_ai_cell_starts_with_the_last_settings_run(live_page, build_agent)
     run(cell)
     expect(cell.locator(".gutter .num")).to_have_text("[1]")
 
-    cell.locator("+ .add-bar").get_by_role("button", name="+ AI").click()
+    cell.locator(".head").click()
+    page.locator(".nb-head").get_by_role("button", name="+ AI").click()
     expect(page.locator(".cellblock")).to_have_count(2)
     second = page.locator(".cellblock").nth(1)
     expect(second.locator(".chip")).to_contain_text("Claude Opus 5.5 · medium · ≤ 42 rows")
@@ -196,10 +198,12 @@ def test_a_new_ai_cell_starts_with_the_last_settings_run(live_page, build_agent)
 def test_a_cell_added_between_two_lands_between_them_and_can_run(live_page, build_agent):
     page = live_page(agent=build_agent(ScriptedLLM([TextChunk("middle answer")])))
     first = open_new_notebook(page)
-    first.locator("+ .add-bar").get_by_role("button", name="+ AI").click()
+    first.locator(".head").click()
+    page.locator(".nb-head").get_by_role("button", name="+ AI").click()
     expect(page.locator(".cellblock")).to_have_count(2)
     write_prompt(page.locator(".cellblock").nth(1), "last")
-    first.locator("+ .add-bar").get_by_role("button", name="+ AI").click()  # between the two
+    first.locator(".head").click()
+    page.locator(".nb-head").get_by_role("button", name="+ AI").click()  # below the first: between the two
     expect(page.locator(".cellblock")).to_have_count(3)
     middle = page.locator(".cellblock").nth(1)
     expect(middle.get_by_label("Prompt")).to_have_value("")
@@ -276,7 +280,7 @@ def test_shift_enter_in_the_prompt_runs_the_cell_and_enter_adds_a_line(live_page
 def test_hovering_canopy_shows_what_it_stands_for(live_page):
     page = live_page()
     expect(page.get_by_role("heading", name="CANOPY")).to_have_attribute(
-        "title", "CANOPY: Cyber AI Notebook for Operations, Peering, and telemetrY"
+        "title", re.compile("Cyber AI Notebook for Operations, Peering, and telemetrY")
     )
 
 

@@ -77,6 +77,7 @@
     {% endif %}
   </div>
   <div class="cell ai">
+    {% include "cell_tools.html" %}
     <div class="head">
       <span class="kind">AI</span>
       <span class="grow"></span>
@@ -160,9 +161,9 @@
                const r = await fetch('/n/{{ notebook_id }}/cells/{{ cell.id }}/copy-to-markdown', { method: 'POST', body });
                if (!r.ok) { this.error = ((await r.json().catch(() => ({}))).detail) || 'Could not copy.'; return; }
                this.offer = false;
-               const bar = this.$root.closest('.cellblock').nextElementSibling;
-               bar.insertAdjacentHTML('afterend', await r.text());
-               htmx.process(bar.nextElementSibling); htmx.process(bar.nextElementSibling.nextElementSibling);
+               const block = this.$root.closest('.cellblock');
+               block.insertAdjacentHTML('afterend', await r.text());
+               htmx.process(block.nextElementSibling);
                window.dispatchEvent(new Event('cells-changed'));
              } catch (e) { this.error = 'Could not copy. Try again.'; }
            } }">

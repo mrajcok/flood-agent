@@ -546,6 +546,8 @@ def create_app(
                 raise HTTPException(422, "Pick a table to describe")
         elif is_sql and is_show_statement(sql):
             raise HTTPException(422, SHOW_IN_TEXTBOX)
+        elif is_sql and queries.ends_with_limit(sql):
+            raise HTTPException(422, queries.LIMIT_IN_SQL_CELL)
         elif not (sql if is_sql else prompt).strip():
             raise HTTPException(422, "Write some SQL to run" if is_sql else "Write a prompt to run")
         if agent.running_cell(notebook_id):

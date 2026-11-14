@@ -222,7 +222,7 @@ def test_a_short_prompt_or_an_empty_cell_is_inconclusive():
 async def test_a_result_table_made_above_changes_the_system_prompt_end_and_the_check_says_why(telemetry_db, semantic_layer_path, tmp_path):
     """ADR 0007: a new Result Table changes the end of the system prompt, so the smoke check's second question must
     make none (a bare count, a SHOW Cell and Markdown notes make none)."""
-    with_table = Question(id="t", question="q", sql="SELECT 1", above=[{"kind": "sql", "sql": "SELECT dport FROM flows LIMIT 3"}])
+    with_table = Question(id="t", question="q", sql="SELECT 1", above=[{"kind": "sql", "sql": "SELECT DISTINCT dport FROM flows"}])
     cells, _, _ = await run_notebook("anthropic/claude-sonnet-5.5", [QUESTIONS[0], with_table],
                                      _settings(telemetry_db, semantic_layer_path, tmp_path), tmp_path / "w",
                                      inner=SimulatedProvider())

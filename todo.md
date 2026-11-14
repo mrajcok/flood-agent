@@ -1,6 +1,5 @@
 # work items
 - sql cell should also have a "Send to AI" checkbox. It should be ticked by default.
-- how to handle a "limit 50" in an sql cell when the row count is set to a different value
 - report mode: removes all buttons and cell borders, and makes the notebook read-only. Maybe a "Report" button in the top area that toggles this mode.
 - add the ability to add secondary indexes to a table
 - toggle (off by default) for prompt results to go to the LLM

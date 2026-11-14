@@ -54,6 +54,14 @@ def test_a_show_typed_into_the_textbox_points_to_the_command_dropdown(live_page,
     expect(cell.locator(".cell-error")).to_contain_text("Command drop-down")
 
 
+def test_a_trailing_limit_in_the_sql_box_points_to_the_rows_dropdown(live_page, build_agent):
+    page = live_page(agent=build_agent(ScriptedLLM()))
+    cell = add_sql_cell(page)
+    cell.get_by_label("SQL").fill("SELECT dport FROM flows LIMIT 5")
+    cell.get_by_role("button", name="Run").click()
+    expect(cell.locator(".cell-error")).to_contain_text("row cap")
+
+
 def test_an_ip_column_in_a_sql_cell_table_sorts_numerically(live_page, build_agent):
     page = live_page(agent=build_agent(ScriptedLLM()))
     cell = add_sql_cell(page)

@@ -71,7 +71,7 @@ async def test_an_sql_cell_is_never_stale_but_rerunning_it_makes_the_ai_cell_bel
     agent.notebooks.edit_ai_cell(note, send_to_ai=False)
     assert agent.stale_cells(nb) == {ai}  # the SQL Cell above it is not listed
     agent.notebooks.edit_ai_cell(note, send_to_ai=True)
-    agent.notebooks.edit_cell(sql, sql="SELECT dport FROM flows LIMIT 1")
+    agent.notebooks.edit_cell(sql, sql="SELECT DISTINCT dport FROM flows")
     assert agent.stale_cells(nb) == set()  # a Draft alone changes nothing
     await run(agent, nb, sql)
     assert agent.stale_cells(nb) == {ai}

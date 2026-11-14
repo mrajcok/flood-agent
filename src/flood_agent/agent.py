@@ -784,6 +784,8 @@ class Agent:
             return {"status": "ok", "columns": names, "rows": rows, "row_count": len(rows), "command": command}
         if is_show_statement(sql):
             return {"status": "failed", "error": SHOW_IN_TEXTBOX, "raw_error": SHOW_IN_TEXTBOX}
+        if queries.ends_with_limit(sql):
+            return {"status": "failed", "error": queries.LIMIT_IN_SQL_CELL, "raw_error": queries.LIMIT_IN_SQL_CELL}
 
         def failure(result: dict) -> dict:
             if result.get("stopped"):

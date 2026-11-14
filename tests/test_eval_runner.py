@@ -233,7 +233,7 @@ def sent_text(llm) -> str:
 
 async def test_a_question_with_a_sql_cell_above_sends_what_the_cell_ran(telemetry_db, semantic_layer_path, tmp_path):
     q = Question(id="q", question="Which port is first above?", sql=GOOD,
-                 above=[{"kind": "sql", "sql": "SELECT dport, SUM(bytes) AS b FROM flows GROUP BY dport LIMIT 3"}])
+                 above=[{"kind": "sql", "sql": "SELECT dport, SUM(bytes) AS b FROM flows GROUP BY dport"}])
     r, llm = await run_one([query(GOOD), DONE], telemetry_db, semantic_layer_path, tmp_path, q)
     sent = llm.calls[0]
     assert r.correct

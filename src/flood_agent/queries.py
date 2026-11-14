@@ -93,6 +93,20 @@ class QueryRejected(Exception):
     pass
 
 
+LIMIT_IN_SQL_CELL = (
+    "End the query without LIMIT: a SQL Cell's row cap is set in its rows drop-down (the \u201c\u2264 N rows\u201d button at "
+    "the top right of the cell), and the cap is what limits the rows kept."
+)
+
+
+def ends_with_limit(sql: str) -> bool:
+    """True if the statement ends in `LIMIT n` (or `LIMIT n OFFSET m`, `LIMIT m, n`). A LIMIT inside a subquery does
+    not count: the statement then ends in a closing bracket."""
+    words, _ = _scan(sql)
+    body = sql.rstrip().rstrip(";").rstrip()
+    return bool(words) and body[-1:].isdigit() and (words[-1] == "limit" or words[-2:] == ["limit", "offset"])
+
+
 def _scan(sql: str) -> tuple[list[str], list[int]]:
     """Tokenise just enough to see past comments and quoted text.
 

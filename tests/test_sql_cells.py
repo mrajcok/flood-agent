@@ -6,6 +6,7 @@ import sqlite3
 
 from conftest import ScriptedLLM
 
+from flood_agent import queries
 from flood_agent.agent import CountEvent, DisplayEvent, TurnEnd
 from flood_agent.catalog import CellRun
 from flood_agent.llm import TextChunk
@@ -91,6 +92,25 @@ async def test_statements_that_are_not_one_readable_select_are_refused(make_agen
         assert r["status"] == "failed", sql
         assert agent.tables.tables_of_run(cell, r["id"]) == []
         assert r["result"]["error"]
+
+
+def test_a_query_ending_in_limit_is_recognised_but_a_limit_in_a_subquery_is_not():
+    for sql in ("SELECT dport FROM flows LIMIT 5", "select dport from flows limit 5;", "SELECT 1 FROM flows LIMIT 5 OFFSET 10\n",
+                "SELECT 1 FROM flows LIMIT 10, 5"):
+        assert queries.ends_with_limit(sql), sql
+    for sql in ("SELECT dport FROM flows", "SELECT dport FROM flows WHERE dport IN (SELECT dport FROM flows LIMIT 5)",
+                "SELECT 'limit 5' AS note FROM flows"):
+        assert not queries.ends_with_limit(sql), sql
+
+
+async def test_a_query_ending_in_limit_is_refused_with_a_pointer_to_the_row_cap(make_agent):
+    agent = await make_agent(ScriptedLLM())
+    nb = agent.create_notebook()
+    cell = agent.add_sql_cell(nb, sql="SELECT dport FROM flows LIMIT 5")
+    await run(agent, nb, cell)
+    r = agent.notebooks.cell(cell)["run"]
+    assert r["status"] == "failed" and "row cap" in r["result"]["error"]
+    assert agent.tables.tables_of_run(cell, r["id"]) == []
 
 
 async def test_re_running_replaces_the_table_under_the_same_name(make_agent):

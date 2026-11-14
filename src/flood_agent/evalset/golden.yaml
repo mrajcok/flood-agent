@@ -2,6 +2,9 @@
 #   id, question (sent verbatim to the LLM), sql (reference), ordered (row order is
 #   significant), tolerance (relative numeric tolerance override), crosscheck (the
 #   reference answer must agree with <db>.attacks.json; checked by the test suite).
+# above (optional): cells placed above the question's AI Cell in its notebook, top to bottom:
+#   {kind: markdown, text, send_to_ai}, {kind: sql, sql}, {kind: show, command, table}.
+#   SQL and SHOW cells are run first, so the AI Cell is sent what they ran.
 # Questions name the columns to return; the comparison ignores column names and order
 # and allows extra columns (see evalset/compare.py).
 # Windows (UTC): SYN flood 2026-01-02 14:00-14:30, amplification 2026-01-04 03:00-03:20,
@@ -203,3 +206,30 @@
 - id: scan-avg-flow-size
   question: What is the average bytes per Flow Record for traffic from 192.0.2.99? Return a single number.
   sql: SELECT AVG(bytes) AS avg_bytes FROM flows WHERE sip = '192.0.2.99'
+
+# ---- multi-cell questions: cells above the question ---------------------------------
+- id: cells-sql-above-top-port
+  question: Of the destination ports in the table above, which carried the most bytes? Return only the port.
+  above:
+    - kind: sql
+      sql: SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC LIMIT 5
+  sql: SELECT dport FROM flows GROUP BY dport ORDER BY SUM(bytes) DESC LIMIT 1
+
+- id: cells-ticked-note-narrows
+  question: How many Flow Records are there in total? Return a single number.
+  above:
+    - kind: markdown
+      text: Only consider TCP Flow Records (IP protocol 6) in every question below.
+      send_to_ai: true
+    - kind: markdown
+      text: Only consider UDP Flow Records in every question below.
+      send_to_ai: false
+  sql: SELECT COUNT(*) AS flows FROM flows WHERE proto = 6
+
+- id: cells-describe-above-columns
+  question: Using the columns of flows shown above, what is the largest value in the column that holds the packet count? Return a single number.
+  above:
+    - kind: show
+      command: DESCRIBE TABLE
+      table: flows
+  sql: SELECT MAX(pkts) AS max_pkts FROM flows

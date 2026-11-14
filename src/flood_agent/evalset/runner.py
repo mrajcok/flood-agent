@@ -1,5 +1,6 @@
-"""Eval runner: drives the Agent turn entrypoint per model and question, compares the
-Result Tables the LLM produced against reference results, and reports per-model
+"""Eval runner: for each model and question, creates a notebook (with the cells the question has above it,
+and the question as an AI Cell) through the Notebook API, compares the
+Result Tables the AI Cell's current Run produced against reference results, and reports per-model
 correctness, retries, latency and cost. On demand only; never part of CI or default pytest.
 
     export OPENROUTER_API_KEY=...   # or put it in .env (see .env.example)
@@ -26,11 +27,12 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from flood_agent import queries
-from flood_agent.agent import Agent, Conversation, TraceEntry, TraceReady, TurnError
+from flood_agent.agent import Agent, TraceEntry, TraceReady, TurnError
 from flood_agent.config import Settings
 from flood_agent.evalset.client import UsageMeter
 from flood_agent.evalset.compare import DEFAULT_TOLERANCE, Comparison, compare
 from flood_agent.evalset.golden import Question, load_golden, run_reference
+from flood_agent.evalset.notebook import add_cells_above, run_ai_cell
 from flood_agent.generator import END_MS
 from flood_agent.llm import OpenRouterClient
 
@@ -119,11 +121,14 @@ async def _run_question(model, q, ref, telemetry_db, semantic_layer, client_fact
         lambda _model: llm,
     )
     retries, error, trace = 0, None, None
-    conversation = Conversation()
+    cell_id = None
     start = time.perf_counter()
     try:
         async with agent:
-            async for event in agent.run_turn(conversation, q.question, EVAL_MAX_RESULT_ROWS):
+            notebook_id = agent.create_notebook(q.id)  # each question is a new notebook
+            await add_cells_above(agent, notebook_id, q.above)
+            cell_id, events = await run_ai_cell(agent, notebook_id, q.question, EVAL_MAX_RESULT_ROWS)
+            async for event in events:
                 if isinstance(event, TraceEntry) and event.kind == "query_error":
                     retries += 1
                 elif isinstance(event, TraceReady):
@@ -138,7 +143,8 @@ async def _run_question(model, q, ref, telemetry_db, semantic_layer, client_fact
     if error:
         ok, reason, extra, matched, n = False, "turn failed", 0, None, 0
     else:
-        names = [t.name for t in agent.tables.tables_of(conversation.id)] if conversation.id else []
+        run = agent.notebooks.cell(cell_id)["run"] if cell_id else None  # the judge reads the cell's current-Run tables
+        names = [t.name for t in agent.tables.tables_of_run(cell_id, run["id"])] if cell_id and run else []
         ok, reason, extra, matched, n = _judge(q, ref, results_db, names, counts)
     return QuestionResult(
         q.id, model, ok, reason, retries, latency, usage.get("cost"), usage.get("prompt_tokens"),

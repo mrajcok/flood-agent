@@ -472,6 +472,37 @@ class Agent:
             raise NotebookBusy("This cell is running; stop it first")
         return cell
 
+    def rename_notebook(self, notebook_id: str, title: str) -> None:
+        """Retitle a notebook (at most 60 characters). ValueError if the title is blank, KeyError if unknown."""
+        title = title.strip()[:60]
+        if not title:
+            raise ValueError("a notebook name cannot be blank")
+        self.notebooks.rename_notebook(notebook_id, title)
+
+    def _idle_notebook(self, notebook_id: str) -> list[dict]:
+        """The notebook's cells, for an operation that cannot touch a running one: KeyError if unknown,
+        `NotebookBusy` if a cell is running."""
+        if not self.notebooks.exists(notebook_id):
+            raise KeyError(notebook_id)
+        if self.running_cell(notebook_id):
+            raise NotebookBusy("A cell in this notebook is running; stop it first")
+        return self.notebooks.cells(notebook_id)
+
+    def notebook_delete_preview(self, notebook_id: str) -> dict:
+        """Counts for the delete dialog: the live Result Tables `delete_rt` would drop (any cell's, any Run's)
+        and the live Saved Tables that are always kept."""
+        tables = [t for c in self._idle_notebook(notebook_id) for t in self.tables.tables_of_cell(c["id"])]
+        return {"result": sum(t.kind == "result" for t in tables), "saved": sum(t.kind == "saved" for t in tables)}
+
+    def delete_notebook(self, notebook_id: str, tables: TablesChoice = "keep") -> None:
+        """Delete a notebook with its cells. `tables` (keep or delete_rt) says whether to drop the `rt_` tables its
+        Runs made; Saved Tables are always kept. The tables go first, so a failure leaves the notebook in place."""
+        cells = self._idle_notebook(notebook_id)
+        if tables == "delete_rt":
+            for cell in cells:
+                self.tables.drop_of_cell(cell["id"])
+        self.notebooks.delete_notebook(notebook_id)
+
     def move_cell(self, notebook_id: str, cell_id: str, direction: Literal["up", "down"]) -> None:
         """Swap a cell with the one above or below it (nothing at either end). Staleness follows from the new order."""
         self._idle_cell(notebook_id, cell_id)

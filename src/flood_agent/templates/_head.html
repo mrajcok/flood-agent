@@ -12,6 +12,14 @@
   <script src="/static/refresh.js?v={{ static_version('refresh.js') }}"></script>
   <script src="/static/sql_insert.js?v={{ static_version('sql_insert.js') }}"></script>
   <script src="/static/table_name.js?v={{ static_version('table_name.js') }}"></script>
+  <script>
+    // The hidden sidebar is remembered in the browser; set before first paint so a reload does not flash it open.
+    function setSidebarHidden(hidden) {
+      document.documentElement.classList.toggle("sidebar-hidden", hidden);
+      try { localStorage.setItem("sidebarHidden", hidden ? "1" : "0"); } catch (e) { /* not remembered */ }
+    }
+    try { if (localStorage.getItem("sidebarHidden") === "1") document.documentElement.classList.add("sidebar-hidden"); } catch (e) { /* shown */ }
+  </script>
   <style>
     html, body { height: 100%; }
     body { font-family: system-ui, sans-serif; max-width: 60rem; margin: 0 auto; padding: 0 1rem; box-sizing: border-box;
@@ -20,7 +28,11 @@
     .topbar h1 { margin: .6rem 0; }
     .controls { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
     /* View toggles: sliders that hide traces, live traces and table info. On = shown. */
-    .hide-traces details.trace, .hide-traces .live-trace, .hide-live .live-trace, .hide-tables .table-name { display: none !important; }
+    .hide-traces details.trace:not(.cell-trace), .hide-traces .live-trace, .hide-live .live-trace, .hide-tables .table-name { display: none !important; }
+    /* A cell's footer line keeps its stopped badge and Context Usage meter: only the trace itself goes. */
+    .hide-traces .cell-trace .trace-only, .hide-traces .cell-trace > :not(summary) { display: none !important; }
+    /* Collapse outputs: every cell's output area is hidden, its prompt or SQL stays; a running cell shows its output. */
+    .outputs-collapsed .cellblock:not(.running) .output { display: none; }
     .view-switch { display: inline-flex; align-items: center; gap: .4rem; font-size: .9rem; cursor: pointer; user-select: none; }
     .view-switch input { appearance: none; width: 2rem; height: 1.1rem; border-radius: 999px; background: #c5cbd8; position: relative; margin: 0; cursor: pointer; transition: background var(--fade, .2s); }
     .view-switch input::after { content: ""; position: absolute; top: .1rem; left: .1rem; width: .9rem; height: .9rem; border-radius: 50%; background: #fff; transition: left var(--fade, .2s); }
@@ -83,6 +95,19 @@
     .reply .md blockquote { border-left: 3px solid #d6dae3; padding-left: .75rem; color: #4b5563; }
     .layout { display: flex; gap: 1.5rem; align-items: stretch; flex: 1; min-height: 0; padding-bottom: 1rem; }
     aside { width: 14rem; flex: none; }
+    aside .sidebar-bar { display: flex; justify-content: flex-end; }
+    aside .sidebar-bar button { font: inherit; border: 0; background: none; color: #6b7280; cursor: pointer; border-radius: .4rem; padding: 0 .5rem; }
+    aside .sidebar-bar button:hover { background: #eef3fd; color: #2a4ba0; }
+    aside .sidebar-show { display: none; }
+    aside .notebook-search { display: block; width: calc(100% - .8rem); box-sizing: border-box; margin: 0 .4rem .3rem; padding: .2rem .4rem; font: inherit; font-size: .88rem; }
+    aside .no-match { margin: .3rem .6rem; font-size: .85rem; color: #6b7280; }
+    /* Hidden sidebar: a thin strip with the expand button; the cell area takes the width (the page's max width is lifted). */
+    .sidebar-hidden body { max-width: none; }
+    .sidebar-hidden aside { width: 2rem; overflow: hidden; }
+    .sidebar-hidden aside > :not(.sidebar-bar) { display: none !important; }
+    .sidebar-hidden aside .sidebar-hide { display: none; }
+    .sidebar-hidden aside .sidebar-show { display: inline-block; }
+    .sidebar-hidden .layout { gap: .5rem; }
     main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
     #prompt-area { flex: 1; padding-right: .5rem; }
     /* Two sections: Tables (its actions as links), then Conversations (its heading carries New chat). */

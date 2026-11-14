@@ -22,7 +22,7 @@
   </script>
   <style>
     html, body { height: 100%; }
-    body { font-family: system-ui, sans-serif; max-width: 60rem; margin: 0 auto; padding: 0 1rem; box-sizing: border-box;
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 0 1rem; box-sizing: border-box;
            display: flex; flex-direction: column; overflow: hidden; }
     .topbar { flex: none; display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
     .topbar h1 { margin: .6rem 0; }
@@ -72,8 +72,7 @@
     aside .sidebar-show { display: none; }
     aside .notebook-search { display: block; width: calc(100% - .8rem); box-sizing: border-box; margin: 0 .4rem .3rem; padding: .2rem .4rem; font: inherit; font-size: .88rem; }
     aside .no-match { margin: .3rem .6rem; font-size: .85rem; color: #6b7280; }
-    /* Hidden sidebar: a thin strip with the expand button; the cell area takes the width (the page's max width is lifted). */
-    .sidebar-hidden body { max-width: none; }
+    /* Hidden sidebar: a thin strip with the expand button; the cell area takes the width. */
     .sidebar-hidden aside { width: 2rem; overflow: hidden; }
     .sidebar-hidden aside > :not(.sidebar-bar) { display: none !important; }
     .sidebar-hidden aside .sidebar-hide { display: none; }

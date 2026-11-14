@@ -19,6 +19,16 @@
   .cellblock .head .explain { font: inherit; font-size: .8rem; padding: 0 .5rem; border: 1px solid #e0c36a; border-radius: .4rem; background: #fff4d1; color: #5c4300; cursor: pointer; }
   .cellblock .head .explain:hover:not(:disabled) { background: #ffe8a3; }
   .cellblock .head .explain:disabled { opacity: .5; cursor: default; }
+  .cellblock .sql-tools { display: flex; gap: .4rem; align-items: flex-start; flex-wrap: wrap; margin-top: .4rem; }
+  .cellblock .tpick { font: inherit; font-size: .82rem; color: #2a4ba0; background: #eef3fd; border: 1px solid #b9c7e6; border-radius: .4rem; padding: 0 .55rem; cursor: pointer; }
+  .cellblock .table-pop { left: 0; right: auto; max-height: 18rem; overflow-y: auto; }
+  .cellblock .tlabel { font-size: .7rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #8a91a3; margin-top: .3rem; }
+  .cellblock .titem { display: block; width: 100%; text-align: left; font: inherit; font-family: ui-monospace, Menlo, monospace; font-size: .82rem; border: 0; background: none; padding: .1rem .3rem; border-radius: .3rem; cursor: pointer; }
+  .cellblock .titem:hover { background: #eef3fd; }
+  .cellblock .tbl-cols { display: flex; gap: .25rem; flex-wrap: wrap; align-items: center; }
+  .cellblock .tbl-cols button { font: inherit; font-family: ui-monospace, Menlo, monospace; font-size: .78rem; border: 1px solid #cfd5e2; background: #fff; border-radius: .4rem; padding: 0 .4rem; cursor: pointer; }
+  .cellblock .tbl-cols button:hover { background: #eef3fd; }
+  .cellblock .tbl-cols .tname { background: #eef3fd; border-color: #b9c7e6; font-weight: 600; }
   .cellblock .sql-error { white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace; }
   .cellblock .badge.truncated { background: #fff4d1; color: #5c4300; }
   /* A SQL Cell's Run is its refresh: its table has no refresh icon or "as of" time of its own. */

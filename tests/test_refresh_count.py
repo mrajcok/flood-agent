@@ -1,4 +1,4 @@
-"""Refresh a Count Display: POST /api/displays/{id}/refresh runs its stored count query again, without the
+"""Refresh a Count Display: POST /api/notebook-displays/{id}/refresh runs its stored count query again, without the
 LLM, and overwrites the number and its "as of" time (HTTP seam, ADR 0006)."""
 
 import re
@@ -7,7 +7,8 @@ import threading
 from contextlib import closing
 from dataclasses import replace
 
-from conftest import Clock, ScriptedLLM, tool_call
+from conftest import Clock, ScriptedLLM, run_of, tool_call
+from conftest import ask as run_in_notebook
 
 from flood_agent import queries
 from flood_agent.llm import TextChunk
@@ -18,37 +19,35 @@ SLOW = "SELECT COUNT(*) FROM " + ", ".join(f"flows t{n}" for n in range(18))
 
 
 def ask(build_agent, web_client, sql=RECENT_COUNT):
-    """A turn that runs one count query. Returns (client, agent, clock, llm, conversation id, display id)."""
+    """An AI Cell that runs one count query. Returns (client, agent, clock, llm, notebook id, display id)."""
     clock = Clock()
     llm = ScriptedLLM([tool_call("run_count_query", sql=sql, title="Recent flows")], [TextChunk("Two flows.")])
     agent = build_agent(llm, clock=clock)
     client = web_client(agent)
-    posted = client.post("/chat", data={"message": "go", "conversation_id": "", "max_rows": "1000"})
-    client.get(posted.text.split('sse-connect="')[1].split('"')[0])
-    (cid,) = [c["id"] for c in agent.store.list_conversations()]
-    display_id = int(re.search(r'data-display-id="(\d+)"', client.get(f"/c/{cid}").text).group(1))
-    return client, agent, clock, llm, cid, display_id
+    nb, _, _ = run_in_notebook(client, "go")
+    display_id = int(re.search(r'data-display-id="(\d+)"', client.get(f"/n/{nb}").text).group(1))
+    return client, agent, clock, llm, nb, display_id
 
 
 def refresh(client, display_id):
-    return client.post(f"/api/displays/{display_id}/refresh")
+    return client.post(f"/api/notebook-displays/{display_id}/refresh")
 
 
-def shown(client, cid):
-    page = client.get(f"/c/{cid}").text
+def shown(client, nb):
+    page = client.get(f"/n/{nb}").text
     value = re.search(r'class="count-value"[^>]*>([\d,]+)<', page).group(1)
     return int(value.replace(",", "")), int(re.search(r'data-as-of-ms="(\d+)"', page).group(1))
 
 
 def set_stored_sql(agent, sql):
-    with closing(sqlite3.connect(agent.store.path)) as con, con:
-        con.execute("UPDATE displays SET definition=json_set(definition, '$.sql', ?)", (sql,))
+    with closing(sqlite3.connect(agent.notebooks.path)) as con, con:
+        con.execute("UPDATE run_displays SET definition=json_set(definition, '$.sql', ?)", (sql,))
 
 
 def test_refresh_gives_a_new_number_and_a_new_as_of_time_that_survive_a_reload(build_agent, web_client, monkeypatch):
     monkeypatch.setenv("FIXED_NOW_MS", "1700000003000")
-    client, _, clock, _, cid, display_id = ask(build_agent, web_client)
-    assert shown(client, cid) == (2, clock.ms)
+    client, _, clock, _, nb, display_id = ask(build_agent, web_client)
+    assert shown(client, nb) == (2, clock.ms)
 
     monkeypatch.setenv("FIXED_NOW_MS", "1700000003600")
     clock.ms += HOUR
@@ -56,13 +55,13 @@ def test_refresh_gives_a_new_number_and_a_new_as_of_time_that_survive_a_reload(b
 
     assert r.status_code == 200
     assert r.json() == {"value": 1, "computed_at_ms": clock.ms}
-    assert shown(client, cid) == (1, clock.ms)
+    assert shown(client, nb) == (1, clock.ms)
 
 
 def test_a_query_that_times_out_fails_plainly_and_keeps_the_old_number(build_agent, web_client, monkeypatch):
     monkeypatch.setenv("FIXED_NOW_MS", "1700000003000")
-    client, agent, clock, _, cid, display_id = ask(build_agent, web_client)
-    before = shown(client, cid)
+    client, agent, clock, _, nb, display_id = ask(build_agent, web_client)
+    before = shown(client, nb)
     set_stored_sql(agent, SLOW)
     agent.config = replace(agent.config, query_timeout_s=0.01)
     clock.ms += HOUR
@@ -70,18 +69,18 @@ def test_a_query_that_times_out_fails_plainly_and_keeps_the_old_number(build_age
     r = refresh(client, display_id)
 
     assert r.status_code == 422 and "time limit" in r.json()["detail"]
-    assert shown(client, cid) == before
+    assert shown(client, nb) == before
 
 
 def test_the_stored_query_goes_through_the_same_one_number_and_safety_checks(build_agent, web_client):
-    client, agent, clock, _, cid, display_id = ask(build_agent, web_client)
-    before = shown(client, cid)
+    client, agent, clock, _, nb, display_id = ask(build_agent, web_client)
+    before = shown(client, nb)
     clock.ms += HOUR
     for bad in ("DROP TABLE flows", "SELECT sip FROM flows", "SELECT COUNT(*) FROM nope",
                 "SELECT COUNT(*) FROM flows GROUP BY sip"):
         set_stored_sql(agent, bad)
         assert refresh(client, display_id).status_code == 422, bad
-        assert shown(client, cid) == before
+        assert shown(client, nb) == before
 
 
 def test_a_second_refresh_while_one_runs_is_a_conflict(build_agent, web_client, monkeypatch):
@@ -115,22 +114,22 @@ def test_unknown_displays_are_not_found(build_agent, web_client):
 
 def test_the_llm_is_told_nothing_and_its_earlier_text_is_left_alone(build_agent, web_client, monkeypatch):
     monkeypatch.setenv("FIXED_NOW_MS", "1700000003000")
-    client, agent, clock, llm, cid, display_id = ask(build_agent, web_client)
-    calls, messages = len(llm.calls), agent.store.messages(cid)
+    client, agent, clock, llm, nb, display_id = ask(build_agent, web_client)
+    calls, messages = len(llm.calls), run_of(agent, nb)["messages"]
 
     monkeypatch.setenv("FIXED_NOW_MS", "1700000003600")
     clock.ms += HOUR
     refresh(client, display_id)
 
-    assert len(llm.calls) == calls and agent.store.messages(cid) == messages
+    assert len(llm.calls) == calls and run_of(agent, nb)["messages"] == messages
 
 
-def test_a_conversation_deleted_mid_refresh_is_not_found(build_agent, web_client, monkeypatch):
-    client, agent, _, _, cid, display_id = ask(build_agent, web_client)
+def test_a_notebook_deleted_mid_refresh_is_not_found(build_agent, web_client, monkeypatch):
+    client, agent, _, _, nb, display_id = ask(build_agent, web_client)
     real = queries.run_count_query
 
     def delete_then_run(*args, **kwargs):
-        agent.store.delete_conversation(cid)
+        agent.notebooks.delete_notebook(nb)
         return real(*args, **kwargs)
 
     monkeypatch.setattr(queries, "run_count_query", delete_then_run)

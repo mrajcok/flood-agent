@@ -3,14 +3,14 @@
 import pytest
 from conftest import ScriptedLLM
 from playwright.sync_api import expect
-from test_show_tables import two_conversations_with_tables
+from test_show_tables import two_notebooks_with_tables
 
 
 @pytest.fixture
 def tables(build_agent, web_client):
     """Set up through HTTP: two Lookup Tables, a Result Table still named rt_* and one renamed ddos_victims.
     Returns (agent for the live app on the same files, the rt_* name)."""
-    client, _, _, rt_name, b_table = two_conversations_with_tables(build_agent, web_client)
+    client, _, _, rt_name, b_table = two_notebooks_with_tables(build_agent, web_client)
     client.post(f"/api/results/{b_table}/settings", data={"name": "ddos_victims", "retention_days": "30"})
     for name in ("watch", "bad_ips"):
         client.post("/api/lookup-tables", data={"name": name, "rows": "ip\n10.0.0.1"})

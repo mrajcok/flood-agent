@@ -25,6 +25,14 @@ def run(cell):
     cell.get_by_role("button", name="Run").click()
 
 
+def run_in_new_notebook(page, prompt):
+    """Open a new notebook, write `prompt` in its first AI Cell and run it; returns the cell."""
+    cell = open_new_notebook(page)
+    write_prompt(cell, prompt)
+    run(cell)
+    return cell
+
+
 def test_the_sidebar_plus_makes_notebook_n_with_one_empty_ai_cell_and_opens_it(live_page):
     page = live_page()
     expect(page.locator(".notebook-list li")).to_have_count(0)

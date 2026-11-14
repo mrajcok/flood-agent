@@ -3,11 +3,11 @@ dialog's viewer (HTTP seam). Plain HTTP for the web page, never an MCP tool."""
 
 from conftest import DAY, ScriptedLLM
 from test_result_table_settings import shown_table
-from test_show_tables import two_conversations_with_tables
+from test_show_tables import two_notebooks_with_tables
 
 
 def test_a_saved_or_result_table_is_shown_as_the_chats_table_display(build_agent, web_client):
-    client, _, _, a_table, b_table = two_conversations_with_tables(build_agent, web_client)
+    client, _, _, a_table, b_table = two_notebooks_with_tables(build_agent, web_client)
     client.post(f"/api/results/{b_table}/settings", data={"name": "ddos_victims"})
 
     for name in (a_table, "ddos_victims"):

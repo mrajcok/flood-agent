@@ -1,14 +1,14 @@
-"""Thin smoke test of the HTTP/SSE adapter over the Agent turn stream."""
+"""Thin smoke test of the HTTP/SSE adapter over the Agent's notebook cell stream."""
 
 import pytest
-from conftest import ScriptedLLM, last_tool_result, mcp_children, tool_call
+from conftest import ScriptedLLM, ask, last_tool_result, mcp_children, tool_call
 from fastapi.testclient import TestClient
 
 from flood_agent.llm import TextChunk
 from flood_agent.web import create_app
 
 
-def test_chat_page_stream_and_row_endpoint(build_agent, web_client):
+def test_notebook_page_stream_and_row_endpoint(build_agent, web_client):
     llm = ScriptedLLM(
         [tool_call("run_query", sql="SELECT dport, bytes FROM flows ORDER BY bytes DESC", title="t")],
         lambda msgs: [tool_call("show_table", result_table=last_tool_result(msgs)["result_table"])],
@@ -19,11 +19,8 @@ def test_chat_page_stream_and_row_endpoint(build_agent, web_client):
     page = client.get("/")
     assert page.status_code == 200 and "htmx" in page.text and "alpinejs" in page.text
 
-    posted = client.post("/chat", data={"message": "show bytes by port", "max_rows": "1000"})
-    assert posted.status_code == 200 and "show bytes by port" in posted.text
-    stream_url = posted.text.split('sse-connect="')[1].split('"')[0]
-
-    body = client.get(stream_url).text
+    nb, cell, body = ask(client, "show bytes by port")
+    assert "show bytes by port" in client.get(f"/n/{nb}").text
     assert "event: text" in body and "Here you go." in body
     assert "event: display" in body and "event: end" in body
     table = body.split('data-rows-url="')[1].split('"')[0]
@@ -45,8 +42,7 @@ def test_entering_the_client_starts_one_mcp_server_and_leaving_it_stops_it(build
     assert mcp_children() == []
     with TestClient(create_app(build_agent(llm))) as client:
         assert len(mcp_children()) == 1
-        posted = client.post("/chat", data={"message": "hi", "max_rows": "1000"})
-        body = client.get(posted.text.split('sse-connect="')[1].split('"')[0]).text
+        _, _, body = ask(client, "hi")
         assert "Hello." in body and "event: end" in body
         assert len(mcp_children()) == 1
     assert mcp_children() == []
@@ -62,8 +58,7 @@ def test_app_startup_fails_when_the_mcp_server_cannot_start(build_agent, monkeyp
 
 
 def _rows_url_after_showing(client, max_rows):
-    posted = client.post("/chat", data={"message": "show", "max_rows": max_rows})
-    body = client.get(posted.text.split('sse-connect="')[1].split('"')[0]).text
+    _, _, body = ask(client, "show", max_rows=max_rows)
     return body.split('data-rows-url="')[1].split('"')[0]
 
 

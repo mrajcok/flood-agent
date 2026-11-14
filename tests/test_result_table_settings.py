@@ -2,7 +2,7 @@
 
 import re
 
-from conftest import DAY, Clock, ScriptedLLM, last_tool_result, tool_call
+from conftest import DAY, Clock, ScriptedLLM, ask, last_tool_result, tool_call
 
 from flood_agent.llm import TextChunk
 from flood_agent.web import TEMPLATES
@@ -17,8 +17,7 @@ def shown_table(build_agent, web_client):
         [TextChunk("here")],
     )
     client = web_client(build_agent(llm, clock=clock, result_ttl_ms=DAY))
-    posted = client.post("/chat", data={"message": "ports", "conversation_id": "", "max_rows": "1000"})
-    body = client.get(posted.text.split('sse-connect="')[1].split('"')[0]).text
+    _, _, body = ask(client, "ports")
     rows_url = body.split('data-rows-url="')[1].split('"')[0]
     return client, clock, re.search(r"/api/results/([^/]+)/rows", rows_url).group(1)
 

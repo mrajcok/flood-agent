@@ -24,6 +24,7 @@ from mcp.shared.memory import create_client_server_memory_streams
 from playwright.sync_api import sync_playwright
 
 from flood_agent.agent import Agent, AgentConfig, TextDelta
+from flood_agent.catalog import CellRun
 from flood_agent.config import Settings
 from flood_agent.llm import TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_server import ServerSettings, create_server
@@ -386,6 +387,23 @@ async def collect(
     return [e async for e in agent.run_cell(notebook, cell)]
 
 
+SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
+
+
+def table_script(reply="Here you go."):
+    """An AI Cell's script: run the ports query, show its Result Table, say `reply`."""
+    return [
+        [tool_call("run_query", sql=SQL, title="t")],
+        lambda msgs: [tool_call("show_table", result_table=last_tool_result(msgs)["result_table"])],
+        [TextChunk(reply)],
+    ]
+
+
+def main_pane(page: str) -> str:
+    """The page minus the sidebar."""
+    return page.split("</aside>")[1]
+
+
 def post_run(client, **data):
     """POST a run of a new notebook's first AI Cell (prompt "hello", max_rows 1000 unless `data` says otherwise),
     as the page does, without streaming it; returns the response (422 for a refused run)."""
@@ -406,6 +424,11 @@ def ask(client, message: str, notebook: str | None = None, **data) -> tuple[str,
     ran = client.post(f"/n/{notebook}/cells/{cell}/run", data={"prompt": message, "max_rows": "1000", **data})
     assert ran.status_code == 200, ran.text
     return notebook, cell, client.get(f"/n/{notebook}/cells/{cell}/stream").text
+
+
+def register_table(catalog, name: str, cell_id: str = "cell-1", run: int = 1, *args, **kwargs) -> None:
+    """Register a Result Table in a Catalog as made by Run `run` of cell `cell_id`."""
+    catalog.register_for(CellRun(cell_id, f"run-{run}"), name, *args, **kwargs)
 
 
 def run_of(agent: Agent, notebook: str, index: int = -1) -> dict:

@@ -2,9 +2,8 @@
 
 import re
 
-from conftest import ScriptedLLM, tool_call
+from conftest import ScriptedLLM, table_script, tool_call
 from playwright.sync_api import expect
-from test_conversations import table_script
 from test_notebook_browser import open_new_notebook, run, write_prompt
 from test_notebooks import SQL
 

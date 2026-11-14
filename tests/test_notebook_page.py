@@ -4,7 +4,7 @@ import re
 import threading
 import time
 
-from conftest import ScriptedLLM, tool_call
+from conftest import ScriptedLLM, ask, main_pane, table_script, tool_call
 from test_notebooks import SQL, Slow
 
 from flood_agent.agent import NO_MODEL
@@ -147,3 +147,86 @@ def test_a_cells_draft_is_saved_and_shown_when_the_page_is_opened_again(build_ag
     assert saved.status_code == 204
     page = client.get(f"/n/{nb}").text
     assert "half-written" in page and "No model · no effort · ≤ 7 rows" in page
+
+
+def test_a_notebook_survives_a_restart_with_its_answer_display_and_sidebar_entry(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM(*table_script())))
+    nb, _, _ = ask(client, "top ports by bytes")
+
+    restarted = web_client(build_agent(ScriptedLLM()))  # new app, same files
+    home = restarted.get("/").text
+    assert f'href="/n/{nb}"' in home and "Notebook 1" in home
+
+    page = restarted.get(f"/n/{nb}").text
+    assert "top ports by bytes" in main_pane(page) and "Here you go." in page
+    rows_url = page.split('data-rows-url="')[1].split('"')[0]
+    assert restarted.get(rows_url).json()["rows"] == [[8443, 1_111_111], [9053, 555_321]]  # the Display re-renders
+
+
+def test_a_cell_run_after_a_restart_is_sent_the_cells_above(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM(*table_script())))
+    nb, _, _ = ask(client, "first question")
+
+    second = ScriptedLLM([TextChunk("ok")])
+    restarted = web_client(build_agent(second))
+    ask(restarted, "second question", nb)
+    sent = second.all_sent_text()
+    assert "first question" in sent and "second question" in sent
+
+
+def test_notebooks_are_separate_in_what_a_cell_is_sent_and_in_the_tables_shown(build_agent, web_client):
+    llm = ScriptedLLM(*table_script("first reply"), *table_script("second reply"))
+    client = web_client(build_agent(llm))
+    one, _, body1 = ask(client, "alpha question")
+    two, _, body2 = ask(client, "beta question")
+    assert one != two
+    assert not any("alpha question" in str(m.get("content")) for m in llm.calls[-1])
+
+    t1 = body1.split('data-rows-url="')[1].split('"')[0]
+    t2 = body2.split('data-rows-url="')[1].split('"')[0]
+    page1, page2 = client.get(f"/n/{one}").text, client.get(f"/n/{two}").text
+    assert t1 != t2 and t1 in page1 and t2 not in page1 and t2 in page2 and t1 not in page2
+    assert "alpha question" not in main_pane(page2)
+    assert "Notebook 1" in client.get("/").text and "Notebook 2" in client.get("/").text
+
+
+def test_the_stream_sends_each_llm_call_as_a_live_step_with_its_entries(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
+    nb, cell = new_notebook(client)
+    fragment = client.post(f"/n/{nb}/cells/{cell}/run", data={
+        "prompt": "hello", "model": SONNET, "effort": "", "max_rows": "1000"}).text
+    assert "thinking" not in fragment and 'sse-swap="live-step"' in fragment  # no spinner: Send turns into Stop
+    body = client.get(f"/n/{nb}/cells/{cell}/stream").text
+    assert "event: live-step" in body and 'id="live-body-' in body
+    assert "event: entry" in body and 'hx-swap-oob="beforeend:#live-body-' in body
+    assert 'hx-swap-oob="innerHTML:#live-meta-' in body
+    assert body.index("event: live-step") < body.index("event: entry")
+
+
+def test_stopping_a_cell_that_is_not_running_is_harmless(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM()))
+    nb, cell = new_notebook(client)
+    assert client.post(f"/n/{nb}/cells/{cell}/stop").status_code == 204
+    assert client.post(f"/n/{nb}/cells/nope/stop").status_code == 404
+
+
+def test_deleting_a_later_cell_leaves_an_earlier_cells_table_readable_and_foreign_cells_404(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM(*table_script("one"), *table_script("two"), [TextChunk("other")])))
+    nb, first, _ = ask(client, "first question")
+    _, second, _ = ask(client, "second question", nb)
+    other, other_cell, _ = ask(client, "elsewhere")
+    first_table = re.search(r"/api/results/([a-z0-9_]+)/rows", client.get(f"/n/{nb}/cells/{first}").text).group(1)
+
+    assert client.post(f"/n/{nb}/cells/{second}/delete", data={"tables": "delete_rt"}).status_code == 204
+    assert client.get(f"/api/results/{first_table}/rows").status_code == 200  # made by the first cell
+    assert client.post(f"/n/{nb}/cells/{other_cell}/delete").status_code == 404  # another notebook's cell
+    assert client.post(f"/n/{other}/cells/{second}/delete").status_code == 404  # a cell that is gone
+    assert "first question" in client.get(f"/n/{nb}").text and "elsewhere" in client.get(f"/n/{other}").text
+
+
+def test_no_notebook_text_says_session(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
+    nb, _, _ = ask(client, "hi")
+    page = client.get(f"/n/{nb}").text
+    assert 'aria-label="New notebook"' in page
+    assert "session" not in re.sub(r"<script.*?</script>", "", page, flags=re.S).lower()

@@ -169,13 +169,13 @@ SESSION_PREFIXES = ["anthropic/claude-sonnet-5.5", "openai/gpt-5.6-terra", "qwen
 
 
 @pytest.mark.parametrize("model", SESSION_PREFIXES)
-def test_models_that_benefit_get_the_conversation_id_as_session_id(model):
+def test_models_that_benefit_get_the_exchange_id_as_session_id(model):
     from flood_agent.llm import caching_fields
 
     assert caching_fields(model, session_id="c7")["session_id"] == "c7"
 
 
-def test_no_session_id_is_sent_without_a_conversation_id():
+def test_no_session_id_is_sent_without_an_exchange_id():
     from flood_agent.llm import caching_fields
 
     assert "session_id" not in caching_fields("z-ai/glm-5.3")
@@ -188,7 +188,7 @@ def test_unlisted_models_never_get_a_session_id():
 
 
 @pytest.mark.parametrize("model", SESSION_PREFIXES)
-async def test_session_id_is_stable_within_a_conversation_and_differs_between(model):
+async def test_session_id_is_stable_within_an_exchange_and_differs_between(model):
     a1 = await request_body(model, session_id="c1")
     a2 = await request_body(model, session_id="c1")
     b = await request_body(model, session_id="c2")

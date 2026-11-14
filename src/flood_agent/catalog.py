@@ -311,6 +311,15 @@ class CatalogView:
             rows = con.execute("SELECT * FROM result_tables WHERE cell_id=? ORDER BY created_at, name", (cell_id,))
             return [self._table(r) for r in rows if self._is_live(r, now)]
 
+    def earlier_tables_of_cell(self, cell_id: str, current_run_id: str | None) -> list[Table]:
+        """The live Result and Saved Tables a Cell's earlier Runs made (all but `current_run_id`'s), oldest first."""
+        now = self._now()
+        with closing(self._connect()) as con:
+            rows = con.execute(
+                "SELECT * FROM result_tables WHERE cell_id=? AND run_id IS NOT ? ORDER BY created_at, name",
+                (cell_id, current_run_id))
+            return [self._table(r) for r in rows if self._is_live(r, now)]
+
     def names(self) -> list[str]:
         """Names of every live Result and Saved Table, across Conversations, sorted."""
         now = self._now()
@@ -429,6 +438,14 @@ class Catalog(CatalogView):
         """Drop the Result Tables a Conversation (or one turn) owns that are still named `rt_*`, never
         its Saved Tables. They stay registered as expired. Returns the names dropped."""
         names = [t.name for t in self.owned(conversation_id, turn_id).result]
+        self._drop_physical(names)
+        self._mark_expired(names)
+        return names
+
+    def drop_earlier_of_cell(self, cell_id: str, current_run_id: str | None) -> list[str]:
+        """Drop the Result Tables a Cell's earlier Runs made that are still named `rt_*`, never a Saved Table
+        nor the current Run's tables. They stay registered as expired. Returns the names dropped."""
+        names = [t.name for t in self.earlier_tables_of_cell(cell_id, current_run_id) if t.kind == "result"]
         self._drop_physical(names)
         self._mark_expired(names)
         return names

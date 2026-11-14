@@ -5,6 +5,7 @@
                async save() {
                  try { await fetch('/n/{{ notebook_id }}/cells/{{ cell.id }}/markdown', { method: 'POST',
                    body: new URLSearchParams({ text: this.text, send_to_ai: this.send ? '1' : '' }) }); } catch (e) {}
+                 window.dispatchEvent(new Event('cells-changed'));
                },
                async done() {
                  /* Save, then show the server's rendering of what was saved. */

@@ -24,7 +24,7 @@ from flood_agent.llm import LLMClient, LLMError, ModelSpec, TextChunk, ToolCallC
 from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
 from flood_agent.mcp_protocol import QUERY_TOOLS
 from flood_agent.mcp_server import ServerSettings
-from flood_agent.notebooks import DEFAULT_MAX_ROWS, MARKDOWN, MARKDOWN_NOTE_LABEL, SQL, NotebookStore
+from flood_agent.notebooks import AI, DEFAULT_MAX_ROWS, MARKDOWN, MARKDOWN_NOTE_LABEL, SQL, NotebookStore
 from flood_agent.semantic_layer import SemanticLayer
 from flood_agent.store import COUNT_KIND, ConversationStore
 from flood_agent.trace import TraceBuilder, context_tokens
@@ -496,12 +496,11 @@ class Agent:
         finally:
             release()  # now, not whenever the task's done callback gets its turn
 
-    def _start_cell_run(
-        self, notebook_id: str, cell: dict,
-    ) -> tuple[asyncio.Task, _TurnQueue, Callable[[], None]]:
-        cell_id, draft = cell["id"], cell["draft"]
+    def _context_above(self, notebook_id: str, cell_id: str) -> tuple[list[dict], list[tuple[str, str]]]:
+        """What an AI Cell is sent from the cells above it, built from what each ran (never from Drafts), plus
+        the (cell id, run id) of each AI Cell above that has run. Shared by a Run and by stale detection."""
         history: list[dict] = []
-        above: list[tuple[str, str]] = []  # (cell id, run id) of each AI Cell above that has run
+        above: list[tuple[str, str]] = []
         for other in self.notebooks.cells(notebook_id):
             if other["id"] == cell_id:
                 break
@@ -512,7 +511,30 @@ class Agent:
             elif other["run"]:
                 history += self._what_ran(other["run"])
                 above.append((other["id"], other["run"]["id"]))
-        fingerprint = hashlib.sha256(json.dumps(history, sort_keys=True).encode()).hexdigest()
+        return history, above
+
+    @staticmethod
+    def _fingerprint(history: list[dict]) -> str:
+        return hashlib.sha256(json.dumps(history, sort_keys=True).encode()).hexdigest()
+
+    def stale_cells(self, notebook_id: str) -> set[str]:
+        """The ids of the notebook's AI Cells that are stale: the context each would be sent now differs from
+        the one its latest Run was sent. SQL Cells (which store no fingerprint), cells that never ran and cells
+        still running are never stale."""
+        stale = set()
+        for cell in self.notebooks.cells(notebook_id):
+            run = cell["run"]
+            if cell["kind"] == AI and run and run["status"] != "running" and run["context_fingerprint"]:
+                if self._fingerprint(self._context_above(notebook_id, cell["id"])[0]) != run["context_fingerprint"]:
+                    stale.add(cell["id"])
+        return stale
+
+    def _start_cell_run(
+        self, notebook_id: str, cell: dict,
+    ) -> tuple[asyncio.Task, _TurnQueue, Callable[[], None]]:
+        cell_id, draft = cell["id"], cell["draft"]
+        history, above = self._context_above(notebook_id, cell_id)
+        fingerprint = self._fingerprint(history)
         settings = {"model": draft.get("model") or self.config.model, "effort": draft.get("effort"),
                     "max_rows": draft.get("max_rows") or DEFAULT_MAX_ROWS}
         run_id = self.notebooks.start_run(cell_id, draft["prompt"], settings, fingerprint)

@@ -35,10 +35,15 @@
                  this.maxRows = String(this.maxRows).replace(/\D/g, '').replace(/^0+/, '') || '{{ cell.max_rows }}';
                  this.save();
                },
-               async save() {
-                 /* Keep the Draft, so a reload shows what was typed; a failure is not worth interrupting for. */
+               saving: null,
+               save() {
+                 /* Keep the Draft, so a reload shows what was typed; a failure is not worth interrupting for.
+                    Saves go one at a time, in order: a blur's save and the click's that follows it would
+                    otherwise race, and the older text could land last. */
                  if (this.running) return;
-                 try { await fetch('/n/{{ notebook_id }}/cells/{{ cell.id }}/draft', { method: 'POST', body: this.fields() }); } catch (e) {}
+                 const body = this.fields();
+                 return this.saving = (this.saving || Promise.resolve()).then(() =>
+                   fetch('/n/{{ notebook_id }}/cells/{{ cell.id }}/draft', { method: 'POST', body }).catch(() => {}));
                },
                async run() {
                  if (this.running || busy || !this.prompt.trim()) return;

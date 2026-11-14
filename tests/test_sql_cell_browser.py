@@ -127,7 +127,8 @@ def test_clicking_columns_builds_a_list_at_the_cursor_and_the_table_name_goes_in
     # a click in the middle inserts at the cursor
     box.fill("SELECT sip FROM flows")
     box.evaluate("e => e.setSelectionRange(10, 10)")
-    with page.expect_response(lambda r: r.url.endswith("/draft")):
+    # the textarea's blur saves the old text first: wait for the save that has the insertion
+    with page.expect_response(lambda r: r.url.endswith("/draft") and "dport" in (r.request.post_data or "")):
         cols.get_by_role("button", name="dport", exact=True).click()
     expect(box).to_have_value("SELECT sip, dport FROM flows")
     # the insertion is kept as the Draft

@@ -1,13 +1,24 @@
 # work items
-- I want to give the user the ability to run an arbitrary SQL SELECT query. The word SELECT will be shown (they can't edit that part) and a "From <table>" part will be shown, where <table> is a drop-down list of every table they have access to with a search feature. The drop-down list should also include a rt_ table name. This is safe since RBAC will prevent them from reading any table they don't have access to. The results should be written to a new rt_* table the the results should be displayed in a table. No LLM should be used for this.
+- tests are taking too long to run. We need a way for you to only run targeted tests after a change, instead of running all tests.
+- markdown cell: Edit and Done should take up the same amount of space so clicking one doesn't shift the layout
+- in an AI cell, when I hover over "Open as SQL Cell" the background color should change
+- sql cell should also have a "Send to AI" checkbox. It should be ticked by default.
+- how to handle a "limit 50" in an sql cell when the row count is set to a different value
+- make the "Explain" button in the SQL cells and in traces in AI cells have a green background.
+- when selecting a table in an SQL cell, don't insert the table name into the prompt.
+- after clicking "Collapse outputs" there is no way to uncollapse an individual cell
+- in an SQL cell, when a table is selected, remove the border from each column name. Keep the background color change on hover though. Don't use a fixed-width font for the table name or the column names, since a fixed width font takes up more space
+- report mode: removes all buttons and cell borders, and makes the notebook read-only. Maybe a "Report" button in the top area that toggles this mode.
+- sorting IP addresses in tables needs to be fixed. The current sort is lexicographic, not numeric.
 - add the ability to add secondary indexes to a table
 - toggle (off by default) for prompt results to go to the LLM
-- tests are taking too long to run. We need a way for you to only run targeted tests after a change, instead of running all tests.
 - Per J Legg, how can I add workflows to this agent?
   Maybe a "Create workflow" button that opens a dialog with a prompt area and a "Save" button. The prompt area is the same as the main prompt area, but it is saved to a new workflow file in `workflows/` instead of being sent to the LLM. The workflow file is a YAML file with a `prompt` field and an optional `description` field. The workflow can be selected from a dropdown in the main prompt area, and it will replace the current prompt with the workflow's prompt. The workflow can also be edited or deleted from the dropdown.
   The workflow should specify the model, reasoning effort and max query rows.
   When the dialog opens, show a template.
   Maybe have the ability to add an LLM turn to a workflow, and then reorder turns in a workflow.
+- Workflows (saved, re-runnable prompt sequences). The cell model keeps them possible, but nothing was designed or built.
+- Run all / Run all below. This is the start of the workflow idea, and #106 ruled it out.
 - more eval. In particular, there were eval errors. Can we adjust the prompts/semantic layer to get better ressults, or do we need to use a better model?
 - can the system prompt be made more lean?
 - how can we do some kind of progressive disclosure for the semantic layer? E.g. if an analyst is asking about IPFIX data, I don't want to include diameter schema information in the semantic layer part of the system prompt.
@@ -18,3 +29,12 @@
 # maybe
 - validate against the Vega-Lite v5 JSON schema in show_chart. This catches every structural mistake, but it adds a dependency and a large schema file.
 - ability to paste an image into the prompt and have it be processed by the LLM.
+- Export / Import of a notebook as JSON.
+- Toggle to send prompt results to the LLM. It conflicts with ADR 0001.
+
+# Possible project names
+Acronym	Expansion	Best Vibe
+F-NATCH	- Notebook for AI, Telemetry, Chat, and Hunting;	Closest phonetic match to F-WATCH
+F-NATS	- Notebook for AI, Telemetry, and SQL;	Most accurate to your exact tech stack
+F-NASH	- Notebook for AI, SQL, and Hunting;	Best blend of SQL querying and threat hunting
+F-CANOPY — F-project Cyber AI Notebook for Operations, Peering, and telemetrY. Suggests overarching visibility across carrier networks and peering borders.

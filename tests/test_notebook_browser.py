@@ -30,7 +30,7 @@ def test_the_sidebar_plus_makes_notebook_n_with_one_empty_ai_cell_and_opens_it(l
     expect(page.locator(".notebook-list li")).to_have_count(0)
     cell = open_new_notebook(page)
 
-    expect(page.locator(".notebook-list li.current")).to_have_text("Notebook 1")
+    expect(page.locator(".notebook-list li.current a")).to_have_text("Notebook 1")
     expect(page.locator(".cellblock")).to_have_count(1)
     expect(cell).to_have_attribute("data-kind", "ai")
     expect(cell.get_by_label("Prompt")).to_have_value("")
@@ -40,7 +40,7 @@ def test_the_sidebar_plus_makes_notebook_n_with_one_empty_ai_cell_and_opens_it(l
     expect(cell.get_by_role("button", name="Run")).to_be_enabled()
 
     page.get_by_role("button", name="New notebook").click()
-    expect(page.locator(".notebook-list li.current")).to_have_text("Notebook 2")
+    expect(page.locator(".notebook-list li.current a")).to_have_text("Notebook 2")
     expect(page.locator(".notebook-list li")).to_have_count(2)
 
 

@@ -67,3 +67,12 @@ def test_a_ticked_note_above_an_ai_cell_is_sent_with_the_run(live_page, build_ag
     second.get_by_role("button", name="Run").click()
     expect(second.locator(".reply")).to_contain_text("Noted.")
     assert "[Markdown note] Focus on UDP" in str(llm.calls[0])
+
+
+def test_shift_enter_renders_the_markdown_cell(live_page):
+    page = live_page()
+    cell = open_notebook_with_markdown(page)
+    cell.get_by_label("Markdown").fill("## Plan")
+    cell.get_by_label("Markdown").press("Shift+Enter")
+    expect(cell.locator(".md-preview h2")).to_have_text("Plan")
+    expect(cell.get_by_label("Markdown")).to_be_hidden()

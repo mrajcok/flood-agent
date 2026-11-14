@@ -26,7 +26,7 @@
     </div>
     <p class="not-sent" x-show="!send" {% if cell.send_to_ai %}x-cloak{% endif %}>Not sent to AI Cells below</p>
     <textarea class="cell-prompt" rows="4" aria-label="Markdown" placeholder="Write notes in Markdown" x-model="text"
-              x-show="editing" {% if cell.text.strip() %}x-cloak{% endif %} @blur="save()"></textarea>
+              x-show="editing" {% if cell.text.strip() %}x-cloak{% endif %} @blur="save()" @keydown.shift.enter.prevent="done()"></textarea>
     <div class="output md-preview" x-show="!editing" {% if not cell.text.strip() %}x-cloak{% endif %} @dblclick="editing = true">
       <div class="reply"><span class="md-delta">{{ cell.text }}</span></div>
       {# Embedded Displays: the same components an AI Cell uses, so they follow Refresh and renames and say "expired". #}

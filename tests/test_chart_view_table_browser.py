@@ -3,6 +3,7 @@
 from conftest import ScriptedLLM
 from playwright.sync_api import expect
 from test_chart_tooltip_browser import chart_script
+from test_notebook_browser import run_in_new_notebook
 
 
 def chart_page(live_page, build_agent):
@@ -12,10 +13,9 @@ def chart_page(live_page, build_agent):
         {"x": {"field": "dport", "type": "nominal"}, "y": {"field": "bytes", "type": "quantitative"}},
     )
     page = live_page(agent=build_agent(ScriptedLLM(*script)))
-    page.get_by_placeholder("Write a prompt").fill("chart it")
-    page.get_by_role("button", name="Send message (Enter)").click()
+    run_in_new_notebook(page, "chart it")
     expect(page.locator(".display.chart canvas, .display.chart svg.marks").first).to_be_visible()
-    expect(page.locator(".live-trace")).to_have_count(0)
+    expect(page.locator(".drawer")).to_have_count(0)
     return page
 
 

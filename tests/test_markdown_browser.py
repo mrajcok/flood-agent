@@ -1,7 +1,8 @@
-"""The LLM's reply text is shown as rendered, sanitised Markdown, live and after reopening the Conversation."""
+"""The LLM's reply text is shown as rendered, sanitised Markdown, live and after reloading the notebook."""
 
 from conftest import ScriptedLLM, last_tool_result, tool_call
 from playwright.sync_api import expect
+from test_notebook_browser import run_in_new_notebook
 
 from flood_agent.llm import TextChunk
 
@@ -40,11 +41,9 @@ def check_rendered(turn):
 
 def test_reply_markdown_is_rendered_and_sanitised_live_and_from_history(live_page, build_agent):
     page = live_page(agent=build_agent(ScriptedLLM(*script())))
-    page.get_by_placeholder("Write a prompt").fill("what fixed it?")
-    page.get_by_role("button", name="Send message (Enter)").click()
-    turn = page.locator("details.turn").last
-    expect(turn.locator("details.trace")).to_have_count(1)  # the turn is done
-    check_rendered(turn)
+    cell = run_in_new_notebook(page, "what fixed it?")
+    expect(cell.locator(".cell-foot")).to_be_visible()  # the run is done
+    check_rendered(cell)
 
-    page.locator("aside ul li a").first.click()
-    check_rendered(page.locator("details.turn").last)
+    page.reload()
+    check_rendered(page.locator(".cellblock").first)

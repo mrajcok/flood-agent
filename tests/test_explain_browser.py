@@ -2,6 +2,7 @@
 
 from conftest import ScriptedLLM, tool_call
 from playwright.sync_api import expect
+from test_notebook_browser import run_in_new_notebook
 
 from flood_agent.llm import TextChunk
 
@@ -9,8 +10,7 @@ from flood_agent.llm import TextChunk
 def trace_with(live_page, build_agent, sql):
     llm = ScriptedLLM([tool_call("run_query", sql=sql, title="t")], [TextChunk("Done.")])
     page = live_page(agent=build_agent(llm))
-    page.get_by_placeholder("Write a prompt").fill("go")
-    page.get_by_role("button", name="Send message (Enter)").click()
+    run_in_new_notebook(page, "go")
     expect(page.locator(".reply", has_text="Done.")).to_be_visible()
     page.locator("details.trace > summary").click()
     return page, llm

@@ -8,6 +8,7 @@ from contextlib import closing
 from conftest import Clock, ScriptedLLM, last_tool_result, tool_call
 from playwright.sync_api import expect
 from test_chart_tooltip_browser import chart_script
+from test_notebook_browser import run_in_new_notebook
 
 from flood_agent import queries
 from flood_agent.llm import TextChunk
@@ -26,9 +27,9 @@ def ask_for_recent_table(build_agent, live_page, monkeypatch, script=None):
     ]))
     agent = build_agent(llm, clock=clock)
     page = live_page(agent=agent)
-    page.get_by_placeholder("Write a prompt").fill("recent flows")
-    page.get_by_role("button", name="Send message (Enter)").click()
+    run_in_new_notebook(page, "recent flows")
     expect(page.locator(".reply", has_text=("Here you go." if script is None else "Here is the chart."))).to_be_visible()
+    expect(page.locator(".cell-foot")).to_be_visible()  # the run is over: the cell no longer re-renders
     (table,) = agent.tables.names()
     return agent, clock, page, table
 
@@ -87,7 +88,7 @@ def test_a_table_with_no_stored_query_has_no_refresh_control(build_agent, live_p
     with closing(sqlite3.connect(agent.tables.path)) as con, con:
         con.execute("UPDATE result_tables SET sql=NULL, max_rows=NULL")
     page.reload()
-    page.locator("aside ul li a").first.click()
+    page.reload()
     expect(page.locator(".display tbody tr")).to_have_count(2)
     expect(page.locator(".display .table-name .name")).to_have_text(table)
     expect(page.get_by_role("button", name="Refresh")).to_have_count(0)

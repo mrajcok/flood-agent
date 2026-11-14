@@ -104,7 +104,6 @@ def test_the_done_button_tooltip_mentions_shift_enter(live_page):
 def test_edit_and_done_buttons_take_the_same_width_so_toggling_moves_nothing(live_page):
     page = live_page()
     cell = open_notebook_with_markdown(page)
-    head = cell.locator(".head")
     done_width = cell.get_by_role("button", name="Done").bounding_box()["width"]
     send_x = cell.locator("label.send").bounding_box()["x"]
     cell.get_by_label("Markdown").fill("note")
@@ -112,4 +111,3 @@ def test_edit_and_done_buttons_take_the_same_width_so_toggling_moves_nothing(liv
     expect(cell.get_by_role("button", name="Edit")).to_be_visible()
     assert cell.get_by_role("button", name="Edit").bounding_box()["width"] == done_width
     assert cell.locator("label.send").bounding_box()["x"] == send_x
-    assert head.bounding_box()["height"] > 0

@@ -527,9 +527,12 @@ def fetch_rows(
         if sort is not None:
             q = table_names.quote(sort)
             # An IP column (every non-null value a dotted quad) sorts by numeric address value.
-            is_ip = con.execute(
-                f"SELECT COUNT({q}) > 0 AND COUNT({q}) = COUNT(ipv4_key({q})) FROM {table_names.quote(name)}"
-            ).fetchone()[0]
+            tbl = table_names.quote(name)
+            has_values = con.execute(f"SELECT 1 FROM {tbl} WHERE {q} IS NOT NULL LIMIT 1").fetchone()
+            not_ip = has_values and con.execute(
+                f"SELECT 1 FROM {tbl} WHERE {q} IS NOT NULL AND ipv4_key({q}) IS NULL LIMIT 1"
+            ).fetchone()
+            is_ip = bool(has_values) and not not_ip
             key = f"ipv4_key({q})" if is_ip else q
             order = f" ORDER BY {key} {'DESC' if descending else 'ASC'}, rowid"
         total = con.execute(f"SELECT COUNT(*) FROM {table_names.quote(name)}").fetchone()[0]

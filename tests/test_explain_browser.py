@@ -1,6 +1,6 @@
 """Each "Generated SQL" in a Trace has an Explain button that shows its Query Plan in a dialog, without the LLM."""
 
-from conftest import ScriptedLLM, tool_call
+from conftest import ScriptedLLM, add_below, tool_call
 from playwright.sync_api import expect
 from test_notebook_browser import run_in_new_notebook
 
@@ -61,8 +61,6 @@ def test_explain_buttons_are_green_in_a_trace_and_in_a_sql_cell(live_page, build
     page.get_by_role("button", name="New notebook").click()
     sql_cell = page.locator(".cellblock").first
     sql_cell.hover()
-    from conftest import add_below
-
     add_below(page, "sql")
     button = page.locator(".cellblock[data-kind=sql]").get_by_role("button", name="Explain")
     assert is_green(button.evaluate("b => getComputedStyle(b).backgroundColor"))

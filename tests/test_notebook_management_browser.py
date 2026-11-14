@@ -153,3 +153,39 @@ def test_table_info_off_hides_a_cells_table_name_line(live_page, build_agent):
     page.get_by_label("Table info").uncheck()
     expect(cell.locator(".table-name").first).to_be_hidden()
     expect(cell.locator(".display table").first).to_be_visible()
+
+
+def test_sql_cell_can_show_and_hide_its_own_output_while_outputs_are_collapsed(live_page, build_agent):
+    page = live_page(agent=build_agent(ScriptedLLM()))
+    open_new_notebook(page)
+    add_below(page, "sql")
+    cell = page.locator(".cellblock.sql")
+    cell.get_by_label("SQL").fill("SELECT dport FROM flows GROUP BY dport")
+    cell.get_by_role("button", name="Run").click()
+    expect(cell.locator(".output .display")).to_contain_text("8443")
+    page.get_by_role("button", name="Collapse outputs").click()
+    expect(cell.locator(".output .display")).to_be_hidden()
+    cell.get_by_role("button", name="Show output").click()
+    expect(cell.locator(".output .display")).to_be_visible()
+    cell.get_by_role("button", name="Hide output").click()
+    expect(cell.locator(".output .display")).to_be_hidden()
+
+
+def test_markdown_cell_output_toggle_is_offered_only_when_not_editing_and_survives_rendering(live_page):
+    page = live_page()
+    open_new_notebook(page)
+    add_below(page, "markdown")
+    cell = page.locator(".cellblock.markdown")
+    cell.get_by_label("Markdown").fill("**focus** on UDP")
+    cell.get_by_role("button", name="Done").click()
+    expect(cell.locator(".md-preview strong")).to_have_text("focus")
+    page.get_by_role("button", name="Collapse outputs").click()
+    expect(cell.locator(".md-preview")).to_be_hidden()
+    cell.get_by_role("button", name="Show output").click()
+    expect(cell.locator(".md-preview")).to_be_visible()
+    cell.get_by_role("button", name="Edit").click()
+    expect(cell.get_by_role("button", name="Hide output")).to_be_hidden()  # nothing to hide while editing
+    cell.get_by_role("button", name="Done").click()
+    expect(cell.locator(".md-preview")).to_be_visible()  # still open by hand after the re-render
+    cell.get_by_role("button", name="Hide output").click()
+    expect(cell.locator(".md-preview")).to_be_hidden()

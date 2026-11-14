@@ -57,5 +57,4 @@ def test_open_as_sql_cell_changes_its_background_on_hover(live_page, build_agent
     button = ai.locator(".sql-label").get_by_role("button", name="Open as SQL Cell")
     before = button.evaluate("b => getComputedStyle(b).backgroundColor")
     button.hover()
-    page.wait_for_timeout(300)
-    assert button.evaluate("b => getComputedStyle(b).backgroundColor") != before
+    expect(button).not_to_have_css("background-color", before)

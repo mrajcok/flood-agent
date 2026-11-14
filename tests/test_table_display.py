@@ -180,3 +180,22 @@ def test_row_keys_change_on_every_load_so_sorting_and_paging_redraw_the_cells(bu
 def test_pager_sits_above_the_table_so_it_does_not_move_on_a_short_last_page():
     template = (Path(__file__).parent.parent / "src/flood_agent/templates/display_table.html").read_text()
     assert template.index('class="pager"') < template.index("<table>")
+
+
+IP_GEN = (
+    "SELECT * FROM (SELECT 1 AS k, '10.0.0.10' AS ip, 'b10' AS name UNION ALL SELECT 2, '10.0.0.2', 'a2' "
+    "UNION ALL SELECT 3, '9.255.0.1', 'c1' UNION ALL SELECT 4, '192.168.1.1', 'a10')"
+)
+
+
+def test_ip_columns_sort_numerically_and_other_text_columns_do_not(env):
+    client, table = env
+    rt = table(IP_GEN)
+    base = f"/api/results/{rt}/rows"
+
+    def column(sort, dir, i):
+        return [r[i] for r in client.get(base, params={"sort": sort, "dir": dir}).json()["rows"]]
+
+    assert column("ip", "asc", 1) == ["9.255.0.1", "10.0.0.2", "10.0.0.10", "192.168.1.1"]
+    assert column("ip", "desc", 1) == ["192.168.1.1", "10.0.0.10", "10.0.0.2", "9.255.0.1"]
+    assert column("name", "asc", 2) == ["a10", "a2", "b10", "c1"]  # not IPs: plain text order

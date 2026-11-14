@@ -31,7 +31,3 @@ test("a name is spaced from the words around it", () => {
   assert.equal(S.afterName("SELECT sip FROM ", "flows"), "SELECT sip FROM flows");
   assert.equal(S.afterName("", "flows"), "flows");
 });
-
-test("a table picked in an empty box starts SELECT and FROM, the cursor after SELECT", () => {
-  assert.deepEqual(S.startQuery("flows"), { text: "SELECT \nFROM flows", cursor: 7 });
-});

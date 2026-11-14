@@ -85,17 +85,21 @@ class LiveCounter:
     call: int = 0
 
 
-def live_event_sse(ev, key: str, live: LiveCounter, refreshable_counts: bool = True) -> str | None:
+NOTEBOOK_COUNT_REFRESH = "/api/notebook-displays/{}/refresh"  # a notebook Count Display's id is not a Conversation's
+
+
+def live_event_sse(ev, key: str, live: LiveCounter, refreshable_counts: bool = True, notebook: bool = False) -> str | None:
     """The SSE message a streamed event becomes in the live view (text, Displays, steps, flags), shared by
     Conversation turns and Notebook cells; None for the events a caller handles itself (Trace, end).
     `key` names the turn or cell in the ids of its live steps. Count Displays are only refreshable
-    (display_id) where the Conversation store holds them."""
+    (display_id); `notebook` says it is a cell's, which refreshes through the notebook endpoint."""
     if isinstance(ev, TextDelta):
         return _sse("text", f'<span class="md-delta">{escape(ev.text)}</span>')  # markdown.js renders it
     if isinstance(ev, CountEvent):
         return _sse("display", TEMPLATES.get_template("display_count.html").render(
             title=ev.title, value=ev.value, computed_at_ms=ev.computed_at_ms,
-            display_id=ev.display_id if refreshable_counts else None).strip())
+            display_id=ev.display_id if refreshable_counts else None,
+            refresh_url=NOTEBOOK_COUNT_REFRESH.format(ev.display_id) if notebook and ev.display_id else None).strip())
     if isinstance(ev, DisplayEvent) and ev.kind == "chart":
         html = TEMPLATES.get_template("display_chart.html").render(
             spec_json=json.dumps(ev.spec), **_table_display_urls(ev.result_table)
@@ -328,16 +332,19 @@ def create_app(
         last = agent.notebooks.last_settings("sql")
         return agent.add_sql_cell(notebook_id, max_rows=last["max_rows"] if last else DEFAULT_MAX_ROWS, after=after, before=before)
 
-    def output_items(run: dict) -> list[dict]:
-        """What a finished (or stopped) Run shows under its prompt: the answer's text and its Displays, in order."""
+    def output_items(run: dict, refreshable_counts: bool = True) -> list[dict]:
+        """What a finished (or stopped) Run shows under its prompt: the answer's text and its Displays, in order.
+        An AI Cell's Count Displays refresh; a SQL Cell's do not (its Run is its refresh)."""
         transcript = agent.notebooks.transcript(run["id"])
         shown = {i["result_table"] for i in transcript if i["type"] == "display" and i["result_table"]}
         expired = shown - agent.tables.live_among(shown)
         items: list[dict] = []
         for item in transcript:
             if item["type"] == "display":
-                # A Count Display's id is a notebook row, not the Conversation store's, which a Refresh looks up.
-                items.append(display_item({**item, "display_id": None} if item["kind"] == COUNT_KIND else item, expired))
+                if item["kind"] == COUNT_KIND:  # its id is a notebook row: it refreshes through the notebook's endpoint
+                    item = {**item, "display_id": item["display_id"] if refreshable_counts else None,
+                            "refresh_url": NOTEBOOK_COUNT_REFRESH.format(item["display_id"])}
+                items.append(display_item(item, expired))
                 continue
             m = item["message"]
             if m["role"] == "assistant" and m.get("content"):
@@ -345,6 +352,17 @@ def create_app(
                 if text:
                     items.append({"type": "assistant", "text": text})
         return items
+
+    def refreshed_elsewhere(run: dict) -> int | None:
+        """When a SQL Cell's table was last refreshed (in the Tables dialog, say) after the Run finished, else None."""
+        name = (run["result"] or {}).get("table")
+        if not name or run["finished_at"] is None:
+            return None
+        try:
+            as_of = agent.tables[name].as_of_ms
+        except (KeyError, TableExpired):  # dropped or expired
+            return None
+        return as_of if as_of > run["finished_at"] else None
 
     def cell_view(cell: dict, starting: bool = False, stale: bool = False) -> dict:
         """What the cell template needs. `starting`: its run has been asked for and its stream not yet opened,
@@ -368,11 +386,12 @@ def create_app(
         view["number"], view["status"] = run["number"], run["status"]
         if run["status"] == "running" and agent.running_cell(cell["notebook_id"]) == cell["id"]:
             view["running"] = view["polling"] = True  # opened mid-run: nothing streams to this page, so it re-fetches
-        view["output"] = output_items(run)
+        view["output"] = output_items(run, refreshable_counts=cell["kind"] != "sql")
         if cell["kind"] == "sql":
             view["result"] = run["result"]
             view["ran_utc"] = time.strftime("%H:%M UTC", time.gmtime(run["started_at"] / 1000))
             view["started_at_ms"] = run["started_at"]
+            view["refreshed_at_ms"] = refreshed_elsewhere(run)
             return view
         ran = run["settings"]
         view["ran"] = {"prompt": run["prompt"], "model": ran["model"], "effort": ran["effort"] or "",
@@ -546,7 +565,7 @@ def create_app(
             try:
                 async with aclosing(cast(AsyncGenerator, agent.run_cell(notebook_id, cell_id))) as run:
                     async for ev in run:
-                        sse = live_event_sse(ev, cell_id, live, refreshable_counts=False)
+                        sse = live_event_sse(ev, cell_id, live, notebook=True)  # a SQL Cell's event has no display_id
                         if sse is not None:
                             yield sse
                         elif isinstance(ev, TurnEnd):
@@ -756,6 +775,15 @@ def create_app(
         422 the query failed (the old number is then kept). Returns {value, computed_at_ms}."""
         try:
             return agent.refresh_count(display_id)
+        except KeyError:
+            raise HTTPException(404, "unknown Count Display")
+
+    @app.post("/api/notebook-displays/{display_id}/refresh")
+    def refresh_notebook_count_display(display_id: int):
+        """Refresh an AI Cell's Count Display, as `refresh_count_display` does. Never a Run: the cell's Run
+        and what cells below are sent are untouched."""
+        try:
+            return agent.refresh_count(display_id, in_notebook=True)
         except KeyError:
             raise HTTPException(404, "unknown Count Display")
 

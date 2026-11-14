@@ -22,7 +22,7 @@
       <span class="not-sent" x-show="!send" {% if cell.send_to_ai %}x-cloak{% endif %}>Not sent to AI Cells below</span>
       <span class="grow"></span>
       <label class="send"><input type="checkbox" x-model="send" @change="save()" aria-label="Send to AI"> Send to AI</label>
-      <button type="button" class="linkish" x-show="!editing" @click="editing = true">Edit</button>
+      <button type="button" class="linkish" x-show="!editing" title="Edit this note (double-clicking it also edits)" @click="editing = true">Edit</button>
       <button type="button" class="linkish" x-show="editing" x-cloak @click="done()">Done</button>
     </div>
     <textarea class="cell-prompt" rows="4" aria-label="Markdown" placeholder="Write notes in Markdown" x-model="text"

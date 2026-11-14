@@ -89,3 +89,11 @@ def test_markdown_head_says_markdown_and_carries_the_not_sent_note_and_the_add_b
     button = page.locator("[data-add-top='ai']").bounding_box()
     assert title and button
     assert abs((button["y"] + button["height"] / 2) - (title["y"] + title["height"] / 2)) < title["height"]
+
+
+def test_the_edit_button_tooltip_mentions_double_click(live_page):
+    page = live_page()
+    cell = open_notebook_with_markdown(page)
+    cell.get_by_label("Markdown").fill("note")
+    cell.get_by_role("button", name="Done").click()
+    expect(cell.get_by_role("button", name="Edit")).to_have_attribute("title", re.compile("double-click", re.I))

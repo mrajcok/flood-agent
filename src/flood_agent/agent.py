@@ -19,7 +19,7 @@ from mcp import StdioServerParameters
 from mcp.types import TextContent
 
 from flood_agent import flagging, queries, table_names
-from flood_agent.catalog import Catalog, CellRun, ConversationTurn, Owner, Table, TableExpired
+from flood_agent.catalog import Catalog, CellRun, ConversationTurn, Owner, Table, TableExpired, canonical
 from flood_agent.llm import LLMClient, LLMError, ModelSpec, TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
 from flood_agent.mcp_protocol import QUERY_TOOLS
@@ -344,6 +344,14 @@ def _resolve_data(node, table: str, url: dict):
     return node
 
 
+def markdown_note(draft: dict) -> str:
+    """What an AI Cell is sent for a ticked Markdown Cell: its text, then one line per embedded Display naming
+    its kind and table. Never rows or a chart's data (ADR 0001); the same draft always gives the same note."""
+    lines = [f"{MARKDOWN_NOTE_LABEL} {draft.get('text', '').strip()}".rstrip()]
+    lines += [f"[Display: {d['kind']} {d['table']}]" for d in draft.get("displays") or []]
+    return "\n".join(lines)
+
+
 class Agent:
     def __init__(self, config: AgentConfig, client_for: ClientFactory):
         self.config = config
@@ -354,7 +362,7 @@ class Agent:
         self.notebooks = NotebookStore(config.app_db, config.clock)
         self.tables = Catalog(
             config.app_db, config.clock, config.result_ttl_ms, telemetry_tables=self.semantic_layer.table_names(),
-            results_db=config.results_db, on_rename=self.store.follow_rename,
+            results_db=config.results_db, on_rename=self._follow_rename,
         )
         self._connection: McpConnection | None = None
         self._restart_lock = asyncio.Lock()
@@ -461,6 +469,58 @@ class Agent:
         (a SHOW statement or DESCRIBE TABLE, with its `table`) makes it a SHOW Cell: the SQL is not used."""
         return self.notebooks.add_cell(
             notebook_id, SQL, {"sql": sql, "max_rows": max_rows, "command": command, "table": table}, after, before)
+
+    def _follow_rename(self, con, old: str, new: str) -> None:
+        """Every Display, in a Conversation, a Run or a Markdown Cell, follows a table's new name."""
+        self.store.follow_rename(con, old, new)
+        self.notebooks.follow_rename(con, old, new)
+
+    def _copyable_run(self, notebook_id: str, cell_id: str) -> tuple[str, list[dict]]:
+        """An AI Cell's latest answer as a Markdown Cell would hold it: the text and the embedded Displays (a
+        table or chart of a table that is still live, each with its own definition). Count Displays are not
+        embedded: their number is already in the text. ValueError if the cell has not run."""
+        cell = self._idle_cell(notebook_id, cell_id)
+        if cell["kind"] != AI or cell["run"] is None:
+            raise ValueError("Only an AI Cell that has run can be copied to a Markdown Cell.")
+        texts: list[str] = []
+        displays: list[dict] = []
+        for item in self.notebooks.transcript(cell["run"]["id"]):
+            if item["type"] == "message":
+                m = item["message"]
+                if m["role"] == "assistant" and m.get("content"):
+                    text = m["content"].removesuffix(STOPPED_NOTE).rstrip()
+                    if text:
+                        texts.append(text)
+            elif item["kind"] in ("table", "chart") and item["result_table"] in self.tables:
+                d = {"kind": item["kind"], "table": item["result_table"]}
+                if item["kind"] == "chart":
+                    d["spec"] = item["spec"]
+                displays.append(d)
+        return "\n\n".join(texts), displays
+
+    def markdown_copy_tables(self, notebook_id: str, cell_id: str) -> list[str]:
+        """The `rt_` tables a Copy to Markdown Cell would embed, which the user may save first (so the copy does
+        not expire with them)."""
+        _, displays = self._copyable_run(notebook_id, cell_id)
+        return list(dict.fromkeys(d["table"] for d in displays if table_names.is_result_table_name(d["table"])))
+
+    def copy_to_markdown_cell(self, notebook_id: str, cell_id: str, save: dict[str, str] | None = None) -> str:
+        """Insert a Markdown Cell below an AI Cell holding its answer text and one embedded Display per table or
+        chart, and return its id. Send to AI starts unticked. `save` maps `rt_` tables of the answer to the names
+        to rename them to (Saved Tables); every name is checked first, so a ValueError changes nothing."""
+        save = save or {}
+        usable = self.markdown_copy_tables(notebook_id, cell_id)
+        if not set(save) <= set(usable):
+            raise ValueError("Only the answer's rt_ tables can be saved.")
+        for new in save.values():
+            self.tables.check_new_name(new)
+        if len({canonical(n) for n in save.values()}) != len(save):
+            raise ValueError("Each saved table needs its own name.")
+        for old, new in save.items():
+            self.tables.update(old, new_name=new)
+        text, displays = self._copyable_run(notebook_id, cell_id)
+        return self.notebooks.add_cell(
+            notebook_id, MARKDOWN, {"text": text, "send_to_ai": False, "displays": displays}, after=cell_id)
 
     def add_markdown_cell(self, notebook_id: str, text: str = "", send_to_ai: bool = False,
                           after: str | None = None, before: str | None = None) -> str:
@@ -580,8 +640,8 @@ class Agent:
                 break
             if other["kind"] == MARKDOWN:
                 text = other["draft"].get("text", "").strip()
-                if other["draft"].get("send_to_ai") and text:
-                    history.append({"role": "user", "content": f"{MARKDOWN_NOTE_LABEL} {text}"})
+                if other["draft"].get("send_to_ai") and (text or other["draft"].get("displays")):
+                    history.append({"role": "user", "content": markdown_note(other["draft"])})
             elif other["run"]:
                 history += self._what_ran(other["run"])
                 above.append((other["id"], other["run"]["id"]))

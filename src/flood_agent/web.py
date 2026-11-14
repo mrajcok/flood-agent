@@ -448,6 +448,40 @@ def create_app(
         add_ai_cell(notebook_id)
         return RedirectResponse(f"/n/{notebook_id}", status_code=303)
 
+    @app.get("/api/notebooks")
+    def search_notebooks(q: str = ""):
+        """The notebooks (id, title) whose title or cell text contains `q`, most recent activity first."""
+        return [{"id": n["id"], "title": n["title"]} for n in agent.notebooks.list_notebooks(q)]
+
+    @app.post("/n/{notebook_id}/rename")
+    def rename_notebook(notebook_id: str, title: str = Form("")):
+        try:
+            agent.rename_notebook(notebook_id, title)
+        except KeyError:
+            raise HTTPException(404, "unknown notebook")
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        return RedirectResponse(f"/n/{notebook_id}", status_code=303)
+
+    @app.get("/n/{notebook_id}/delete-preview")
+    def notebook_delete_preview(notebook_id: str):
+        try:
+            return agent.notebook_delete_preview(notebook_id)
+        except KeyError:
+            raise HTTPException(404, "unknown notebook")
+        except NotebookBusy as e:
+            raise HTTPException(409, str(e))
+
+    @app.post("/n/{notebook_id}/delete")
+    def delete_notebook(notebook_id: str, tables: TablesChoice = Form("keep")):
+        try:
+            agent.delete_notebook(notebook_id, tables)
+        except KeyError:
+            raise HTTPException(404, "unknown notebook")
+        except NotebookBusy as e:
+            raise HTTPException(409, str(e))
+        return RedirectResponse("/", status_code=303)
+
     @app.get("/n/{notebook_id}", response_class=HTMLResponse)
     def open_notebook(request: Request, notebook_id: str):
         if not agent.notebooks.exists(notebook_id):

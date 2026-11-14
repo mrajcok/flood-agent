@@ -56,7 +56,9 @@
   .cellblock .cell-foot .meter { display: inline-block; width: 3.5rem; height: .35rem; background: #e3e7ef; border-radius: 999px; overflow: hidden; vertical-align: middle; }
   .cellblock .cell-foot .meter i { display: block; height: 100%; background: #4a6fd3; }
   .cellblock .cell-foot .amber .meter i { background: #d98e04; } .cellblock .cell-foot .red .meter i { background: #c0392b; }
-  .add-bar { display: flex; gap: .5rem; justify-content: center; margin: .25rem 0; opacity: .55; padding-left: 3.6rem; }
-  .add-bar:hover, .add-bar:focus-within { opacity: 1; }
+  .add-bar, .add-top { display: flex; gap: .5rem; justify-content: center; margin: .25rem 0; opacity: .55; padding-left: 3.6rem; }
+  .add-bar .cell-ops { margin-left: auto; display: inline-flex; gap: .25rem; }
+  .add-bar .cell-ops button { min-width: 1.8rem; }
+  .add-bar:hover, .add-bar:focus-within, .add-top:hover, .add-top:focus-within { opacity: 1; }
   .add-bar button { font: inherit; font-size: .8rem; color: #2a4ba0; background: #eef3fd; border: 1px solid #b9c7e6; border-radius: 999px; padding: .05rem .7rem; cursor: pointer; }
 </style>

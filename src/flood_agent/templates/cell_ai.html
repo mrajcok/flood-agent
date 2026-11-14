@@ -7,6 +7,13 @@
      {% if cell.polling %}hx-get="/n/{{ notebook_id }}/cells/{{ cell.id }}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}
      x-data="{ prompt: {{ cell.prompt | tojson | forceescape }}, model: {{ cell.model | tojson | forceescape }}, effort: {{ cell.effort | tojson | forceescape }},
                maxRows: {{ cell.max_rows | tojson | forceescape }}, pop: false, error: '', stopping: false,
+               canned: {{ canned_items | tojson | forceescape }}, noModel: {{ no_model | tojson | forceescape }}, query: '', listOpen: false, active: 0,
+               get fake() { return this.canned.length > 0 && this.model === this.noModel; },
+               get shown() { const q = this.query.trim().toLowerCase(); return this.canned.filter(c => c.prompt.toLowerCase().includes(q)); },
+               pickCanned(prompt) {
+                 /* Fake Mode: picking a Canned Prompt makes it this cell's prompt and runs it. */
+                 this.listOpen = false; this.query = ''; this.prompt = prompt; this.run();
+               },
                ran: {{ cell.ran | tojson | forceescape }},
                get edited() {
                  /* The Draft differs from what ran: the old output stays, marked, and cells below are sent what ran. */
@@ -94,7 +101,19 @@
         </div>
       </span>
     </div>
-    <textarea class="cell-prompt" rows="2" placeholder="Write a prompt (Shift-Enter to run)" aria-label="Prompt" x-model="prompt"
+    <div class="cell-canned" x-show="fake" {% if not canned_items or cell.model != no_model %}x-cloak{% endif %} @click.outside="listOpen = false">
+      <input type="text" x-model="query" :placeholder="prompt || 'No model: click to see a list or type to find a canned prompt'" aria-label="Fake Mode picker"
+             autocomplete="off" :disabled="running"
+             @focus="listOpen = true; active = 0" @click="listOpen = true" @input="listOpen = true; active = 0"
+             @keydown.arrow-down.prevent="listOpen = true; active = Math.min(active + 1, shown.length - 1)"
+             @keydown.arrow-up.prevent="active = Math.max(active - 1, 0)"
+             @keydown.enter.prevent="shown[active] && pickCanned(shown[active].prompt)" @keydown.escape="listOpen = false">
+      <ul x-show="listOpen && shown.length" x-cloak role="listbox" aria-label="Fake Mode choices">
+        <template x-for="(c, i) in shown" :key="c.prompt"><li role="option" :class="{ on: i === active, follow: c.follow }" @mouseenter="active = i" @click="pickCanned(c.prompt)">
+          <span x-text="c.prompt"></span> <small class="fails" x-show="c.fails">fails on purpose</small></li></template>
+      </ul>
+    </div>
+    <textarea class="cell-prompt" x-show="!fake" rows="2" placeholder="Write a prompt (Shift-Enter to run)" aria-label="Prompt" x-model="prompt"
               @blur="save()" @keydown.shift.enter.prevent="run()" {% if cell.running %}readonly{% else %}:readonly="running"{% endif %}></textarea>
     <p class="cell-error" role="alert" x-show="error" x-text="error" x-cloak></p>
 

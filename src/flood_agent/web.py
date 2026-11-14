@@ -251,7 +251,9 @@ def create_app(
         return items
 
     def model_picker() -> dict:
-        return {"models": models, "default_model": default_model, "needs_key": NEEDS_KEY, "no_model": NO_MODEL}
+        return {"models": models, "default_model": default_model, "needs_key": NEEDS_KEY, "no_model": NO_MODEL,
+                "canned_items": [{"prompt": c.prompt, "fails": c.fails_on_purpose, "follow": n > 0}
+                                 for top in picker or [] for n, c in enumerate([top, *top.follow_ups])]}
 
     @app.get("/context-meter", response_class=HTMLResponse)
     def context_meter(model: str, conversation_id: str = ""):

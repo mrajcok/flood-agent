@@ -138,7 +138,7 @@ async def test_a_follow_up_whose_parent_query_failed_says_the_query_failed_not_r
 
     text = text_of(events)
     assert "query failed" in text
-    assert "first in this Conversation" not in text
+    assert "first in an AI Cell above" not in text
     assert not [e for e in events if isinstance(e, DisplayEvent)]
 
 
@@ -194,7 +194,7 @@ async def test_a_follow_up_picked_first_replies_to_run_its_parent_and_makes_no_t
 
     events = await collect(agent, follow_up.prompt)
 
-    assert f"Fake Mode: run *{parent.prompt}* first in this Conversation" in text_of(events)
+    assert f"Fake Mode: run *{parent.prompt}* first in an AI Cell above" in text_of(events)
     assert not [e for e in events if isinstance(e, DisplayEvent)]
 
 
@@ -209,7 +209,7 @@ async def test_a_follow_up_after_an_unrelated_prompt_replies_parent_first_and_ma
 
     events = await collect(agent, follow_up.prompt, conversation)
 
-    assert f"Fake Mode: run *{parent.prompt}* first in this Conversation" in text_of(events)
+    assert f"Fake Mode: run *{parent.prompt}* first in an AI Cell above" in text_of(events)
     assert not [e for e in events if isinstance(e, DisplayEvent)]
     trace = next(e.trace for e in events if isinstance(e, TraceReady))
     assert not [e for e in trace["entries"] if e["kind"] == "tool_call"]

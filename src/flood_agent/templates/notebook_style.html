@@ -52,6 +52,14 @@
   .cellblock .pop select, .cellblock .pop input { font: inherit; font-size: .88rem; padding: .15rem .3rem; border: 1px solid #cfd5e2; border-radius: .4rem; }
   .cellblock .pop small { color: #6b7280; }
   .cellblock textarea.cell-prompt { width: 100%; box-sizing: border-box; font: inherit; padding: .45rem .65rem; border: 1px solid #cfd5e2; border-radius: .5rem; resize: vertical; margin-top: .4rem; }
+  .cell-canned { position: relative; margin-top: .4rem; }
+  .cell-canned input { width: 100%; box-sizing: border-box; font: inherit; padding: .45rem .65rem; border: 1px solid #cfd5e2; border-radius: .5rem; }
+  .cell-canned ul { position: absolute; left: 0; right: 0; top: calc(100% + .2rem); margin: 0; padding: .3rem; list-style: none; max-height: 40vh; overflow: auto;
+                    background: #fff; border: 1px solid #cfd5e2; border-radius: .6rem; box-shadow: 0 8px 24px rgba(30,40,80,.18); z-index: 10; }
+  .cell-canned li { padding: .35rem .6rem; border-radius: .4rem; cursor: pointer; }
+  .cell-canned li.on { background: #e9eefb; }
+  .cell-canned li.follow { padding-left: 1.6rem; }
+  .cell-canned .fails { color: #a40; font-size: .8em; }
   .cellblock textarea.cell-prompt[readonly] { background: #f6f7fa; }
   .cellblock .cell-error { color: #a52a1e; margin: .3rem 0 0; font-size: .85rem; }
   .cellblock .output { margin-top: .4rem; line-height: 1.5; }

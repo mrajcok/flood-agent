@@ -197,7 +197,7 @@ def _latest_tool_call_failed(messages: list[dict]) -> bool:
 
 
 def _run_parent_first_reply(parent: CannedPrompt) -> str:
-    return f"Fake Mode: run *{parent.prompt}* first in this Conversation"
+    return f"Fake Mode: run *{parent.prompt}* first in an AI Cell above"
 
 
 def _count(messages: list[dict]) -> str:

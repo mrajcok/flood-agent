@@ -346,7 +346,7 @@ def create_app(
                     items.append({"type": "assistant", "text": text})
         return items
 
-    def cell_view(cell: dict, starting: bool = False) -> dict:
+    def cell_view(cell: dict, starting: bool = False, stale: bool = False) -> dict:
         """What the cell template needs. `starting`: its run has been asked for and its stream not yet opened,
         so it shows as running with no output."""
         draft, run = cell["draft"], cell["run"]
@@ -360,6 +360,7 @@ def create_app(
             "model": model, "effort": draft.get("effort") or "", "max_rows": draft.get("max_rows") or DEFAULT_MAX_ROWS,
             "running": starting, "streaming": starting, "polling": False, "status": None, "number": None,
             "output": [], "footer": None, "ran": None, "edited": False, "earlier_tables": [],
+            "stale": stale,
         }
         view["chip"] = settings_label(model, view["effort"], view["max_rows"])
         if starting or run is None:
@@ -394,8 +395,9 @@ def create_app(
 
     def cell_html(notebook_id: str, cell_id: str, template: str, starting: bool = False) -> str:
         cell = agent.notebooks.cell(cell_id)
+        stale = cell["id"] in agent.stale_cells(notebook_id)
         return TEMPLATES.get_template(template).render(
-            cell=cell_view(cell, starting), notebook_id=notebook_id, **model_picker())
+            cell=cell_view(cell, starting, stale), notebook_id=notebook_id, **model_picker())
 
     def known_cell(notebook_id: str, cell_id: str) -> dict:
         if not agent.notebooks.exists(notebook_id):
@@ -424,11 +426,20 @@ def create_app(
     def open_notebook(request: Request, notebook_id: str):
         if not agent.notebooks.exists(notebook_id):
             raise HTTPException(404, "unknown notebook")
-        cells = [cell_view(c) for c in agent.notebooks.cells(notebook_id)]
+        stale = agent.stale_cells(notebook_id)
+        cells = [cell_view(c, stale=c["id"] in stale) for c in agent.notebooks.cells(notebook_id)]
         return TEMPLATES.TemplateResponse(request, "notebook.html", {
             **sidebar(None, notebook_id), **model_picker(), "notebook_id": notebook_id,
-            "title": agent.notebooks.title_of(notebook_id), "cells": cells, "notebook_page": True,
+            "title": agent.notebooks.title_of(notebook_id), "cells": cells, "stale_ids": sorted(stale), "notebook_page": True,
         })
+
+    @app.get("/n/{notebook_id}/stale")
+    def stale_cells(notebook_id: str) -> list[str]:
+        """The ids of the notebook's stale AI Cells: the page re-reads them after anything that can change one."""
+        if not agent.notebooks.exists(notebook_id):
+            raise HTTPException(404, "unknown notebook")
+        stale = agent.stale_cells(notebook_id)
+        return [c["id"] for c in agent.notebooks.cells(notebook_id) if c["id"] in stale]
 
     @app.post("/n/{notebook_id}/cells", response_class=HTMLResponse)
     def add_cell(notebook_id: str, kind: str = Form("ai"), after: str | None = Form(None)):

@@ -3,6 +3,7 @@
 {% set state = "running" if cell.running else (cell.status or "not-run") %}
 <div class="cellblock ai{% if cell.running %} running{% endif %}" id="cell-{{ cell.id }}" data-cell-id="{{ cell.id }}" data-kind="ai" data-state="{{ state }}"
      data-edited="{{ 'true' if cell.edited else 'false' }}" :data-edited="edited"
+     data-stale="{{ 'true' if cell.stale else 'false' }}" :data-stale="stale"
      {% if cell.polling %}hx-get="/n/{{ notebook_id }}/cells/{{ cell.id }}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}
      x-data="{ prompt: {{ cell.prompt | tojson | forceescape }}, model: {{ cell.model | tojson | forceescape }}, effort: {{ cell.effort | tojson | forceescape }},
                maxRows: {{ cell.max_rows | tojson | forceescape }}, pop: false, error: '', stopping: false,
@@ -13,6 +14,7 @@
                  return !!r && (this.prompt !== r.prompt || this.model !== r.model || this.effort !== r.effort || String(this.maxRows) !== String(r.max_rows));
                },
                running: {{ cell.running | tojson }},
+               get stale() { return staleIds.includes('{{ cell.id }}'); },
                get spec() { return models.find(m => m.id === this.model) || {}; },
                get efforts() { return this.spec.efforts || []; },
                get chip() { return (this.spec.label || this.model) + ' · ' + (this.effort || 'no effort') + ' · ≤ ' + Number(this.maxRows).toLocaleString('en-US') + ' rows \u25be'; },
@@ -57,6 +59,8 @@
                } }"
      @keydown.escape.window="pop = false">
   <div class="gutter">
+    <span class="stale-dot" title="Cells above changed since this ran" role="img" aria-label="Stale: cells above changed since this ran"
+          x-show="stale" {% if not cell.stale %}x-cloak{% endif %}></span>
     {% if cell.running %}
     <button type="button" class="gbtn stop" aria-label="Stop" title="Stop this cell" :disabled="stopping" @click="stop()">&#x25A0;</button>
     <div class="num" title="Running">[*]</div>

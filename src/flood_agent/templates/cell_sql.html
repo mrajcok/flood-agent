@@ -3,9 +3,17 @@
    `cell` comes from web.cell_view; `busy` is the notebook's (see notebook.html). #}
 {% set state = "running" if cell.running else (cell.status or "not-run") %}
 <div class="cellblock sql{% if cell.running %} running{% endif %}" id="cell-{{ cell.id }}" data-cell-id="{{ cell.id }}" data-kind="sql" data-state="{{ state }}"
+     data-edited="{{ 'true' if cell.edited else 'false' }}" :data-edited="edited"
      {% if cell.polling %}hx-get="/n/{{ notebook_id }}/cells/{{ cell.id }}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}
      x-data="{ sql: {{ cell.sql | tojson | forceescape }}, maxRows: {{ cell.max_rows | tojson | forceescape }}, pop: false, error: '', stopping: false,
                running: {{ cell.running | tojson }},
+               ran: {{ cell.ran | tojson | forceescape }},
+               get edited() {
+                 /* The Draft differs from what ran: the old output stays, marked, and cells below are sent what ran. */
+                 const r = this.ran;
+                 return !!r && (this.statement !== r.statement || this.command !== r.command || String(this.maxRows) !== String(r.max_rows));
+               },
+               get statement() { return this.command ? (this.command === this.describe ? this.command + ' ' + this.tbl.trim() : this.command) : this.sql; },
                command: {{ cell.command | tojson | forceescape }}, describe: 'DESCRIBE TABLE',
                tpop: false, tq: '', listing: null, tbl: {{ (cell.table if cell.command == 'DESCRIBE TABLE' else '') | tojson | forceescape }}, cols: [], colError: '',
                get runnable() { return this.command ? (this.command !== this.describe || !!this.tbl) : !!this.sql.trim(); },
@@ -49,7 +57,8 @@
                    const r = await fetch('/n/{{ notebook_id }}/cells/{{ cell.id }}/run', { method: 'POST', body: this.fields() });
                    if (!r.ok) { this.error = ((await r.json().catch(() => ({}))).detail) || 'Could not run this cell.'; return; }
                    const html = await r.text();
-                   this.$root.outerHTML = html;  /* the running cell: it opens its own stream */
+                   const el = this.$root;
+                   el.outerHTML = html;  /* the running cell: it opens its own stream */
                    htmx.process(document.getElementById('cell-{{ cell.id }}'));
                  } catch (e) { this.error = 'Could not run this cell. Try again.'; }
                },
@@ -152,7 +161,8 @@
         {{ r.status }}
       {%- endif %} &middot; {{ r.elapsed_s }} s &middot; ran <time data-ms="{{ cell.started_at_ms }}" x-data x-text="new Date({{ cell.started_at_ms }}).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })">{{ cell.ran_utc }}</time>
       {%- if cell.refreshed_at_ms %} &middot; refreshed <time data-ms="{{ cell.refreshed_at_ms }}" x-data x-text="new Date({{ cell.refreshed_at_ms }}).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })"></time>{% endif %}
-      {%- if r.truncated_to %} <span class="badge truncated">stopped at the {{ "{:,}".format(r.truncated_to) }}-row cap: there are probably more rows</span>{% endif %}
+      {%- if r.truncated_to %} <span class="badge-truncated">stopped at the {{ "{:,}".format(r.truncated_to) }}-row cap: there are probably more rows</span>{% endif %}
+      <template x-if="edited"><span class="badge edited" title="The SQL, command or row cap changed since this ran; the cells below were sent what ran">edited, not run</span></template>
     </div>
     {% endif %}
   </div>

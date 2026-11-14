@@ -26,6 +26,8 @@
            display: flex; flex-direction: column; overflow: hidden; }
     .topbar { flex: none; display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
     .topbar h1 { margin: .6rem 0; }
+    /* The leading C is the big letter; the rest of the name is smaller. */
+    .topbar h1 .rest { font-size: .6em; }
     .controls { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
     /* View toggles: sliders that hide traces, live traces and table info. On = shown. */
     .hide-traces details.trace:not(.cell-trace), .hide-traces .live-trace, .hide-live .live-trace, .hide-tables .table-name { display: none !important; }

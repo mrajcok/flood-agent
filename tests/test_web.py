@@ -92,5 +92,5 @@ def test_table_display_has_a_truncation_badge_in_the_pager_line(build_agent, web
 
 def test_the_app_is_named_canopy(build_agent):
     with TestClient(create_app(build_agent(ScriptedLLM([TextChunk("Hi.")])))) as client:
-        assert ">CANOPY</h1>" in client.get("/").text
+        assert ">ANOPY</span></h1>" in client.get("/").text
         assert client.get("/openapi.json").json()["info"]["title"] == "CANOPY"

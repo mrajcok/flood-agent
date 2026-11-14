@@ -278,3 +278,12 @@ def test_hovering_canopy_shows_what_it_stands_for(live_page):
     expect(page.get_by_role("heading", name="CANOPY")).to_have_attribute(
         "title", "CANOPY: Cyber AI Notebook for Operations, Peering, and telemetrY"
     )
+
+
+def test_the_leading_c_of_canopy_is_bigger_than_the_rest(live_page):
+    page = live_page()
+    sizes = page.evaluate(
+        "[...document.querySelectorAll('.topbar h1 .initial, .topbar h1 .rest')]"
+        ".map(e => parseFloat(getComputedStyle(e).fontSize))"
+    )
+    assert sizes[1] < sizes[0]

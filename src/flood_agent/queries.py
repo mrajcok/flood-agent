@@ -8,6 +8,7 @@ import ipaddress
 import os
 import re
 import sqlite3
+import threading
 import time
 from contextlib import closing, contextmanager
 from datetime import datetime
@@ -234,14 +235,16 @@ _TRUNCATED_NOTE = (
 
 
 @contextmanager
-def _deadline(con: sqlite3.Connection, timeout_s: float):
-    """Abort statements on `con` after `timeout_s` seconds. Yields a callable that says whether
-    the deadline fired."""
+def _deadline(con: sqlite3.Connection, timeout_s: float, stop: threading.Event | None = None):
+    """Abort statements on `con` after `timeout_s` seconds, or as soon as `stop` is set (a user's Stop).
+    Yields a callable that says whether the deadline fired."""
     end = time.monotonic() + timeout_s
     fired = False
 
     def _progress():
         nonlocal fired
+        if stop is not None and stop.is_set():
+            return 1
         if time.monotonic() > end:
             fired = True
             return 1
@@ -254,8 +257,11 @@ def _deadline(con: sqlite3.Connection, timeout_s: float):
         con.set_progress_handler(None, 0)
 
 
-def _failure(e: sqlite3.Error, timed_out: bool, timeout_s: float, **extra) -> dict:
-    """A failed-query result: a sanitised `error` for the LLM plus `raw_error` for the Trace."""
+def _failure(e: sqlite3.Error, timed_out: bool, timeout_s: float, stop: threading.Event | None = None, **extra) -> dict:
+    """A failed-query result: a sanitised `error` for the LLM plus `raw_error` for the Trace; `stopped` when
+    the user's Stop caused it."""
+    if stop is not None and stop.is_set() and not timed_out:
+        return {"success": False, "stopped": True, "error": "Stopped by the user.", "raw_error": str(e), **extra}
     error = _TIMEOUT_GUIDANCE.format(s=timeout_s) if timed_out else sanitize_error(str(e))
     return {"success": False, "error": error, "raw_error": str(e), **extra}
 
@@ -268,6 +274,7 @@ def run_query(
     max_rows: int,
     allowed_tables: set[str] | None = None,
     title: str = "",
+    stop: threading.Event | None = None,
 ) -> dict:
     """Run the SQL as CTAS into the results database. Returns Query Metadata only.
 
@@ -277,6 +284,7 @@ def run_query(
     On failure the dict has a sanitised `error` (safe for the LLM) and, for SQLite errors,
     a `raw_error` that the caller must keep for the Trace and strip before the LLM.
     The SELECT may reference only the Result Tables in `allowed_tables` (the Conversation's own).
+    Setting `stop` aborts the query; the failure then has `stopped` set.
     """
     try:
         select = validate_select(sql)
@@ -286,7 +294,7 @@ def run_query(
     executed = ""
     try:
         name = _free_name(con)
-        with _deadline(con, timeout_s) as timed_out:
+        with _deadline(con, timeout_s, stop) as timed_out:
             for attempt in range(5):  # a concurrent query may take the name between check and create
                 executed = f"CREATE TABLE results.{name} AS SELECT * FROM (\n{select}\n) LIMIT {int(max_rows)}"
                 try:
@@ -296,7 +304,7 @@ def run_query(
                     if attempt < 4 and f"table {name} already exists" in str(e):
                         name = _free_name(con)
                         continue
-                    return _failure(e, timed_out(), timeout_s, executed_sql=executed)
+                    return _failure(e, timed_out(), timeout_s, stop, executed_sql=executed)
         try:
             con.set_authorizer(None)
             con.commit()
@@ -304,7 +312,7 @@ def run_query(
             info = [(r[1], r[2]) for r in con.execute(f"PRAGMA results.table_info({name})")]
             cols = _column_types(con, f"results.{name}", info)
         except sqlite3.Error as e:
-            return _failure(e, False, timeout_s, executed_sql=executed)
+            return _failure(e, False, timeout_s, stop, executed_sql=executed)
     finally:
         con.close()
     result = {"success": True, "result_table": name, "columns": cols, "row_count": count, "executed_sql": executed}
@@ -342,12 +350,20 @@ def explain_query(
     return plan
 
 
-_COUNT_GUIDANCE = (
+COUNT_GUIDANCE = (
     "A count query must have the form SELECT COUNT(...) FROM ... (optionally COUNT(...) AS name) "
     "and return one non-negative integer, e.g. SELECT COUNT(*) FROM flows WHERE ..."
 )
 # The select list must be exactly one bare COUNT(...): no other column, alias trick or arithmetic.
 _COUNT_FORM_RE = re.compile(r"^\s*select\s+count\s*\([^()]*\)\s*(?:as\s+\w+\s+)?from\s", re.I)
+
+
+def looks_like_count(sql: str) -> bool:
+    """Whether the statement has the count form (`SELECT COUNT(...) FROM ...`), as `run_count_query` checks it."""
+    try:
+        return _COUNT_FORM_RE.match(validate_select(sql)) is not None
+    except QueryRejected:
+        return False
 
 
 def run_count_query(
@@ -356,6 +372,7 @@ def run_count_query(
     sql: str,
     timeout_s: float,
     allowed_tables: set[str] | None = None,
+    stop: threading.Event | None = None,
 ) -> dict:
     """Run a `SELECT COUNT(...) FROM ...` and return the number itself (no Result Table). The one
     place a telemetry-derived value reaches the LLM, so the select list must be a bare COUNT and
@@ -365,22 +382,28 @@ def run_count_query(
     except QueryRejected as e:
         return {"success": False, "error": str(e)}
     if not _COUNT_FORM_RE.match(select):
-        return {"success": False, "error": _COUNT_GUIDANCE}
+        return {"success": False, "error": COUNT_GUIDANCE}
     con = open_connection(telemetry_db, results_db, allowed_tables)
     try:
-        with _deadline(con, timeout_s) as timed_out:
+        with _deadline(con, timeout_s, stop) as timed_out:
             try:
                 rows = con.execute(f"SELECT * FROM (\n{select}\n) LIMIT 2").fetchall()
             except sqlite3.Error as e:
-                return _failure(e, timed_out(), timeout_s)
+                return _failure(e, timed_out(), timeout_s, stop)
     finally:
         con.close()
     if len(rows) != 1 or len(rows[0]) != 1:
-        return {"success": False, "error": _COUNT_GUIDANCE}
+        return {"success": False, "error": COUNT_GUIDANCE}
     value = rows[0][0]
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        return {"success": False, "error": _COUNT_GUIDANCE}
+        return {"success": False, "error": COUNT_GUIDANCE}
     return {"success": True, "count": value}
+
+
+def shorten_sql(sql: str, limit: int = 60) -> str:
+    """The SQL on one line, cut to `limit` characters (with an ellipsis): a SQL Cell's table title."""
+    one_line = " ".join(sql.split())
+    return one_line if len(one_line) <= limit else one_line[: limit - 1].rstrip() + "\u2026"
 
 
 def result_table_columns(results_db: Path, name: str) -> list[str] | None:

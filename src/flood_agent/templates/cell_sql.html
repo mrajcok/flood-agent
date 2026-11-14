@@ -1,0 +1,91 @@
+{# A SQL Cell: gutter (Run/Stop, run number), header with Explain and the row cap chip, the SQL, the output (a table or
+   Count Display, the raw error if it failed) and a status line. Its Run button is its refresh: there is no other.
+   `cell` comes from web.cell_view; `busy` is the notebook's (see notebook.html). #}
+{% set state = "running" if cell.running else (cell.status or "not-run") %}
+<div class="cellblock sql{% if cell.running %} running{% endif %}" id="cell-{{ cell.id }}" data-cell-id="{{ cell.id }}" data-kind="sql" data-state="{{ state }}"
+     {% if cell.polling %}hx-get="/n/{{ notebook_id }}/cells/{{ cell.id }}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}
+     x-data="{ sql: {{ cell.sql | tojson | forceescape }}, maxRows: {{ cell.max_rows | tojson | forceescape }}, pop: false, error: '', stopping: false,
+               running: {{ cell.running | tojson }},
+               get chip() { return '≤ ' + Number(this.maxRows).toLocaleString('en-US') + ' rows ▾'; },
+               fields() { return new URLSearchParams({ sql: this.sql, max_rows: this.maxRows }); },
+               cleanRows() {
+                 this.maxRows = String(this.maxRows).replace(/\D/g, '').replace(/^0+/, '') || '{{ cell.max_rows }}';
+                 this.save();
+               },
+               async save() {
+                 /* Keep the Draft, so a reload shows what was typed; a failure is not worth interrupting for. */
+                 if (this.running) return;
+                 try { await fetch('/n/{{ notebook_id }}/cells/{{ cell.id }}/draft', { method: 'POST', body: this.fields() }); } catch (e) {}
+               },
+               async run() {
+                 if (this.running || busy || !this.sql.trim()) return;
+                 this.error = ''; this.pop = false;
+                 try {
+                   const r = await fetch('/n/{{ notebook_id }}/cells/{{ cell.id }}/run', { method: 'POST', body: this.fields() });
+                   if (!r.ok) { this.error = ((await r.json().catch(() => ({}))).detail) || 'Could not run this cell.'; return; }
+                   const html = await r.text();
+                   this.$root.outerHTML = html;  /* the running cell: it opens its own stream */
+                   htmx.process(document.getElementById('cell-{{ cell.id }}'));
+                 } catch (e) { this.error = 'Could not run this cell. Try again.'; }
+               },
+               async stop() {
+                 this.stopping = true;
+                 try { await fetch('/n/{{ notebook_id }}/cells/{{ cell.id }}/stop', { method: 'POST' }); } catch (e) {}
+               } }"
+     @keydown.escape.window="pop = false">
+  <div class="gutter">
+    {% if cell.running %}
+    <button type="button" class="gbtn stop" aria-label="Stop" title="Stop this cell" :disabled="stopping" @click="stop()">&#x25A0;</button>
+    <div class="num" title="Running">[*]</div>
+    {% else %}
+    <button type="button" class="gbtn run" aria-label="Run" title="Run this cell (Shift-Enter); run it again to refresh its table" :disabled="busy || !sql.trim()" @click="run()">&#x25B6;</button>
+    <div class="num" title="{{ 'Run number' if cell.number else 'Not run yet' }}">[{{ cell.number or " " }}]</div>
+    {% endif %}
+  </div>
+  <div class="cell sql">
+    <div class="head">
+      <span class="kind">SQL</span>
+      <span class="grow"></span>
+      <button type="button" class="explain" title="Show how the database would run this query (its Query Plan); no LLM, nothing is run"
+              :disabled="!sql.trim()" @click="$dispatch('explain-sql', sql)">Explain</button>
+      <span class="chip-wrap">
+        <button type="button" class="chip" aria-haspopup="true" :aria-expanded="pop" title="Row cap for the next run"
+                {% if cell.running %}disabled{% else %}:disabled="running"{% endif %} @click.stop="pop = !pop"
+                x-text="chip">&#x2264; {{ "{:,}".format(cell.max_rows) }} rows &#x25BE;</button>
+        <div class="pop" role="dialog" aria-label="Row cap" x-show="pop" x-cloak @click.outside="pop = false">
+          <label class="f">Max rows
+            <input type="text" inputmode="numeric" x-model="maxRows" @change="cleanRows()" aria-label="Max rows"></label>
+          <small>New SQL Cells start with the last row cap you ran.</small>
+        </div>
+      </span>
+    </div>
+    <textarea class="cell-prompt cell-sql" rows="3" spellcheck="false" placeholder="SELECT ... FROM ... (Shift-Enter to run)" aria-label="SQL" x-model="sql"
+              @blur="save()" @keydown.shift.enter.prevent="run()" {% if cell.running %}readonly{% else %}:readonly="running"{% endif %}></textarea>
+    <p class="cell-error" role="alert" x-show="error" x-text="error" x-cloak></p>
+
+    <div class="output">
+      {% if cell.streaming %}
+      {# A Run just asked for: its stream runs the query, and on its end the finished cell replaces this one. #}
+      <div class="cell-stream" hx-ext="sse" sse-connect="/n/{{ notebook_id }}/cells/{{ cell.id }}/stream" sse-close="end">
+        <span hidden hx-get="/n/{{ notebook_id }}/cells/{{ cell.id }}" hx-trigger="sse:end" hx-target="closest .cellblock" hx-swap="outerHTML"></span>
+      </div>
+      {% else %}
+      {% for item in cell.output %}{% include "display_item.html" %}{% endfor %}
+      {% if cell.status == "stopped" %}<p class="cell-stopped"><em>stopped by the user</em></p>{% endif %}
+      {% if cell.result and cell.result.raw_error %}<p class="cell-error sql-error" role="alert">{{ cell.result.raw_error }}</p>{% endif %}
+      {% endif %}
+    </div>
+
+    {% if cell.result and not cell.running %}
+    {% set r = cell.result %}
+    <div class="cell-foot sql-status">
+      {%- if r.status == "ok" -%}
+        {% if r.count is defined %}count{% else %}{{ "{:,}".format(r.row_count) }} row{{ "" if r.row_count == 1 else "s" }}{% endif %}
+      {%- else -%}
+        {{ r.status }}
+      {%- endif %} &middot; {{ r.elapsed_s }} s &middot; ran <time data-ms="{{ cell.started_at_ms }}" x-data x-text="new Date({{ cell.started_at_ms }}).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })">{{ cell.ran_utc }}</time>
+      {%- if r.truncated_to %} <span class="badge truncated">stopped at the {{ "{:,}".format(r.truncated_to) }}-row cap: there are probably more rows</span>{% endif %}
+    </div>
+    {% endif %}
+  </div>
+</div>

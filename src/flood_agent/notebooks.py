@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS runs (
   number INTEGER NOT NULL DEFAULT 0,
   finished_at INTEGER,
   context_tokens INTEGER,
-  trace BLOB
+  trace BLOB,
+  result TEXT
 );
 CREATE TABLE IF NOT EXISTS run_messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,6 +60,7 @@ CREATE TABLE IF NOT EXISTS run_displays (
 """
 
 AI = "ai"
+SQL = "sql"
 DEFAULT_MAX_ROWS = 1000
 
 
@@ -75,6 +77,8 @@ class NotebookStore:
             con.executescript(SCHEMA)
             if not any(r["name"] == "number" for r in con.execute("PRAGMA table_info(runs)")):
                 con.execute("ALTER TABLE runs ADD COLUMN number INTEGER NOT NULL DEFAULT 0")  # a database from before it
+            if not any(r["name"] == "result" for r in con.execute("PRAGMA table_info(runs)")):
+                con.execute("ALTER TABLE runs ADD COLUMN result TEXT")
 
     def _connect(self) -> sqlite3.Connection:
         con = sqlite3.connect(self.path)
@@ -113,8 +117,11 @@ class NotebookStore:
                 "ORDER BY last_activity_at DESC, created_at DESC")]
 
     def add_ai_cell(self, notebook_id: str, draft: dict, after: str | None = None) -> str:
-        """Insert an AI Cell with this Draft after cell `after`, or at the end. KeyError if the notebook
-        (or `after` in it) is unknown."""
+        return self.add_cell(notebook_id, AI, draft, after)
+
+    def add_cell(self, notebook_id: str, kind: str, draft: dict, after: str | None = None) -> str:
+        """Insert a cell of this kind with this Draft after cell `after`, or at the end. KeyError if the
+        notebook (or `after` in it) is unknown."""
         cell_id, now = uuid.uuid4().hex, self._now()
         with closing(self._connect()) as con, con:
             if con.execute("SELECT 1 FROM notebooks WHERE id=?", (notebook_id,)).fetchone() is None:
@@ -131,12 +138,16 @@ class NotebookStore:
                 con.execute("UPDATE cells SET position=position+1 WHERE notebook_id=? AND position>=?",
                             (notebook_id, position))
             con.execute("INSERT INTO cells(id, notebook_id, position, kind, draft, created_at) VALUES (?,?,?,?,?,?)",
-                        (cell_id, notebook_id, position, AI, json.dumps(draft), now))
+                        (cell_id, notebook_id, position, kind, json.dumps(draft), now))
             self._touch(con, notebook_id)
         return cell_id
 
     def edit_ai_cell(self, cell_id: str, **changes) -> None:
-        """Change fields of an AI Cell's Draft (prompt, model, effort, max_rows). The latest Run is untouched."""
+        self.edit_cell(cell_id, **changes)
+
+    def edit_cell(self, cell_id: str, **changes) -> None:
+        """Change fields of a cell's Draft (an AI Cell's prompt, model, effort, max_rows; a SQL Cell's sql,
+        max_rows). The latest Run is untouched."""
         with closing(self._connect()) as con, con:
             row = con.execute("SELECT notebook_id, draft FROM cells WHERE id=?", (cell_id,)).fetchone()
             if row is None:
@@ -176,6 +187,7 @@ class NotebookStore:
             "settings": json.loads(run["settings"]), "context_fingerprint": run["context_fingerprint"],
             "number": run["number"], "started_at": run["started_at"], "finished_at": run["finished_at"],
             "context_tokens": run["context_tokens"], "messages": messages,
+            "result": json.loads(run["result"]) if run["result"] else None,
             "trace": json.loads(run["trace"]) if run["trace"] else None,
         }
 
@@ -201,11 +213,19 @@ class NotebookStore:
             self._touch(con, notebook_id)
         return run_id
 
-    def last_settings(self) -> dict | None:
-        """The settings (model, effort, max_rows) of the most recently started Run in any notebook, or None."""
+    def last_settings(self, kind: str = AI) -> dict | None:
+        """The settings of the most recently started Run of a cell of this kind in any notebook (an AI Cell's
+        model, effort, max_rows; a SQL Cell's max_rows), or None."""
         with closing(self._connect()) as con:
-            row = con.execute("SELECT settings FROM runs ORDER BY started_at DESC, rowid DESC LIMIT 1").fetchone()
+            row = con.execute(
+                "SELECT r.settings FROM runs r JOIN cells c ON c.id = r.cell_id WHERE c.kind=?"
+                " ORDER BY r.started_at DESC, r.rowid DESC LIMIT 1", (kind,)).fetchone()
         return json.loads(row[0]) if row else None
+
+    def save_result(self, run_id: str, result: dict) -> None:
+        """A SQL Cell Run's outcome: what the status line, the error and the page need."""
+        with closing(self._connect()) as con, con:
+            con.execute("UPDATE runs SET result=? WHERE id=?", (json.dumps(result), run_id))
 
     def finish_run(self, run_id: str, status: str) -> None:
         with closing(self._connect()) as con, con:

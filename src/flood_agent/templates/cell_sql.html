@@ -128,6 +128,7 @@
               @blur="save()" @keydown.shift.enter.prevent="run()" {% if cell.running %}readonly{% else %}:readonly="running"{% endif %}></textarea>
     <p class="cell-error" role="alert" x-show="error" x-text="error" x-cloak></p>
 
+    <button type="button" class="linkish output-toggle" @click="$el.closest('.cellblock').classList.toggle('output-shown')"><span class="show-label">Show output</span><span class="hide-label">Hide output</span></button>
     <div class="output">
       {% if cell.streaming %}
       {# A Run just asked for: its stream runs the query, and on its end the finished cell replaces this one. #}

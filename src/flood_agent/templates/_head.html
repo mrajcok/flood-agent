@@ -34,7 +34,12 @@
     /* A cell's footer line keeps its stopped badge and Context Usage meter: only the trace itself goes. */
     .hide-traces .cell-trace .trace-only, .hide-traces .cell-trace > :not(summary) { display: none !important; }
     /* Collapse outputs: every cell's output area is hidden, its prompt or SQL stays; a running cell shows its output. */
-    .outputs-collapsed .cellblock:not(.running) .output { display: none; }
+    .outputs-collapsed .cellblock:not(.running):not(.output-shown) .output { display: none; }
+    /* Each cell's own Show output / Hide output control: offered only while outputs are collapsed. */
+    .output-toggle { display: none; }
+    .outputs-collapsed .cellblock:not(.running) .output-toggle { display: block; }
+    .output-toggle .hide-label, .output-shown .output-toggle .show-label { display: none; }
+    .output-shown .output-toggle .hide-label { display: inline; }
     .view-switch { display: inline-flex; align-items: center; gap: .4rem; font-size: .9rem; cursor: pointer; user-select: none; }
     .view-switch input { appearance: none; width: 2rem; height: 1.1rem; border-radius: 999px; background: #c5cbd8; position: relative; margin: 0; cursor: pointer; transition: background var(--fade, .2s); }
     .view-switch input::after { content: ""; position: absolute; top: .1rem; left: .1rem; width: .9rem; height: .9rem; border-radius: 50%; background: #fff; transition: left var(--fade, .2s); }

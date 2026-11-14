@@ -2,7 +2,7 @@
   <span class="name" x-show="!editing" x-text="name"></span>
   <span class="icons" x-show="!editing && !confirming">
     <button type="button" class="edit" @click="edit()" :aria-label="'Edit ' + name" title="Rename this table (its SQL name) or change how long it is kept">&#x270E;&#xFE0E;</button>
-    <button type="button" class="copy" @click="insertIntoChat(name)" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into the chat'">&#x29C9;</button>
+    <button type="button" class="copy" @click="insertIntoPrompt(name)" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into a prompt'">&#x29C9;</button>
     {% if in_chart %}<button type="button" class="view" @click="$dispatch('view-table', name)" :aria-label="'View ' + name" :title="'Show ' + name + ' in a dialog'">&#x25A6;&#xFE0E;</button>{% endif %}
     <button type="button" class="delete" @click="confirming = true" :aria-label="'Delete ' + name" :title="'Delete ' + name">&#x1F5D1;&#xFE0E;</button>
     <button type="button" class="refresh" x-show="refreshable" @click="refresh()" :disabled="refreshing" :aria-busy="refreshing" aria-label="Refresh" :title="refreshing ? 'Refreshing...' : 'Run this table\'s query again and replace its rows'" :class="{ busy: refreshing }">&#x21BB;&#xFE0E;</button>

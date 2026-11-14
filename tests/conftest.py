@@ -1,5 +1,6 @@
 """Shared fixtures: tiny seeded Telemetry Database, results DB, scripted fake LLM."""
 
+import asyncio
 import copy
 import functools
 import hashlib
@@ -138,6 +139,21 @@ class ScriptedLLM:
 
     def all_sent_text(self) -> str:
         return json.dumps(self.calls)
+
+
+class GatedLLM(ScriptedLLM):
+    """Waits for `gate` before its second call, so a test can look at the page mid-run."""
+
+    def __init__(self, *steps):
+        super().__init__(*steps)
+        self.gate = threading.Event()
+
+    async def stream_chat(self, messages, tools, reasoning=None, session_id=None):
+        if self.calls:
+            while not self.gate.is_set():
+                await asyncio.sleep(0.01)
+        async for chunk in super().stream_chat(messages, tools, reasoning, session_id):
+            yield chunk
 
 
 DAY = 24 * 3_600_000  # ms

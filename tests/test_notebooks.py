@@ -112,7 +112,7 @@ async def test_the_system_prompt_lists_tables_from_cells_above_and_the_cells_own
     assert a_table.name in listed(b_step1) and b_table.name not in b_step1   # B sees A's table only
     assert listed(b_step2).index(a_table.name) < listed(b_step2).index(b_table.name)  # in creation order
     assert a_table.name in c_step and b_table.name in c_step
-    assert a_table.owner == CellRun(a, run_of(agent, nb, 0)["id"]) and a_table.conversation_id is None
+    assert a_table.owner == CellRun(a, run_of(agent, nb, 0)["id"])
 
 
 async def test_a_second_cell_cannot_run_while_one_runs_in_the_notebook(make_agent):
@@ -152,31 +152,55 @@ async def test_stopping_a_cell_keeps_what_it_streamed_and_records_the_run_as_sto
     assert "Partial answer" in scripted.all_sent_text()
 
 
+LEGACY_SCHEMA = """
+CREATE TABLE conversations (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at INTEGER NOT NULL,
+  last_activity_at INTEGER NOT NULL);
+CREATE TABLE turns (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL, user_message TEXT NOT NULL,
+  created_at INTEGER NOT NULL, trace BLOB);
+CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL, turn_id INTEGER NOT NULL,
+  body TEXT NOT NULL);
+CREATE TABLE displays (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL, turn_id INTEGER NOT NULL,
+  after_message_id INTEGER NOT NULL, kind TEXT NOT NULL, result_table TEXT, definition TEXT NOT NULL);
+CREATE TABLE result_tables (name TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, turn_id INTEGER NOT NULL,
+  created_at INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '', columns TEXT NOT NULL DEFAULT '[]',
+  request TEXT NOT NULL DEFAULT '', expired INTEGER NOT NULL DEFAULT 0, truncated_to INTEGER, retention_ms INTEGER NOT NULL);
+CREATE TABLE lookup_tables (name TEXT PRIMARY KEY, created_at INTEGER NOT NULL, columns TEXT NOT NULL DEFAULT '[]',
+  row_count INTEGER NOT NULL DEFAULT 0);
+INSERT INTO conversations VALUES ('c', 'Conversation 1', 1, 1);
+INSERT INTO turns(id, conversation_id, user_message, created_at) VALUES (1, 'c', 'hi', 1);
+INSERT INTO messages(conversation_id, turn_id, body) VALUES ('c', 1, '{}');
+INSERT INTO result_tables(name, conversation_id, turn_id, created_at, retention_ms) VALUES ('rt_old', 'c', 1, 1, 9);
+INSERT INTO lookup_tables(name, created_at) VALUES ('lookup_old', 1);
+"""
+
+
+def tables_of_db(path):
+    with sqlite3.connect(path) as con:
+        return {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+
+
 async def test_a_pre_notebook_database_is_upgraded_by_dropping_its_old_data(build_agent, tmp_path):
     agent = build_agent(ScriptedLLM())
     config = replace(agent.config, app_db=tmp_path / "old" / "app.db", results_db=tmp_path / "old" / "results.db")
     config.app_db.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(config.app_db) as con:
-        con.executescript(
-            "CREATE TABLE conversations (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at INTEGER NOT NULL,"
-            " last_activity_at INTEGER NOT NULL);"
-            "CREATE TABLE result_tables (name TEXT PRIMARY KEY, conversation_id TEXT NOT NULL,"
-            " turn_id INTEGER NOT NULL, created_at INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '',"
-            " columns TEXT NOT NULL DEFAULT '[]', request TEXT NOT NULL DEFAULT '',"
-            " expired INTEGER NOT NULL DEFAULT 0, truncated_to INTEGER, retention_ms INTEGER NOT NULL);"
-            "INSERT INTO conversations VALUES ('c', 'Conversation 1', 1, 1);"
-            "INSERT INTO result_tables(name, conversation_id, turn_id, created_at, retention_ms)"
-            " VALUES ('rt_old', 'c', 1, 1, 9);")
+        con.executescript(LEGACY_SCHEMA)
     with sqlite3.connect(config.results_db) as con:
         con.execute("CREATE TABLE rt_old (x)")
+        con.execute("CREATE TABLE lookup_old (x)")
 
     upgraded = Agent(config, agent.client_for)
     cell = upgraded.add_ai_cell(upgraded.create_notebook(), prompt="p")
-    upgraded.tables.register_for(CellRun(cell, "r1"), "rt_new")  # the owner columns accept a Cell Run now
-    assert upgraded.store.list_conversations() == []
-    assert upgraded.tables.names() == ["rt_new"]
-    with sqlite3.connect(config.results_db) as con:
-        assert con.execute("SELECT 1 FROM sqlite_master WHERE name='rt_old'").fetchone() is None
+    upgraded.tables.register_for(CellRun(cell, "r1"), "rt_new")  # the owner is a Cell Run now
+    assert upgraded.tables.names() == ["rt_new"] and upgraded.tables.lookup_names() == set()
+    assert not {"conversations", "turns", "messages", "displays"} & tables_of_db(config.app_db)
+    assert {"rt_old", "lookup_old"}.isdisjoint(tables_of_db(config.results_db))
+    with sqlite3.connect(config.app_db) as con:
+        assert "conversation_id" not in {r[1] for r in con.execute("PRAGMA table_info(result_tables)")}
+
+    again = Agent(config, agent.client_for)  # a second start changes nothing
+    assert again.tables.names() == ["rt_new"] and len(again.notebooks.list_notebooks()) == 1
+    assert again.notebooks.cells(again.notebooks.list_notebooks()[0]["id"])[0]["id"] == cell
 
 
 async def test_runs_are_numbered_in_the_order_they_start_within_a_notebook(make_agent):

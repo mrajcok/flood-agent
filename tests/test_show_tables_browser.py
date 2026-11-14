@@ -212,14 +212,13 @@ def test_the_icons_come_just_before_each_name_and_the_expiry_is_right_aligned(li
     assert list_right and list_right["x"] + list_right["width"] - (expires["x"] + expires["width"]) < 12
 
 
-def test_the_sidebar_has_a_tables_section_above_a_conversations_section(live_page, tables):
+def test_the_sidebar_has_a_tables_section_above_a_notebooks_section(live_page, tables):
     agent, _ = tables
     page = live_page(agent=agent)
     aside = page.locator("aside")
     tables_head = aside.get_by_role("heading", name="Tables", exact=True)
-    conversations_head = aside.get_by_role("heading", name="Conversations")
+    notebooks_head = aside.get_by_role("heading", name="Notebooks")
     browse, add = aside.get_by_role("button", name="Browse tables"), aside.get_by_role("button", name="Create lookup table")
-    new_chat = conversations_head.get_by_role("link", name="New chat")  # New chat lives in the Conversations heading
     y = lambda loc: loc.bounding_box()["y"]  # noqa: E731
-    assert y(tables_head) < y(browse) < y(add) < y(conversations_head)
-    expect(new_chat).to_have_attribute("href", "/")
+    assert y(tables_head) < y(browse) < y(add) < y(notebooks_head)
+    expect(notebooks_head.get_by_role("button", name="New notebook")).to_be_visible()  # New notebook lives in the Notebooks heading

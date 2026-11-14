@@ -1,9 +1,12 @@
 """The one-time startup upgrade to Notebooks: an app database from before them is emptied.
 
-Result Tables then belonged to a Conversation turn (`conversation_id` and `turn_id` NOT NULL); now they may
-belong to a Cell Run instead. The app has no users yet, so rather than migrate, every old table (Result, Saved
-and Lookup) is dropped with its registry row, and so is every Conversation, and the schema is made afresh.
-There is no general migration framework.
+Result Tables then belonged to a Conversation turn (`conversation_id` and `turn_id` columns); now they belong to
+a Cell Run. The app has no users yet, so rather than migrate, every old table (Result, Saved and Lookup) is
+dropped with its registry row, and so is every Conversation, and the schema is made afresh. There is no general
+migration framework.
+
+The Conversation code is gone, so the legacy schema is recognised here by raw SQL alone. Once the old tables
+are dropped nothing matches any more, so a second start changes nothing.
 """
 
 import sqlite3
@@ -14,8 +17,10 @@ OLD_TABLES = ("displays", "messages", "turns", "conversations", "result_tables",
 
 
 def is_pre_notebook(con: sqlite3.Connection) -> bool:
-    """True if `result_tables` exists with the old NOT NULL Conversation owner."""
-    return any(r["name"] == "conversation_id" and r["notnull"] for r in con.execute("PRAGMA table_info(result_tables)"))
+    """True if the database has the old `conversations` table or a `result_tables` still keyed by Conversation."""
+    if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='conversations'").fetchone():
+        return True
+    return any(r["name"] == "conversation_id" for r in con.execute("PRAGMA table_info(result_tables)"))
 
 
 def drop_pre_notebook_data(app_db: Path, results_db: Path) -> None:

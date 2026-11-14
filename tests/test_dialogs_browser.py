@@ -112,23 +112,6 @@ def test_deleting_a_cell_with_a_saved_table_says_the_saved_table_is_kept(build_a
     assert native == []
 
 
-def test_deleting_a_turn_keeps_collapsed_turns_collapsed(build_agent, live_page):
-    page = live_page(agent=build_agent(ScriptedLLM([TextChunk("One.")], [TextChunk("Two.")])))
-    for text, reply in (("first", "One."), ("second", "Two.")):
-        page.get_by_placeholder("Write a prompt").fill(text)
-        page.get_by_role("button", name="Send message (Enter)").click()
-        expect(page.locator(".reply", has_text=reply)).to_be_visible()
-    page.locator("aside ul li a").first.click()
-    page.get_by_role("button", name="Collapse turns").click()
-    expect(page.locator("details.turn[open]")).to_have_count(0)
-
-    page.get_by_role("button", name="Delete this turn").first.click(force=True)
-    page.locator("#delete-dialog").get_by_role("button", name="Delete").click()
-    expect(page.locator("details.turn")).to_have_count(1)
-    expect(page.locator("details.turn[open]")).to_have_count(0)
-    expect(page.get_by_role("button", name="Expand turns")).to_be_visible()
-
-
 def test_loading_a_file_fills_the_rows_and_suggests_a_name(live_page, tmp_path):
     page = live_page()
     f = tmp_path / "bad-ips.csv"

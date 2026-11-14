@@ -209,7 +209,7 @@ def sanitize_error(message: str) -> str:
 
     Authorizer denials ("access to results.<table>.col is prohibited", "not authorized") are
     replaced wholesale so no table or column name from a denied read (possibly another
-    Conversation's) reaches the LLM; any other database-qualified reference is redacted."""
+    notebook's) reaches the LLM; any other database-qualified reference is redacted."""
     if _DENIAL_RE.search(message):
         return ACCESS_DENIED
     message = _QUALIFIED_RE.sub("<table>", message)
@@ -319,7 +319,7 @@ def run_query(
 
     On failure the dict has a sanitised `error` (safe for the LLM) and, for SQLite errors,
     a `raw_error` that the caller must keep for the Trace and strip before the LLM.
-    The SELECT may reference only the Result Tables in `allowed_tables` (the Conversation's own).
+    The SELECT may reference only the Result Tables in `allowed_tables` (the ones the caller may read).
     Setting `stop` aborts the query; the failure then has `stopped` set.
     """
     try:

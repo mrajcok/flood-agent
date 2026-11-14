@@ -1,10 +1,11 @@
 # Flood Agent
 
-Chat-driven flow telemetry analysis where no telemetry data passes through the LLM
+Notebook-driven flow telemetry analysis where no telemetry data passes through the LLM
 (see `GLOSSARY.md` and `docs/adr/0001-no-telemetry-data-through-the-llm.md`).
 
-Ask a question in chat and get streamed text plus inline Displays: tables and Vega-Lite charts.
-Conversations are saved in a sidebar, and each turn has a collapsed Trace showing what the LLM saw and did.
+Build a notebook of Markdown, SQL and AI Cells. An AI Cell takes a question and streams text plus inline Displays: tables and Vega-Lite charts;
+a SQL Cell runs your own query without the LLM. Notebooks are saved in a sidebar (the home page opens the most recent one, or makes the first),
+and each AI Cell has a collapsed Trace showing what the LLM saw and did.
 
 ## Setup
 
@@ -29,17 +30,23 @@ the Telemetry Database's timestamps so its latest record is the current time (th
 fixed week, and "the last hour" means the real last hour).
 Reload the page after a restart.
 
+### Upgrading from Conversations
+
+Starting the app on a database from before Notebooks (one with Conversation tables) drops all its old data and every
+Result, Saved and Lookup Table once, then creates the new schema; there is nothing to run by hand, and a second start
+changes nothing (`src/flood_agent/upgrade.py`).
+
 ### Fake Mode ("No model")
 
-Choosing "No model" under the prompt box sends that prompt to a scripted stand-in instead of a
+Choosing "No model" in an AI Cell's settings runs that cell to a scripted stand-in instead of a
 language model, so you can try the MCP tools, table and chart Displays, Traces, saved
-Conversations and PSV export without an OpenRouter key and without any cost or model latency.
-It is always selectable, and a Conversation can mix "No model" and real prompts. Generate the
+notebooks and PSV export without an OpenRouter key and without any cost or model latency.
+It is always selectable, and a notebook can mix "No model" and real AI Cells. Generate the
 data first (default seed, as in Setup), run the app, and pick "No model".
 
-A list of Canned Prompts appears above the message box while "No model" is selected; click one
-to send it. Follow-ups are indented under the prompt they build on (run the parent first in the
-same Conversation), and entries marked "fails on purpose" exercise error paths (bad SQL, row and
+A list of Canned Prompts appears in the cell while "No model" is selected; click one
+to run it. Follow-ups are indented under the prompt they build on (run the parent first in an
+AI Cell above), and entries marked "fails on purpose" exercise error paths (bad SQL, row and
 chart caps, malformed tool calls, an LLM stream error). Any other message gets a short reply
 pointing to the Canned Prompts. Traces show "No model" and $0.00. Canned Prompts live
 in `src/flood_agent/canned_prompts.yaml` (format in its header); `pytest` runs every one and
@@ -66,7 +73,7 @@ uv run python -m flood_agent.config > .env.example
 uv run pytest
 ```
 
-Tests run at the Agent turn seam: a real MCP server subprocess and real SQLite files,
+Tests run at the Agent's notebook seam (running a cell): a real MCP server subprocess and real SQLite files,
 with only the OpenRouter client replaced by a scripted fake (`tests/conftest.py`).
 No network or credentials needed.
 
@@ -80,7 +87,7 @@ Tables are paginated (50 rows/page, max 500) and sortable on any column by the A
 Result Table; `sort` must exactly match a column of that Result Table or the request is a
 400. `GET /api/results/<rt>/psv` streams the full Result Table as pipe-separated values (fields containing `|`, a quote or a newline are double-quoted, CSV-style; raw values, formula-leading
 text prefixed with `'`). Both are Agent endpoints, not LLM tools. The `/api/results/...`
-endpoints are not scoped per Conversation by design: Flood Agent is single-user and local, with no authentication.
+endpoints are not scoped per notebook by design: Flood Agent is single-user and local, with no authentication.
 
 Formatting comes from Semantic Layer column metadata (`tables.flows.columns.<col>`):
 `enum` -> names (proto), `enum_bits` -> flag letters (S, SA, FPA), `unit: bytes` -> decimal
@@ -111,7 +118,7 @@ charts with a time x axis, Ctrl+scroll to zoom that axis, drag to pan and double
 
 ## Layout
 
-- `agent.py` - `Agent.run_turn(conversation, message)` yields `TextDelta`, `DisplayEvent`, `TurnEnd`.
+- `agent.py` - `Agent.run_cell(notebook_id, cell_id)` yields `TextDelta`, `DisplayEvent`, `TurnEnd`.
 - `llm.py` - `LLMClient` protocol and the OpenRouter implementation.
 - `fake_llm.py` + `canned_prompts.yaml` - the Fake Mode `LLMClient` and its Canned Prompts.
 - `mcp_server.py` - stdio MCP server; the only LLM tools are `run_query`, `run_count_query`, `show_table` and `show_chart`.

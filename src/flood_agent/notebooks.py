@@ -1,6 +1,6 @@
 """Notebook storage: Notebooks, their ordered Cells (kind + Draft) and each Cell's latest Run.
 
-Lives in the app database beside Conversations. A Cell has at most one Run, its latest: starting a new
+Lives in the app database beside the table registry. A Cell has at most one Run, its latest: starting a new
 Run replaces the old one (its messages, Displays and Trace) under a new id. AI and Markdown Cells exist so far (a Markdown Cell never has a Run).
 A Run's Result Tables are the Catalog's, recorded against the `CellRun(cell_id, run_id)` that made them.
 """
@@ -12,9 +12,21 @@ import time
 import uuid
 from contextlib import closing
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
-from .store import COUNT_KIND, rename_data_source
+COUNT_KIND = "count"  # the kind of a Count Display, among table and chart Displays
+
+
+def rename_data_source(node: Any, old: str, new: str) -> Any:
+    """A saved Chart Spec with every {"name": old} data reference pointing at `new`."""
+    if isinstance(node, dict):
+        if node == {"name": old}:
+            return {"name": new}
+        return {k: rename_data_source(v, old, new) for k, v in node.items()}
+    if isinstance(node, list):
+        return [rename_data_source(i, old, new) for i in node]
+    return node
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS notebooks (
@@ -311,7 +323,7 @@ class NotebookStore:
                                (run_id, json.dumps(message))).lastrowid or 0
 
     def add_step(self, run_id: str, items: list[tuple[dict, list[tuple]]]) -> tuple[list[int], list[list[int]]]:
-        """Persist one LLM step atomically (see `ConversationStore.add_step`)."""
+        """Persist one LLM step atomically (messages and Displays together)."""
         ids: list[int] = []
         display_ids: list[list[int]] = []
         with closing(self._connect()) as con, con:
@@ -333,7 +345,7 @@ class NotebookStore:
                         (json.dumps(trace).encode("utf-8"), context_tokens, run_id))
 
     def transcript(self, run_id: str) -> list[dict]:
-        """A Run's messages interleaved with its Displays, as `ConversationStore.transcript` gives them (no Trace):
+        """A Run's messages interleaved with its Displays, in order (no Trace):
         {"type": "message", "message"} and {"type": "display", "display_id", "kind", "result_table", **definition}."""
         displays = self.displays(run_id)
         with closing(self._connect()) as con:

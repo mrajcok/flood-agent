@@ -117,20 +117,20 @@ class SemanticLayer:
 
     @staticmethod
     def render_result_tables(tables: "list[Table]") -> str:
-        """The Conversation's live Result Tables: names, schemas and originating requests only."""
+        """The live Result Tables of the cells above, and the cell's own earlier Runs: names, schemas and originating requests only."""
         if not tables:
             return (
-                "\n# Result Tables\nNone are available in this Conversation. Result Tables named in "
+                "\n# Result Tables\nNone are available in the cells above. Result Tables named in "
                 "earlier messages have expired and cannot be queried. If the user names another table, "
                 "call describe_table(name) to see its columns, then query it by name; a live Result Table "
-                "from another Conversation can also be shown directly with show_table or show_chart.\n"
+                "from another notebook can also be shown directly with show_table or show_chart.\n"
             )
         lines = [
             "\n# Result Tables",
-            "Earlier results in this Conversation. Query them by name in run_query like any table "
+            "Earlier results in this notebook. Query them by name in run_query like any table "
             "(e.g. to break down or filter an earlier result). Others have expired. If the user names a "
             "table not listed here, call describe_table(name) to see its columns, then query it by name; a live "
-            "Result Table from another Conversation can also be shown directly with show_table or show_chart.",
+            "Result Table from another notebook can also be shown directly with show_table or show_chart.",
         ]
         for t in tables:
             cols = ", ".join(f"{c['name']} {c['type']}" for c in t.columns)

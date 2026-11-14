@@ -191,22 +191,6 @@ def test_the_llm_is_told_nothing(build_agent, web_client):
     assert len(llm.calls) == calls and run_of(agent, nb)["messages"] == messages
 
 
-def test_a_catalog_from_before_this_feature_gains_the_new_columns(tmp_path):
-    from flood_agent.catalog import Catalog
-
-    app_db = tmp_path / "app.db"
-    with closing(sqlite3.connect(app_db)) as con, con:
-        con.executescript("""
-            CREATE TABLE result_tables (name TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, turn_id INTEGER NOT NULL,
-              created_at INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '', columns TEXT NOT NULL DEFAULT '[]',
-              request TEXT NOT NULL DEFAULT '', expired INTEGER NOT NULL DEFAULT 0, truncated_to INTEGER,
-              retention_ms INTEGER NOT NULL);
-            INSERT INTO result_tables(name, conversation_id, turn_id, created_at, retention_ms)
-              VALUES ('rt_20240101_000000', 'c', 1, 1, 100000000000);""")
-    catalog = Catalog(app_db, clock=lambda: 5)
-    assert catalog["rt_20240101_000000"].refreshable is False
-
-
 def test_refreshing_a_table_leaves_the_system_prompt_byte_identical(build_agent, web_client):
     """The prompt lists the tables of the cells above in creation order; a Refresh must not reorder them, or
     the next cell run misses the prompt cache."""

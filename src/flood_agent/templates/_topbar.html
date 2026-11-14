@@ -29,17 +29,8 @@
     <label class="view-switch"><input type="checkbox" x-model="show.traces"> Traces</label>
     <label class="view-switch"><input type="checkbox" x-model="show.live" :disabled="!show.traces"> Live traces</label>
     <label class="view-switch"><input type="checkbox" x-model="show.tables"> Table info</label>
-    {% if not notebook_page %}
-    <button type="button" class="toggle-all" x-data="{ anyOpen: true }"
-            x-init="const refresh = () => { anyOpen = !!document.querySelector('details.turn[open]') };
-                    new MutationObserver(refresh).observe(document.getElementById('chat'), { childList: true, subtree: true, attributes: true, attributeFilter: ['open'] });
-                    refresh()"
-            @click="const open = !anyOpen; document.querySelectorAll('details.turn').forEach(d => d.open = open)"
-            x-text="anyOpen ? 'Collapse turns' : 'Expand turns'">Collapse turns</button>
-    {% else %}
     <button type="button" class="toggle-all" x-data="{ collapsed: false }"
             @click="collapsed = !collapsed; document.body.classList.toggle('outputs-collapsed', collapsed)"
             x-text="collapsed ? 'Expand outputs' : 'Collapse outputs'">Collapse outputs</button>
-    {% endif %}
     </div>
   </div>

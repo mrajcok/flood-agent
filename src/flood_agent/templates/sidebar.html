@@ -72,7 +72,7 @@
          if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) close();
        },
        async view(name) {
-         /* The chat's table Display for a Saved or Result Table (paging, sorting, PSV, rename), in a modal over this one. */
+         /* The table Display for a Saved or Result Table (paging, sorting, PSV, rename), in a modal over this one. */
          const request = ++this.viewerRequest;  /* only the latest open's response is shown */
          this.viewing = name; this.showInViewer(''); this.viewerError = '';
          try {
@@ -96,18 +96,18 @@
          this.$refs.viewerBody.innerHTML = html; this.viewerLoaded = html !== '';
        },
        closeBeforeDisplayCopy(e) {
-         /* The Display's copy button inserts into the chat box, which both modals would keep focus from: close them first. */
+         /* The Display's copy button inserts into a prompt box, which both modals would keep focus from: close them first. */
          if (!e.target.closest('.table-name .copy')) return;
          this.$refs.viewer.close(); this.$refs.dialog.close();
        },
        keepViewerOpen(e) {
-         /* Escape in the Display's rename form cancels the edit, as in the chat; it must not also close the viewer. */
+         /* Escape in the Display's rename form cancels the edit, as in a cell; it must not also close the viewer. */
          if (this.escapeInEditor) e.preventDefault();
          this.escapeInEditor = false;
        },
        copy(name) {
-         this.$refs.dialog.close();  /* first: a modal dialog keeps focus from the chat box */
-         insertIntoChat(name);
+         this.$refs.dialog.close();  /* first: a modal dialog keeps focus from the prompt box */
+         insertIntoPrompt(name);
        } }" @view-table.window="view($event.detail)">
     <button type="button" class="sidebar-action" @click="open = true; load()">&#x25A6;&#xFE0E; Browse tables</button>
     <dialog x-ref="dialog" aria-labelledby="show-tables-title" x-effect="open ? $el.showModal() : $el.open && $el.close()" @close="open = false" @click="closeIfOutside($event)">
@@ -127,7 +127,7 @@
                 <li>
                   <template x-if="confirming !== name">
                     <div class="row"><span class="row-actions">
-                      <button type="button" class="copy" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into the chat'" @click="copy(name)">&#x29C9;</button>
+                      <button type="button" class="copy" :aria-label="'Copy ' + name" :title="'Copy ' + name + ' into a prompt'" @click="copy(name)">&#x29C9;</button>
                       <!-- Hidden, not removed, where not offered so the names line up across sections. -->
                       <button type="button" class="delete" :style="section.deletable ? '' : 'visibility: hidden'" :disabled="!section.deletable" :aria-label="'Delete ' + name" :title="'Delete ' + name" @click="confirming = name">&#x1F5D1;&#xFE0E;</button>
                       <!-- One column for view (Saved and Result Tables) and edit (Lookup Tables): no table has both. -->
@@ -268,25 +268,4 @@
     {% endfor %}
   </ul>
   <p class="no-match" x-show="matches && !matches.length" x-cloak>No notebook matches.</p>
-  <h2 class="sec-head conversations"><span>Conversations <small>{{ conversations|length }}</small></span><a class="new" href="/" aria-label="New chat" title="New chat">&#xFF0B;</a></h2>
-  <ul>
-    {% for c in conversations %}
-    <li x-data="{ open: false, editing: false }"{% if c.id == current_id %} class="current"{% endif %}>
-      <a href="/c/{{ c.id }}" x-show="!editing" @mouseenter="$el.title = $el.scrollWidth <= $el.clientWidth ? '' : $el.textContent">{{ c.title }}</a>
-      <form class="rename" method="post" action="/c/{{ c.id }}/rename" x-show="editing" x-cloak>
-        <input type="text" name="title" value="{{ c.title }}" maxlength="60" required x-ref="title" aria-label="Conversation name"
-               @keydown.escape="editing = false" @blur="editing = false">
-      </form>
-      <div class="menu" x-show="!editing" @click.outside="open = false">
-        <button type="button" class="dots" aria-label="Conversation options" aria-haspopup="menu" :aria-expanded="open" @click="open = !open">&hellip;</button>
-        <div class="popup" role="menu" x-show="open" x-cloak>
-          <button type="button" role="menuitem" @click="open = false; editing = true; $nextTick(() => { $refs.title.focus(); $refs.title.select(); })">Rename</button>
-          <form method="post" action="/c/{{ c.id }}/delete" class="delete-form" data-preview-url="/c/{{ c.id }}/delete-preview" data-title="Delete this conversation?">
-            <button type="submit" role="menuitem">Delete</button>
-          </form>
-        </div>
-      </div>
-    </li>
-    {% endfor %}
-  </ul>
 </aside>

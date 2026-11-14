@@ -114,11 +114,38 @@ class NotebookStore:
             raise KeyError(notebook_id)
         return row[0]
 
-    def list_notebooks(self) -> list[dict]:
+    def list_notebooks(self, query: str = "") -> list[dict]:
+        """The notebooks, most recent activity first. A non-blank `query` keeps those whose title or any cell's
+        Draft text (prompt, SQL, Markdown) contains it, ignoring case; answers and tables are never searched."""
         with closing(self._connect()) as con:
-            return [dict(r) for r in con.execute(
+            notebooks = [dict(r) for r in con.execute(
                 "SELECT id, title, created_at, last_activity_at FROM notebooks "
                 "ORDER BY last_activity_at DESC, created_at DESC")]
+            needle = query.strip().casefold()
+            if not needle:
+                return notebooks
+            texts: dict[str, list[str]] = {}
+            for row in con.execute("SELECT notebook_id, draft FROM cells"):
+                draft = json.loads(row["draft"])
+                texts.setdefault(row["notebook_id"], []).extend(
+                    str(draft.get(k) or "") for k in ("prompt", "sql", "text"))
+        return [n for n in notebooks
+                if any(needle in t.casefold() for t in [n["title"], *texts.get(n["id"], [])])]
+
+    def rename_notebook(self, notebook_id: str, title: str) -> None:
+        """Retitle a notebook (a rename is not activity: the list order stays). KeyError if unknown."""
+        with closing(self._connect()) as con, con:
+            if con.execute("UPDATE notebooks SET title=? WHERE id=?", (title, notebook_id)).rowcount == 0:
+                raise KeyError(notebook_id)
+
+    def delete_notebook(self, notebook_id: str) -> None:
+        """Remove a notebook with its cells, Runs, messages and Displays. (Its tables are the Catalog's: see
+        `Agent.delete_notebook`.) KeyError if unknown."""
+        for cell in self.cells(notebook_id):
+            self.delete_cell(cell["id"])
+        with closing(self._connect()) as con, con:
+            if con.execute("DELETE FROM notebooks WHERE id=?", (notebook_id,)).rowcount == 0:
+                raise KeyError(notebook_id)
 
     def add_ai_cell(self, notebook_id: str, draft: dict, after: str | None = None, before: str | None = None) -> str:
         return self.add_cell(notebook_id, AI, draft, after, before)

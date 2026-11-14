@@ -118,17 +118,26 @@ class NotebookStore:
                 "SELECT id, title, created_at, last_activity_at FROM notebooks "
                 "ORDER BY last_activity_at DESC, created_at DESC")]
 
-    def add_ai_cell(self, notebook_id: str, draft: dict, after: str | None = None) -> str:
-        return self.add_cell(notebook_id, AI, draft, after)
+    def add_ai_cell(self, notebook_id: str, draft: dict, after: str | None = None, before: str | None = None) -> str:
+        return self.add_cell(notebook_id, AI, draft, after, before)
 
-    def add_cell(self, notebook_id: str, kind: str, draft: dict, after: str | None = None) -> str:
-        """Insert a cell of this kind with this Draft after cell `after`, or at the end. KeyError if the
-        notebook (or `after` in it) is unknown."""
+    def add_cell(self, notebook_id: str, kind: str, draft: dict, after: str | None = None,
+                 before: str | None = None) -> str:
+        """Insert a cell of this kind with this Draft after cell `after`, before cell `before`, or at the end.
+        KeyError if the notebook (or `after`/`before` in it) is unknown."""
         cell_id, now = uuid.uuid4().hex, self._now()
         with closing(self._connect()) as con, con:
             if con.execute("SELECT 1 FROM notebooks WHERE id=?", (notebook_id,)).fetchone() is None:
                 raise KeyError(notebook_id)
-            if after is None:
+            if before is not None:
+                row = con.execute("SELECT position FROM cells WHERE id=? AND notebook_id=?",
+                                  (before, notebook_id)).fetchone()
+                if row is None:
+                    raise KeyError(before)
+                position = row[0]
+                con.execute("UPDATE cells SET position=position+1 WHERE notebook_id=? AND position>=?",
+                            (notebook_id, position))
+            elif after is None:
                 position = con.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM cells WHERE notebook_id=?",
                                        (notebook_id,)).fetchone()[0]
             else:
@@ -143,6 +152,35 @@ class NotebookStore:
                         (cell_id, notebook_id, position, kind, json.dumps(draft), now))
             self._touch(con, notebook_id)
         return cell_id
+
+    def move_cell(self, cell_id: str, direction: str) -> None:
+        """Swap the cell with its neighbour above ("up") or below ("down"); at either end, nothing changes."""
+        with closing(self._connect()) as con, con:
+            row = con.execute("SELECT notebook_id, position FROM cells WHERE id=?", (cell_id,)).fetchone()
+            if row is None:
+                raise KeyError(cell_id)
+            op, order = ("<", "DESC") if direction == "up" else (">", "ASC")
+            other = con.execute(
+                f"SELECT id, position FROM cells WHERE notebook_id=? AND position {op} ? ORDER BY position {order} LIMIT 1",
+                (row["notebook_id"], row["position"])).fetchone()
+            if other is None:
+                return
+            con.execute("UPDATE cells SET position=? WHERE id=?", (other["position"], cell_id))
+            con.execute("UPDATE cells SET position=? WHERE id=?", (row["position"], other["id"]))
+            self._touch(con, row["notebook_id"])
+
+    def delete_cell(self, cell_id: str) -> None:
+        """Remove a cell with its Run, messages and Displays. (Its tables are the Catalog's: see `Agent.delete_cell`.)"""
+        with closing(self._connect()) as con, con:
+            row = con.execute("SELECT notebook_id FROM cells WHERE id=?", (cell_id,)).fetchone()
+            if row is None:
+                raise KeyError(cell_id)
+            for (run_id,) in con.execute("SELECT id FROM runs WHERE cell_id=?", (cell_id,)).fetchall():
+                for table in ("run_displays", "run_messages"):
+                    con.execute(f"DELETE FROM {table} WHERE run_id=?", (run_id,))
+            con.execute("DELETE FROM runs WHERE cell_id=?", (cell_id,))
+            con.execute("DELETE FROM cells WHERE id=?", (cell_id,))
+            self._touch(con, row["notebook_id"])
 
     def edit_ai_cell(self, cell_id: str, **changes) -> None:
         self.edit_cell(cell_id, **changes)

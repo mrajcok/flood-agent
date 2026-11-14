@@ -60,37 +60,40 @@
         document.querySelectorAll("details.turn").forEach(d => d.open = false);
       }
     } catch (e) { /* no storage */ }
+    // Ask in the dialog; resolves to "keep" or "delete_rt", or null if cancelled. `counts` is {result, saved}.
+    function askDeleteChoice(title, counts) {
+      return new Promise((resolve) => {
+        const tables = (n, kind) => n + " " + kind + (n === 1 ? "" : "s");
+        const dialog = document.getElementById("delete-dialog");
+        document.getElementById("delete-title").textContent = title;
+        document.getElementById("delete-result-choice").hidden = !counts.result;
+        dialog.querySelectorAll(".delete-result-count").forEach(el => el.textContent = tables(counts.result, "Result Table"));
+        const note = document.getElementById("delete-saved-note");
+        note.hidden = !counts.saved;
+        note.textContent = "Its " + tables(counts.saved, "Saved Table") + " will be kept. Use the Tables button to delete Saved (renamed) Tables.";
+        dialog.querySelector('input[value="keep"]').checked = true;
+        dialog.returnValue = "";
+        dialog.onclose = () => resolve(dialog.returnValue === "ok" ? dialog.querySelector('input[name="choice"]:checked').value : null);
+        dialog.showModal();
+      });
+    }
     document.addEventListener("submit", async (event) => {
       const form = event.target;
       if (!form.classList || !form.classList.contains("delete-form") || form.dataset.confirmed) return;
       event.preventDefault();
       let counts = { result: 0, saved: 0 };
       try { counts = await (await fetch(form.dataset.previewUrl)).json(); } catch (e) { /* ask without the counts */ }
-      const tables = (n, kind) => n + " " + kind + (n === 1 ? "" : "s");
-      const finish = (choice) => {
-        let field = form.querySelector('input[name="tables"]');
-        if (!field) { field = document.createElement("input"); field.type = "hidden"; field.name = "tables"; form.appendChild(field); }
-        field.value = choice;
-        form.dataset.confirmed = "1";
-        // Deleting a turn reloads the page; keep the turns collapsed if the user had collapsed them all.
-        try {
-          if (form.classList.contains("turn-delete") && !document.querySelector("details.turn[open]")) sessionStorage.setItem("collapseTurns", "1");
-        } catch (e) { /* no storage: turns reopen */ }
-        form.submit();
-      };
-      const dialog = document.getElementById("delete-dialog");
-      document.getElementById("delete-title").textContent = form.dataset.title;
-      document.getElementById("delete-result-choice").hidden = !counts.result;
-      dialog.querySelectorAll(".delete-result-count").forEach(el => el.textContent = tables(counts.result, "Result Table"));
-      const note = document.getElementById("delete-saved-note");
-      note.hidden = !counts.saved;
-      note.textContent = "Its " + tables(counts.saved, "Saved Table") + " will be kept. Use the Tables button to delete Saved (renamed) Tables.";
-      dialog.querySelector('input[value="keep"]').checked = true;
-      dialog.returnValue = "";
-      dialog.onclose = () => {
-        if (dialog.returnValue === "ok") finish(dialog.querySelector('input[name="choice"]:checked').value);
-      };
-      dialog.showModal();
+      const choice = await askDeleteChoice(form.dataset.title, counts);
+      if (!choice) return;
+      let field = form.querySelector('input[name="tables"]');
+      if (!field) { field = document.createElement("input"); field.type = "hidden"; field.name = "tables"; form.appendChild(field); }
+      field.value = choice;
+      form.dataset.confirmed = "1";
+      // Deleting a turn reloads the page; keep the turns collapsed if the user had collapsed them all.
+      try {
+        if (form.classList.contains("turn-delete") && !document.querySelector("details.turn[open]")) sessionStorage.setItem("collapseTurns", "1");
+      } catch (e) { /* no storage: turns reopen */ }
+      form.submit();
     }, true);
   </script>
   <script>

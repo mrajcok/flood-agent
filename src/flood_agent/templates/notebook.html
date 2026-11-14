@@ -25,12 +25,50 @@
                        if (r.ok) this.staleIds = await r.json();
                      } catch (e) {}
                    },
+                   async cellOp(button, op) {
+                     /* Move, copy or delete the cell above the button's bar; the server refuses a running cell. */
+                     const bar = button.closest('.add-bar'), block = bar.previousElementSibling, id = block.dataset.cellId;
+                     const url = '/n/{{ notebook_id }}/cells/' + id;
+                     try {
+                       if (op === 'delete') {
+                         const preview = await fetch(url + '/delete-preview');
+                         if (!preview.ok) return;
+                         const choice = await askDeleteChoice('Delete this ' + block.dataset.kind + ' cell?', await preview.json());
+                         if (!choice) return;
+                         const r = await fetch(url + '/delete', { method: 'POST', body: new URLSearchParams({ tables: choice }) });
+                         if (!r.ok) return;
+                         block.remove(); bar.remove();
+                       } else if (op === 'copy') {
+                         const r = await fetch(url + '/copy', { method: 'POST' });
+                         if (!r.ok) return;
+                         bar.insertAdjacentHTML('afterend', await r.text());
+                         htmx.process(bar.nextElementSibling); htmx.process(bar.nextElementSibling.nextElementSibling);
+                       } else {
+                         const r = await fetch(url + '/move', { method: 'POST', body: new URLSearchParams({ direction: op }) });
+                         if (!r.ok) return;
+                         if (op === 'up') {
+                           const prevBlock = block.previousElementSibling.previousElementSibling;
+                           if (prevBlock && prevBlock.classList.contains('cellblock')) { prevBlock.before(block, bar); }
+                         } else {
+                           const next = bar.nextElementSibling;
+                           if (next && next.classList.contains('cellblock')) { next.nextElementSibling.after(block, bar); }
+                         }
+                       }
+                     } catch (e) { return; }
+                     window.dispatchEvent(new Event('cells-changed'));
+                   },
                    watch() {
                      const update = () => { this.busy = !!this.$el.querySelector('.cellblock.running'); };
                      new MutationObserver(update).observe(this.$el, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
                      update();
                    } }" x-init="watch()"
          @htmx:after-swap.window="refreshStale()" @cells-changed.window="refreshStale()">
+      <div class="add-top" data-at="start">
+        {% for kind, label in [("ai", "+ AI"), ("sql", "+ SQL"), ("markdown", "+ Markdown")] %}
+        <button type="button" data-add-top="{{ kind }}" aria-label="Insert {{ label[2:] }} Cell above the first cell" title="Insert above the first cell"
+                hx-post="/n/{{ notebook_id }}/cells" hx-vals='{"kind": "{{ kind }}", "at": "start"}' hx-target="closest .add-top" hx-swap="afterend">{{ label }}</button>
+        {% endfor %}
+      </div>
       {% for cell in cells %}{% include "notebook_slot.html" %}{% endfor %}
     </div>
   </div>

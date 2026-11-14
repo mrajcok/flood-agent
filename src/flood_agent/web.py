@@ -144,7 +144,7 @@ def create_app(
         async with agent:
             yield
 
-    app = FastAPI(title="Flood Agent", lifespan=lifespan)
+    app = FastAPI(title="CANOPY", lifespan=lifespan)
 
     @app.exception_handler(TableExpired)
     def expired_handler(request: Request, exc: TableExpired):

@@ -192,7 +192,7 @@ def _money(v) -> str:
 
 def render_markdown(summary: dict, results: list[QuestionResult]) -> str:
     lines = [
-        "# Flood Agent eval report", "",
+        "# CANOPY eval report", "",
         "| Model | Correct | Accuracy | Retries | Errors | Mean latency | Max latency | Total cost | Cost/question |",
         "|---|---|---|---|---|---|---|---|---|",
     ]

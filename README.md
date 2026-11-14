@@ -1,4 +1,6 @@
-# Flood Agent
+# CANOPY
+
+CANOPY: Cyber AI Notebook for Operations, Peering, and telemetrY.
 
 Notebook-driven flow telemetry analysis where no telemetry data passes through the LLM
 (see `GLOSSARY.md` and `docs/adr/0001-no-telemetry-data-through-the-llm.md`).
@@ -87,7 +89,7 @@ Tables are paginated (50 rows/page, max 500) and sortable on any column by the A
 Result Table; `sort` must exactly match a column of that Result Table or the request is a
 400. `GET /api/results/<rt>/psv` streams the full Result Table as pipe-separated values (fields containing `|`, a quote or a newline are double-quoted, CSV-style; raw values, formula-leading
 text prefixed with `'`). Both are Agent endpoints, not LLM tools. The `/api/results/...`
-endpoints are not scoped per notebook by design: Flood Agent is single-user and local, with no authentication.
+endpoints are not scoped per notebook by design: CANOPY is single-user and local, with no authentication.
 
 Formatting comes from Semantic Layer column metadata (`tables.flows.columns.<col>`):
 `enum` -> names (proto), `enum_bits` -> flag letters (S, SA, FPA), `unit: bytes` -> decimal

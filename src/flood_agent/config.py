@@ -142,7 +142,7 @@ class Settings(BaseSettings):
 
 
 _ENV_EXAMPLE_HEADER = """\
-# Flood Agent settings.
+# CANOPY settings.
 #
 # Generated from flood_agent/config.py and flood_agent/defaults.toml; regenerate with:
 #   uv run python -m flood_agent.config > .env.example

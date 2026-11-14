@@ -1,6 +1,6 @@
-# Flood Agent
+# CANOPY
 
-Flood stores network telemetry (NetFlow/IPFIX). Flood Agent is a notebook-based analyst tool for exploring that telemetry and investigating volumetric attacks, without ever exposing telemetry data to the LLM.
+Flood stores network telemetry (NetFlow/IPFIX). CANOPY is a notebook-based analyst tool for exploring that telemetry and investigating volumetric attacks, without ever exposing telemetry data to the LLM.
 
 ## Actors
 

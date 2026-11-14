@@ -88,3 +88,9 @@ def test_table_display_has_a_truncation_badge_in_the_pager_line(build_agent, web
     template = TEMPLATES.get_template("display_table.html").render(rows_url="r", psv_url="p", result_table="t")
     pager = template.split('<div class="pager">')[1].split("</div>")[0]
     assert "truncated to" in pager and "Download PSV" in pager
+
+
+def test_the_app_is_named_canopy(build_agent):
+    with TestClient(create_app(build_agent(ScriptedLLM([TextChunk("Hi.")])))) as client:
+        assert "<h1>CANOPY</h1>" in client.get("/").text
+        assert client.get("/openapi.json").json()["info"]["title"] == "CANOPY"

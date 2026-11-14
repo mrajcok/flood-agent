@@ -633,6 +633,18 @@ def create_app(
         """Names of the tables the user can query, for the Tables dialog. Plain HTTP, never an MCP tool."""
         return agent.tables.listing()
 
+    @app.get("/api/tables/{name}/columns")
+    def table_columns(name: str):
+        """A readable table's column names and types, for a SQL Cell's click-to-insert list. Never rows, never
+        an MCP tool. 404 for a table the user may not query."""
+        kind = agent.tables.kind_of(name)
+        if kind is None:
+            raise HTTPException(404, "unknown table")
+        columns = queries.table_columns(agent.config.telemetry_db, agent.config.results_db, agent.tables.canonical(name), kind == "telemetry")
+        if columns is None:
+            raise HTTPException(404, "unknown table")
+        return {"name": agent.tables.canonical(name), "kind": kind, "columns": columns}
+
     @app.post("/chat", response_class=HTMLResponse)
     def chat(request: Request, message: str = Form(...), conversation_id: str = Form(""), max_rows: str = Form(...),
              model: str | None = Form(None), effort: str | None = Form(None)):

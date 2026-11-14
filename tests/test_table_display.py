@@ -156,6 +156,14 @@ def test_js_formatting_functions():
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+def test_js_sql_insert_functions():
+    if not shutil.which("node"):
+        pytest.skip("node not installed")
+    test_file = Path(__file__).parent / "js" / "sql_insert.test.js"
+    r = subprocess.run(["node", "--test", str(test_file)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
 def test_format_js_url_changes_with_the_file_so_browsers_never_run_a_stale_copy(build_agent, web_client):
     from flood_agent import web
 

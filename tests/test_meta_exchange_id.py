@@ -1,12 +1,10 @@
-"""The Conversation id travels in MCP request _meta, never in the launch environment or a tool schema."""
+"""An exchange's id travels in MCP request _meta, never in the launch environment or a tool schema."""
 
 import json
 
 import pytest
 from conftest import ScriptedLLM, TextChunk, collect, in_process_transport, last_tool_result, mcp_children, tool_call
 from mcp import ClientSession
-
-from flood_agent.agent import Conversation
 
 META_KEY = "flood_agent/conversation_id"
 CAP_KEY = "flood_agent/max_result_rows"
@@ -59,14 +57,15 @@ async def test_reads_and_displays_are_not_scoped_to_the_meta_conversation(make_a
         lambda m: results.append(last_tool_result(m)) or [TextChunk("done")],
     )
     agent = await make_agent(llm)
-    conv = Conversation()
-    await collect(agent, "q", conv)
+    notebook = agent.create_notebook()
+    await collect(agent, "q", notebook)
+    cell = agent.notebooks.cells(notebook)[0]["id"]
     table = results[0]["result_table"]
     q = {"sql": f"SELECT * FROM {table}", "title": "again"}
     own, missing, wrong, empty = await _raw_calls(
         agent,
         [
-            ("run_query", q, {META_KEY: conv.id, CAP_KEY: 1000}),
+            ("run_query", q, {META_KEY: cell, CAP_KEY: 1000}),
             ("run_query", q, {CAP_KEY: 1000}),
             ("show_table", {"result_table": table}, {META_KEY: "someone-else"}),
             ("show_table", {"result_table": table}, {META_KEY: ""}),

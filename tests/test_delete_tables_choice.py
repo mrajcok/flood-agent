@@ -1,30 +1,29 @@
-"""Choosing what happens to Result Tables when deleting a Conversation or one exchange (HTTP seam)."""
+"""Choosing what happens to Result Tables when deleting a notebook or one cell (HTTP seam)."""
 
 import re
 
-from conftest import DAY, Clock, ScriptedLLM, last_tool_result, tool_call
-from test_conversations import ask, main_pane, table_script, turn_ids
+from conftest import DAY, Clock, ScriptedLLM, ask, last_tool_result, table_script, tool_call
 
+from flood_agent.catalog import CellRun
 from flood_agent.llm import TextChunk
-from flood_agent.web import TEMPLATES
 
 
-def tables_in(client, cid):
-    return re.findall(r"/api/results/([a-z0-9_]+)/rows", client.get(f"/c/{cid}").text)
+def tables_in(client, nb):
+    return re.findall(r"/api/results/([a-z0-9_]+)/rows", client.get(f"/n/{nb}").text)
 
 
 def two_tables(build_agent, web_client, *extra):
-    """One Conversation, two exchanges, one table each; the second table is renamed."""
+    """One notebook, two AI Cells, one table each; the second table is renamed.
+    Returns (client, clock, notebook, first cell, second cell, first table, second table)."""
     clock = Clock()
     agent = build_agent(ScriptedLLM(*table_script("a"), *table_script("b"), *extra), clock=clock, result_ttl_ms=DAY)
     client = web_client(agent)
-    cid, _ = ask(client, "first")
+    nb, c1, _ = ask(client, "first")
     clock.ms += 2000  # distinct creation times
-    ask(client, "second", cid)
-    first, second = tables_in(client, cid)[:2]
+    _, c2, _ = ask(client, "second", nb)
+    first, second = tables_in(client, nb)[:2]
     client.post(f"/api/results/{second}/settings", data={"name": "keeper"})
-    second = "keeper"
-    return client, clock, cid, first, second
+    return client, clock, nb, c1, c2, first, "keeper"
 
 
 def readable(client, name):
@@ -32,93 +31,88 @@ def readable(client, name):
 
 
 def test_preview_counts_live_result_tables_and_saved_tables_separately(build_agent, web_client):
-    client, _, cid, _, _ = two_tables(build_agent, web_client)
-    assert client.get(f"/c/{cid}/delete-preview").json() == {"result": 1, "saved": 1}
-    first_turn, second_turn = turn_ids(main_pane(client.get(f"/c/{cid}").text))
-    assert client.get(f"/c/{cid}/delete-preview?turn_id={first_turn}").json() == {"result": 1, "saved": 0}
-    assert client.get(f"/c/{cid}/delete-preview?turn_id={second_turn}").json() == {"result": 0, "saved": 1}
-    assert client.get("/c/nope/delete-preview").status_code == 404
-    assert client.get(f"/c/{cid}/delete-preview?turn_id=9999").status_code == 404
+    client, _, nb, c1, c2, _, _ = two_tables(build_agent, web_client)
+    assert client.get(f"/n/{nb}/delete-preview").json() == {"result": 1, "saved": 1}
+    assert client.get(f"/n/{nb}/cells/{c1}/delete-preview").json() == {"result": 1, "saved": 0}
+    assert client.get(f"/n/{nb}/cells/{c2}/delete-preview").json() == {"result": 0, "saved": 1}
+    assert client.get("/n/nope/delete-preview").status_code == 404
+    assert client.get(f"/n/{nb}/cells/nope/delete-preview").status_code == 404
 
 
-def test_deleting_a_conversation_keeps_its_tables_by_default_until_they_expire(build_agent, web_client):
-    client, clock, cid, first, second = two_tables(build_agent, web_client)
-    assert client.post(f"/c/{cid}/delete", follow_redirects=False).status_code == 303
+def test_deleting_a_notebook_keeps_its_tables_by_default_until_they_expire(build_agent, web_client):
+    client, clock, nb, _, _, first, second = two_tables(build_agent, web_client)
+    assert client.post(f"/n/{nb}/delete", follow_redirects=False).status_code == 303
     assert readable(client, first) and readable(client, second)
     clock.ms += DAY + 10_000
     assert client.get(f"/api/results/{first}/rows").status_code == 410
 
 
-def test_a_kept_table_is_queryable_from_another_conversation(build_agent, web_client):
+def test_a_kept_table_is_queryable_from_another_notebook(build_agent, web_client):
     seen = {}
 
     def query_kept(msgs):
         return [tool_call("run_query", sql=f"SELECT * FROM {seen['name']}", title="again")]
 
-    client, _, cid, first, _ = two_tables(build_agent, web_client, query_kept, lambda msgs: [
+    client, _, nb, _, _, first, _ = two_tables(build_agent, web_client, query_kept, lambda msgs: [
         TextChunk("ok" if last_tool_result(msgs).get("success") else "failed")])
     seen["name"] = first
-    client.post(f"/c/{cid}/delete", data={"tables": "keep"})
-    _, stream = ask(client, "from elsewhere")
+    client.post(f"/n/{nb}/delete", data={"tables": "keep"})
+    _, _, stream = ask(client, "from elsewhere")
     assert "ok" in stream and "failed" not in stream
 
 
 def test_deleting_result_tables_drops_only_rt_tables_and_keeps_saved_tables(build_agent, web_client):
-    client, _, cid, first, second = two_tables(build_agent, web_client)
-    client.post(f"/c/{cid}/delete", data={"tables": "delete_rt"})
+    client, _, nb, _, _, first, second = two_tables(build_agent, web_client)
+    client.post(f"/n/{nb}/delete", data={"tables": "delete_rt"})
     assert not readable(client, first) and readable(client, second)
 
 
-def test_delete_all_is_no_longer_a_choice(build_agent, web_client):
-    client, _, cid, first, second = two_tables(build_agent, web_client)
-    assert client.post(f"/c/{cid}/delete", data={"tables": "delete_all"}).status_code == 422
-    first_turn, _ = turn_ids(main_pane(client.get(f"/c/{cid}").text))
-    assert client.post(f"/c/{cid}/turns/{first_turn}/delete", data={"tables": "delete_all"}).status_code == 422
+def test_delete_all_is_not_a_choice(build_agent, web_client):
+    client, _, nb, c1, _, first, second = two_tables(build_agent, web_client)
+    assert client.post(f"/n/{nb}/delete", data={"tables": "delete_all"}).status_code == 422
+    assert client.post(f"/n/{nb}/cells/{c1}/delete", data={"tables": "delete_all"}).status_code == 422
     assert readable(client, first) and readable(client, second)
 
 
 def test_unknown_choice_is_rejected_and_deletes_nothing(build_agent, web_client):
-    client, _, cid, first, _ = two_tables(build_agent, web_client)
-    assert client.post(f"/c/{cid}/delete", data={"tables": "bogus"}).status_code == 422
-    assert readable(client, first) and f'href="/c/{cid}"' in client.get("/").text
+    client, _, nb, _, _, first, _ = two_tables(build_agent, web_client)
+    assert client.post(f"/n/{nb}/delete", data={"tables": "bogus"}).status_code == 422
+    assert readable(client, first) and f'href="/n/{nb}"' in client.get("/").text
 
 
-def test_turn_deletion_keeps_by_default_and_honours_the_choices(build_agent, web_client):
-    client, _, cid, first, second = two_tables(build_agent, web_client)
-    first_turn, second_turn = turn_ids(main_pane(client.get(f"/c/{cid}").text))
-    client.post(f"/c/{cid}/turns/{first_turn}/delete")
+def test_cell_deletion_keeps_by_default_and_honours_the_choices(build_agent, web_client):
+    client, _, nb, c1, c2, first, second = two_tables(build_agent, web_client)
+    client.post(f"/n/{nb}/cells/{c1}/delete")
     assert readable(client, first)
-    client.post(f"/c/{cid}/turns/{second_turn}/delete", data={"tables": "delete_rt"})
+    client.post(f"/n/{nb}/cells/{c2}/delete", data={"tables": "delete_rt"})
     assert readable(client, second)  # renamed, so delete_rt keeps it
 
 
-def test_turn_delete_rt_drops_that_turns_result_tables_only(build_agent, web_client):
-    client, _, cid, first, second = two_tables(build_agent, web_client)
-    first_turn, _ = turn_ids(main_pane(client.get(f"/c/{cid}").text))
-    client.post(f"/c/{cid}/turns/{first_turn}/delete", data={"tables": "delete_rt"})
+def test_cell_delete_rt_drops_that_cells_result_tables_only(build_agent, web_client):
+    client, _, nb, c1, _, first, second = two_tables(build_agent, web_client)
+    client.post(f"/n/{nb}/cells/{c1}/delete", data={"tables": "delete_rt"})
     assert not readable(client, first) and readable(client, second)
 
 
-def test_turn_ownership_is_the_recorded_turn_not_the_first_mention(build_agent, web_client):
-    # turn one made rt_X and then used `kept`, a table turn two made and that was renamed since
+def test_ownership_is_the_recorded_run_not_the_first_mention(build_agent, web_client):
+    # cell one made rt_X and then used `kept`, a table cell two made and that was renamed since
     agent = build_agent(ScriptedLLM([TextChunk("hi")], [TextChunk("hi")]))
     client = web_client(agent)
-    cid, _ = ask(client, "one")
-    ask(client, "two", cid)
-    one, two = turn_ids(main_pane(client.get(f"/c/{cid}").text))
-    agent.tables.register("rt_20260101_000000", cid, int(one))
-    agent.tables.register("kept", cid, int(two))
-    agent.store.add_message(cid, int(one), {"role": "assistant", "content": "first used kept here"})
-    assert client.get(f"/c/{cid}/delete-preview?turn_id={one}").json() == {"result": 1, "saved": 0}
-    assert client.get(f"/c/{cid}/delete-preview?turn_id={two}").json() == {"result": 0, "saved": 1}
+    nb, one, _ = ask(client, "one")
+    _, two, _ = ask(client, "two", nb)
+    run_one, run_two = (agent.notebooks.cell(c)["run"]["id"] for c in (one, two))
+    agent.tables.register_for(CellRun(one, run_one), "rt_20260101_000000")
+    agent.tables.register_for(CellRun(two, run_two), "kept")
+    agent.notebooks.add_message(run_one, {"role": "assistant", "content": "first used kept here"})
+    assert client.get(f"/n/{nb}/cells/{one}/delete-preview").json() == {"result": 1, "saved": 0}
+    assert client.get(f"/n/{nb}/cells/{two}/delete-preview").json() == {"result": 0, "saved": 1}
 
 
 def test_dialog_markup_offers_keep_or_delete_result_tables(build_agent, web_client):
-    client, _, cid, _, _ = two_tables(build_agent, web_client)
-    page = client.get(f"/c/{cid}").text
+    client, _, nb, _, _, _, _ = two_tables(build_agent, web_client)
+    page = client.get(f"/n/{nb}").text
     assert 'id="delete-dialog"' in page
     for value in ("keep", "delete_rt"):
         assert f'value="{value}"' in page
     assert 'value="delete_all"' not in page
-    assert f'data-preview-url="/c/{cid}/delete-preview"' in page
-    assert "delete-preview?turn_id=" in TEMPLATES.get_template("turn_delete.html").render(conversation_id=cid, turn_id=3)
+    assert f'data-preview-url="/n/{nb}/delete-preview"' in client.get("/").text

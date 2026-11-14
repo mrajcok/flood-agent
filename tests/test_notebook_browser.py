@@ -25,6 +25,14 @@ def run(cell):
     cell.get_by_role("button", name="Run").click()
 
 
+def run_in_new_notebook(page, prompt):
+    """Open a new notebook, write `prompt` in its first AI Cell and run it; returns the cell."""
+    cell = open_new_notebook(page)
+    write_prompt(cell, prompt)
+    run(cell)
+    return cell
+
+
 def test_the_sidebar_plus_makes_notebook_n_with_one_empty_ai_cell_and_opens_it(live_page):
     page = live_page()
     expect(page.locator(".notebook-list li")).to_have_count(0)
@@ -201,3 +209,34 @@ def test_a_cell_added_between_two_lands_between_them_and_can_run(live_page, buil
     expect(middle.locator(".output")).to_contain_text("middle answer")
     expect(middle.locator(".gutter .num")).to_have_text("[1]")
     expect(page.locator(".cellblock .gutter .num")).to_have_text(["[ ]", "[1]", "[ ]"])
+
+
+MODEL_LABELS = [
+    "Claude Sonnet 5.5", "Claude Opus 5.5", "Claude Haiku 5.5", "DeepSeek V4 Pro", "GLM 5.3", "Qwen3.8 27B",
+    "GPT-5.6 Terra", "GPT-5.6 Sol", "GPT-5.6 Luna", "No model",
+]
+
+
+def test_the_chip_lists_the_curated_models_in_order_and_each_models_effort_levels(live_page):
+    page = live_page()
+    cell = open_new_notebook(page)
+    expect(cell.locator(".chip")).to_contain_text("GLM 5.3 · max")
+    cell.locator(".chip").click()
+    model = cell.get_by_label("Model")
+    expect(model.locator("option")).to_have_text(MODEL_LABELS)
+    effort = cell.get_by_label("Effort")
+    levels = lambda: [t for t in effort.locator("option").all_inner_texts() if t != "no effort"]  # noqa: E731
+    assert levels() == ["max", "high", "low"]
+    model.select_option("deepseek/deepseek-v4-pro-0813")
+    assert levels() == ["max", "high", "low", "none"]
+
+
+def test_with_no_key_every_real_model_is_disabled_in_the_chip(live_page):
+    page = live_page(has_api_key=False)
+    cell = open_new_notebook(page)
+    cell.locator(".chip").click()
+    options = cell.get_by_label("Model").locator("option")
+    for i in range(len(MODEL_LABELS) - 1):
+        expect(options.nth(i)).to_have_attribute("disabled", "disabled")
+        expect(options.nth(i)).to_contain_text("needs OPENROUTER_API_KEY")
+    expect(options.last).not_to_have_attribute("disabled", "disabled")

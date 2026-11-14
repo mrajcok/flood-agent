@@ -6,10 +6,10 @@ import asyncio
 import json
 
 import pytest
-from conftest import ScriptedLLM, collect, last_tool_result, mcp_children, tool_call
+from conftest import ScriptedLLM, collect, last_tool_result, mcp_children, run_of, tables_in, tool_call
 
 import flood_agent.agent as agent_mod
-from flood_agent.agent import Conversation, DisplayEvent, TextDelta, TraceReady, TurnEnd, TurnError
+from flood_agent.agent import DisplayEvent, TextDelta, TraceReady, TurnEnd, TurnError
 from flood_agent.llm import LLMError, TextChunk, ToolCallChunk
 
 SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
@@ -81,8 +81,8 @@ async def test_failed_llm_step_keeps_history_valid_surfaces_error_and_saves_trac
 
     llm = ScriptedLLM([tool_call("run_query", "c1", sql=SQL, title="t")], boom)
     agent = await make_agent(llm)
-    conv = Conversation()
-    events = await collect(agent, "q", conv)
+    nb = agent.create_notebook()
+    events = await collect(agent, "q", nb)
 
     assert "upstream exploded" in text_of(events)
     assert any(isinstance(e, TurnError) for e in events) and isinstance(events[-1], TurnEnd)
@@ -90,11 +90,13 @@ async def test_failed_llm_step_keeps_history_valid_surfaces_error_and_saves_trac
     errors = [e for e in trace["entries"] if e["kind"] == "error"]
     assert errors and "upstream exploded" in errors[0]["message"]
 
-    saved = agent.store.messages(conv.id)
+    run = run_of(agent, nb)
+    saved = run["messages"]
+    assert run["status"] == "failed"
     assert_valid_history(saved)
     assert saved[-1]["role"] == "assistant" and "upstream exploded" in saved[-1]["content"]
     assert [m for m in saved if m["role"] == "assistant" and not m["content"] and not m.get("tool_calls")] == []
-    assert any(t["type"] == "trace" for t in agent.store.transcript(conv.id))  # Trace persisted
+    assert run["trace"] and any(e["kind"] == "error" for e in run["trace"]["entries"])  # Trace persisted
 
 
 async def test_unexpected_exception_is_reported_not_raised(make_agent):
@@ -102,18 +104,20 @@ async def test_unexpected_exception_is_reported_not_raised(make_agent):
         raise RuntimeError("kaboom")
 
     agent = await make_agent(ScriptedLLM(boom))
-    conv = Conversation()
-    events = await collect(agent, "q", conv)
+    nb = agent.create_notebook()
+    events = await collect(agent, "q", nb)
     (err,) = [e for e in events if isinstance(e, TurnError)]
     assert "RuntimeError" in err.detail and "kaboom" in err.detail
     assert isinstance(events[-1], TurnEnd)
-    assert any(t["type"] == "trace" for t in agent.store.transcript(conv.id))
+    assert run_of(agent, nb)["trace"] is not None
 
 
-async def test_open_conversation_repairs_corrupt_saved_history(make_agent):
-    agent = await make_agent(ScriptedLLM())
-    cid = agent.store.create_conversation("c")
-    turn = agent.store.start_turn(cid, "hi")
+async def test_a_cell_below_is_sent_a_repaired_copy_of_a_corrupt_saved_run(make_agent):
+    llm = ScriptedLLM([TextChunk("ok")])
+    agent = await make_agent(llm)
+    nb = agent.create_notebook()
+    first = agent.add_ai_cell(nb, prompt="hi")
+    run = agent.notebooks.start_run(first, "hi", {"model": "m", "effort": None, "max_rows": 10}, "f")
     call = lambda i: {"id": i, "type": "function", "function": {"name": "run_query", "arguments": "{}"}}  # noqa: E731
     for m in [
         {"role": "user", "content": "hi"},
@@ -125,8 +129,10 @@ async def test_open_conversation_repairs_corrupt_saved_history(make_agent):
         {"role": "assistant", "content": "fine"},
         {"role": "assistant", "content": "", "tool_calls": [call("d")]},  # trailing, unanswered
     ]:
-        agent.store.add_message(cid, turn, m)
-    msgs = agent.open_conversation(cid).messages
+        agent.notebooks.add_message(run, m)
+    agent.notebooks.finish_run(run, "ok")
+    await collect(agent, "next", nb)
+    msgs = llm.calls[0][1:-1]  # between the system prompt and the new prompt
     assert_valid_history(msgs)
     assert [m["role"] for m in msgs] == ["user", "user", "assistant", "tool", "assistant"]
 
@@ -137,11 +143,11 @@ async def test_steps_exhausted_tells_the_user_and_saves_the_trace(make_agent):
         [tool_call("run_query", "c2", sql=SQL, title="t")],
     )
     agent = await make_agent(llm, max_llm_steps=2)
-    conv = Conversation()
-    events = await collect(agent, "q", conv)
+    nb = agent.create_notebook()
+    events = await collect(agent, "q", nb)
     assert agent_mod.STEP_LIMIT_MESSAGE in text_of(events)
     assert any(isinstance(e, TraceReady) for e in events) and isinstance(events[-1], TurnEnd)
-    saved = agent.store.messages(conv.id)
+    saved = run_of(agent, nb)["messages"]
     assert saved[-1] == {"role": "assistant", "content": agent_mod.STEP_LIMIT_MESSAGE}
     assert_valid_history(saved)
 
@@ -150,7 +156,7 @@ async def test_steps_exhausted_tells_the_user_and_saves_the_trace(make_agent):
 
 
 @pytest.mark.subprocess
-async def test_one_mcp_server_serves_several_turns_across_two_conversations(build_agent):
+async def test_one_mcp_server_serves_several_runs_across_two_notebooks(build_agent):
     def script():
         return ScriptedLLM([tool_call("run_query", "c1", sql=SQL, title="t")], [TextChunk("done")])
 
@@ -161,9 +167,9 @@ async def test_one_mcp_server_serves_several_turns_across_two_conversations(buil
     (server,) = mcp_children()
     try:
         for _ in range(2):
-            for conv in (Conversation(), Conversation()):
+            for _nb in (agent.create_notebook(), agent.create_notebook()):
                 llm.steps = script().steps
-                events = await collect(agent, "q", conv)
+                events = await collect(agent, "q", _nb)
                 assert isinstance(events[-1], TurnEnd)
                 assert mcp_children() == [server]
     finally:
@@ -171,7 +177,7 @@ async def test_one_mcp_server_serves_several_turns_across_two_conversations(buil
     assert mcp_children() == []
 
 
-async def test_run_turn_on_an_agent_that_was_not_started_raises_a_clear_error(build_agent):
+async def test_running_a_cell_on_an_agent_that_was_not_started_raises_a_clear_error(build_agent):
     agent = build_agent(ScriptedLLM([TextChunk("x")]))
     with pytest.raises(RuntimeError, match="not started"):
         await collect(agent, "q")
@@ -204,7 +210,8 @@ async def test_consumer_stopping_early_leaves_the_server_running_and_the_next_tu
     await agent.start()
     try:
         (server,) = mcp_children()
-        gen = agent.run_turn(Conversation(), "q", 1000)
+        nb = agent.create_notebook()
+        gen = agent.run_cell(nb, agent.add_ai_cell(nb, prompt="q"))
         async for event in gen:
             if isinstance(event, TextDelta):
                 break
@@ -275,13 +282,13 @@ async def test_server_dying_mid_turn_is_a_tool_error_and_the_turn_still_ends_cle
     agent = build_agent(llm)
     await agent.start()
     try:
-        conv = Conversation()
-        events = await asyncio.wait_for(collect(agent, "q", conv), 30)
+        nb = agent.create_notebook()
+        events = await asyncio.wait_for(collect(agent, "q", nb), 30)
         assert any(isinstance(e, TraceReady) for e in events) and isinstance(events[-1], TurnEnd)
         trace = next(e for e in events if isinstance(e, TraceReady)).trace
         assert "tool_error" in json.dumps(trace, default=str)
         assert last_tool_result(llm.calls[-1])["success"] is False
-        assert_valid_history(agent.store.messages(conv.id))
+        assert_valid_history(run_of(agent, nb)["messages"])
     finally:
         await agent.aclose()
     assert mcp_children() == []
@@ -311,11 +318,11 @@ async def test_failed_restart_is_a_turn_error_with_an_error_trace_entry(build_ag
     assert mcp_children() == []
 
 
-async def first_conversation_table(agent, llm):
-    conv = Conversation()
+async def first_notebook_table(agent, llm):
+    nb = agent.create_notebook()
     llm.steps = [[tool_call("run_query", "c1", sql=SQL, title="t")], [TextChunk("ok")]]
-    await collect(agent, "first", conv)
-    return agent.tables.tables_of(conv.id)[0].name
+    await collect(agent, "first", nb)
+    return tables_in(agent, nb)[0].name
 
 
 def show_args(tool, name):
@@ -325,14 +332,14 @@ def show_args(tool, name):
 
 
 @pytest.mark.parametrize("tool", ["show_table", "show_chart"])
-async def test_show_tools_display_another_conversations_live_result_table(make_agent, tool):
-    """ADR 0003: any Conversation may show any live Result Table by name."""
+async def test_show_tools_display_another_notebooks_live_result_table(make_agent, tool):
+    """ADR 0003: any notebook may show any live Result Table by name."""
     llm = ScriptedLLM()
     agent = await make_agent(llm)
-    elsewhere = await first_conversation_table(agent, llm)
+    elsewhere = await first_notebook_table(agent, llm)
 
     llm.steps = [[tool_call(tool, "c1", **show_args(tool, elsewhere))], [TextChunk("done")]]
-    events = await collect(agent, "other conversation", Conversation())
+    events = await collect(agent, "other notebook")
     assert last_tool_result(llm.calls[-1])["success"] is True
     assert [e.result_table for e in events if isinstance(e, DisplayEvent)] == [elsewhere]
 
@@ -341,12 +348,12 @@ async def test_show_tools_display_another_conversations_live_result_table(make_a
 async def test_show_tools_refuse_expired_and_unknown_tables_alike(make_agent, tool):
     llm = ScriptedLLM()
     agent = await make_agent(llm)
-    gone = await first_conversation_table(agent, llm)
+    gone = await first_notebook_table(agent, llm)
     agent.tables.delete(gone)
 
     llm.steps = [[tool_call(tool, "c1", **show_args(tool, gone))], [tool_call(tool, "c2", **show_args(tool, "rt_deadbeef"))],
                  [TextChunk("done")]]
-    events = await collect(agent, "other conversation", Conversation())
+    events = await collect(agent, "other notebook")
     expired = tool_msgs(llm.calls[-2])[-1]
     missing = last_tool_result(llm.calls[-1])
     assert expired["success"] is False
@@ -439,7 +446,8 @@ async def test_agent_aclose_cancels_and_awaits_in_flight_turns(build_agent):
 
     agent = build_agent(ScriptedLLM(hang))
     await agent.start()
-    gen = agent.run_turn(Conversation(), "q", 1000)
+    nb = agent.create_notebook()
+    gen = agent.run_cell(nb, agent.add_ai_cell(nb, prompt="q"))
     first = asyncio.create_task(gen.__anext__())
     await asyncio.wait_for(started.wait(), 10)
     producers = set(agent._turn_tasks)

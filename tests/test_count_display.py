@@ -1,11 +1,11 @@
 """Every successful run_count_query makes a Count Display: a one-line item (title, number, "as of") saved
-with its Conversation, shown in reply order, with no Retention (ADR 0006)."""
+with its AI Cell's Run, shown in reply order, with no Retention (ADR 0006)."""
 
-import re
 import sqlite3
 from contextlib import closing
 
-from conftest import Clock, ScriptedLLM, collect, last_tool_result, tool_call
+from conftest import Clock, ScriptedLLM, collect, last_tool_result, run_of, tool_call
+from conftest import ask as run_in_notebook
 
 from flood_agent.agent import CountEvent, DisplayEvent, TextDelta
 from flood_agent.llm import TextChunk
@@ -49,33 +49,31 @@ def ask(build_agent, web_client, llm=None, **overrides):
     clock = Clock(1_700_000_000_000)
     agent = build_agent(llm or counted(), clock=clock, **overrides)
     client = web_client(agent)
-    posted = client.post("/chat", data={"message": "go", "conversation_id": "", "max_rows": "1000"})
-    stream = client.get(posted.text.split('sse-connect="')[1].split('"')[0]).text
-    cid = re.search(r'/c/([0-9a-f]+)', client.get("/").text).group(1)
-    return client, agent, clock, cid, stream
+    nb, _, stream = run_in_notebook(client, "go")
+    return client, agent, clock, nb, stream
 
 
-def test_the_live_reply_and_the_reopened_conversation_both_show_the_count_display(build_agent, web_client):
-    client, _, _, cid, stream = ask(build_agent, web_client)
+def test_the_live_reply_and_the_reopened_notebook_both_show_the_count_display(build_agent, web_client):
+    client, _, _, nb, stream = ask(build_agent, web_client)
     assert 'class="count-display"' in stream
 
-    page = client.get(f"/c/{cid}").text
+    page = client.get(f"/n/{nb}").text
     assert page.count('class="count-display"') == 1
     assert "All flows" in page and 'data-as-of-ms="1700000000000"' in page
-    assert page.rindex("Counting.") < page.index('class="count-display"') < page.rindex("There are 3 flows.")
+    assert page.index("Counting.") < page.index('class="count-display"') < page.rindex("There are 3 flows.")
 
 
 def test_a_count_display_never_expires(build_agent, web_client):
-    client, _, clock, cid, _ = ask(build_agent, web_client)
+    client, _, clock, nb, _ = ask(build_agent, web_client)
     clock.ms += 10 * 365 * 24 * 3_600_000
-    assert 'class="count-display"' in client.get(f"/c/{cid}").text
+    assert 'class="count-display"' in client.get(f"/n/{nb}").text
 
 
-def test_deleting_the_conversation_deletes_its_count_displays(build_agent, web_client):
-    client, agent, _, cid, _ = ask(build_agent, web_client)
-    client.post(f"/c/{cid}/delete", data={"tables": "delete_rt"}, follow_redirects=False)
-    with closing(sqlite3.connect(agent.config.app_db)) as con:
-        assert con.execute("SELECT COUNT(*) FROM displays WHERE kind='count'").fetchone() == (0,)
+def test_deleting_the_notebook_deletes_its_count_displays(build_agent, web_client):
+    client, agent, _, nb, _ = ask(build_agent, web_client)
+    client.post(f"/n/{nb}/delete", data={"tables": "delete_rt"}, follow_redirects=False)
+    with closing(sqlite3.connect(agent.notebooks.path)) as con:
+        assert con.execute("SELECT COUNT(*) FROM run_displays WHERE kind='count'").fetchone() == (0,)
 
 
 async def test_a_mixed_step_shows_its_displays_in_call_order_live_and_after_a_reload(make_agent):
@@ -91,7 +89,7 @@ async def test_a_mixed_step_shows_its_displays_in_call_order_live_and_after_a_re
     events = await collect(agent, "show me")
 
     live = ["count" if isinstance(e, CountEvent) else e.kind for e in events if isinstance(e, (CountEvent, DisplayEvent))]
-    (cid,) = [c["id"] for c in agent.store.list_conversations()]
-    reloaded = [i["kind"] for i in agent.store.transcript(cid) if i["type"] == "display"]
+    (nb,) = [n["id"] for n in agent.notebooks.list_notebooks()]
+    reloaded = [i["kind"] for i in agent.notebooks.transcript(run_of(agent, nb)["id"]) if i["type"] == "display"]
     assert reloaded == ["count", "table", "count"]
     assert live == reloaded

@@ -6,9 +6,9 @@ from dataclasses import replace
 from datetime import datetime
 
 import pytest
+from conftest import register_table
 
-from flood_agent.catalog import Catalog, CatalogView, TableExpired
-from flood_agent.store import ConversationStore
+from flood_agent.catalog import Catalog, CatalogView, CellRun, TableExpired
 
 HOUR = 3_600_000
 DAY = 24 * HOUR
@@ -29,21 +29,20 @@ def clock():
 
 @pytest.fixture
 def world(tmp_path, clock):
-    """(catalog, conversation id): a Catalog with a 1-hour default Retention over a fresh app database."""
+    """(catalog, cell id): a Catalog with a 1-hour default Retention over a fresh app database."""
     app_db = tmp_path / "app.db"
     catalog = Catalog(app_db, clock, default_retention_ms=HOUR)
-    conversation = ConversationStore(app_db, clock).create_conversation()
-    return catalog, conversation
+    return catalog, "cell-1"
 
 
 def test_registered_table_is_indexable_with_its_record(world):
     catalog, cid = world
     columns = [{"name": "n", "type": "INTEGER"}]
-    catalog.register("rt_20260101_000000", cid, 7, "Top ports", columns, "show ports", 500)
+    register_table(catalog, "rt_20260101_000000", cid, 7, "Top ports", columns, "show ports", 500)
 
     table = catalog["rt_20260101_000000"]
 
-    assert (table.name, table.kind, table.conversation_id, table.turn_id) == ("rt_20260101_000000", "result", cid, 7)
+    assert (table.name, table.kind, table.owner) == ("rt_20260101_000000", "result", CellRun(cid, "run-7"))
     assert (table.title, table.columns, table.request, table.truncated_to) == ("Top ports", columns, "show ports", 500)
     assert (table.retention_ms, table.expires_in_ms) == (HOUR, HOUR)
     assert "rt_20260101_000000" in catalog
@@ -51,7 +50,7 @@ def test_registered_table_is_indexable_with_its_record(world):
 
 def test_a_table_not_named_rt_is_a_saved_table(world):
     catalog, cid = world
-    catalog.register("busy_ports", cid, 1)
+    register_table(catalog, "busy_ports", cid, 1)
     assert catalog["busy_ports"].kind == "saved"
 
 
@@ -64,20 +63,20 @@ def test_unknown_name_is_not_found_and_not_a_member(world):
 
 def test_table_is_live_until_the_exact_expiry_instant_with_no_sweep(world, clock):
     catalog, cid = world
-    catalog.register("rt_a", cid, 1)
+    register_table(catalog, "rt_a", cid, 1)
     start = clock.now
 
     clock.now = start + HOUR - 1
     assert "rt_a" in catalog and catalog["rt_a"].expires_in_ms == 1
     assert catalog.live_among(["rt_a"]) == {"rt_a"}
-    assert [t.name for t in catalog.tables_of(cid)] == ["rt_a"]
+    assert [t.name for t in catalog.tables_of_cell(cid)] == ["rt_a"]
 
     clock.now = start + HOUR
     assert "rt_a" not in catalog
     with pytest.raises(TableExpired):
         catalog["rt_a"]
     assert catalog.live_among(["rt_a"]) == set()
-    assert catalog.tables_of(cid) == []
+    assert catalog.tables_of_cell(cid) == []
     assert catalog.names() == []
 
 
@@ -87,11 +86,11 @@ def test_table_expired_is_not_a_key_error():
 
 def test_retention_is_fixed_at_registration(tmp_path, clock):
     app_db = tmp_path / "app.db"
-    cid = ConversationStore(app_db, clock).create_conversation()
-    Catalog(app_db, clock, default_retention_ms=HOUR).register("rt_a", cid, 1)
+    cid = "cell-1"
+    register_table(Catalog(app_db, clock, default_retention_ms=HOUR), "rt_a", cid, 1)
 
     changed = Catalog(app_db, clock, default_retention_ms=DAY)  # the configured default changed later
-    changed.register("rt_b", cid, 1)
+    register_table(changed, "rt_b", cid, 1)
 
     assert changed["rt_a"].retention_ms == HOUR
     assert changed["rt_b"].retention_ms == DAY
@@ -99,29 +98,29 @@ def test_retention_is_fixed_at_registration(tmp_path, clock):
 
 def test_live_among_returns_only_live_names(world, clock):
     catalog, cid = world
-    catalog.register("rt_old", cid, 1)
+    register_table(catalog, "rt_old", cid, 1)
     clock.now += HOUR
-    catalog.register("rt_new", cid, 2)
+    register_table(catalog, "rt_new", cid, 2)
 
     assert catalog.live_among(["rt_old", "rt_new", "unknown"]) == {"rt_new"}
 
 
-def test_a_conversations_tables_are_its_own_live_ones_in_creation_order(world, clock, tmp_path):
+def test_a_cells_tables_are_its_own_live_ones_in_creation_order(world, clock, tmp_path):
     catalog, cid = world
-    other = ConversationStore(tmp_path / "app.db", clock).create_conversation()
-    catalog.register("rt_b", cid, 1)
+    other = "cell-2"
+    register_table(catalog, "rt_b", cid, 1)
     clock.now += 1
-    catalog.register("rt_a", cid, 2)
-    catalog.register("rt_x", other, 3)
+    register_table(catalog, "rt_a", cid, 2)
+    register_table(catalog, "rt_x", other, 3)
 
-    assert [t.name for t in catalog.tables_of(cid)] == ["rt_b", "rt_a"]
-    assert [t.turn_id for t in catalog.tables_of(cid)] == [1, 2]
+    assert [t.name for t in catalog.tables_of_cell(cid)] == ["rt_b", "rt_a"]
+    assert [t.run_id for t in catalog.tables_of_cell(cid)] == ["run-1", "run-2"]
     assert catalog.names() == ["rt_a", "rt_b", "rt_x"]
 
 
 def test_read_only_view_reads_but_has_no_write_operations_and_cannot_write(world, clock):
     catalog, cid = world
-    catalog.register("rt_20260101_000000", cid, 1)
+    register_table(catalog, "rt_20260101_000000", cid, 1)
     view = CatalogView(catalog.path, clock)
 
     assert "rt_20260101_000000" in view
@@ -136,9 +135,9 @@ def test_read_only_view_reads_but_has_no_write_operations_and_cannot_write(world
 def test_kind_of_any_case_covers_telemetry_result_saved_lookup_and_unknown(tmp_path, clock):
     app_db = tmp_path / "app.db"
     catalog = Catalog(app_db, clock, default_retention_ms=HOUR, telemetry_tables=["flows"])
-    cid = ConversationStore(app_db, clock).create_conversation()
-    catalog.register("rt_20260101_000000", cid, 1)
-    catalog.register("busy_ports", cid, 1)
+    cid = "cell-1"
+    register_table(catalog, "rt_20260101_000000", cid, 1)
+    register_table(catalog, "busy_ports", cid, 1)
     with closing(sqlite3.connect(app_db)) as con, con:
         con.execute("INSERT INTO lookup_tables(name, created_at) VALUES ('lookup_ips', 1)")
     view = CatalogView(app_db, clock, ["flows"])
@@ -177,14 +176,14 @@ def _swept_world(tmp_path, clock, *physical):
     results = _results_db(tmp_path, *physical)
     app_db = tmp_path / "app.db"
     catalog = Catalog(app_db, clock, default_retention_ms=HOUR, results_db=results)
-    return catalog, ConversationStore(app_db, clock).create_conversation(), results
+    return catalog, "cell-1", results
 
 
 def test_sweep_drops_an_expired_table_and_keeps_it_registered_as_dropped(tmp_path, clock):
     catalog, cid, results = _swept_world(tmp_path, clock, "rt_a", "rt_b")
-    catalog.register("rt_a", cid, 1)
+    register_table(catalog, "rt_a", cid, 1)
     clock.now += HOUR - 1
-    catalog.register("rt_b", cid, 1)
+    register_table(catalog, "rt_b", cid, 1)
     clock.now += 1  # rt_a is due, rt_b is not
 
     catalog.sweep()
@@ -199,8 +198,8 @@ def test_sweep_drops_only_old_unregistered_rt_tables(tmp_path, clock):
     clock.now = int(datetime(2026, 5, 1, 12, 0, 0).timestamp() * 1000)  # local time, like the name generator
     catalog, cid, results = _swept_world(
         tmp_path, clock, "rt_20260501_105959", "rt_20260501_110001", "rt_20260501_105900_2", "lookup_x", "mine", "rt_live")
-    catalog.register("rt_live", cid, 1)
-    catalog.register("mine", cid, 1)
+    register_table(catalog, "rt_live", cid, 1)
+    register_table(catalog, "mine", cid, 1)
 
     catalog.sweep()
 
@@ -209,7 +208,7 @@ def test_sweep_drops_only_old_unregistered_rt_tables(tmp_path, clock):
 
 def test_sweep_without_a_results_database_is_harmless(world):
     catalog, cid = world
-    catalog.register("rt_a", cid, 1)
+    register_table(catalog, "rt_a", cid, 1)
     catalog.sweep()
     assert "rt_a" in catalog
 
@@ -239,17 +238,17 @@ def _exists(path, name) -> bool:
 
 @pytest.fixture
 def full(tmp_path, clock):
-    """(catalog, conversation id, results db path): a Catalog that knows a Telemetry table `flows`."""
+    """(catalog, cell id, results db path): a Catalog that knows a Telemetry table `flows`."""
     app_db, results_db = tmp_path / "app.db", tmp_path / "results.db"
     catalog = Catalog(app_db, clock, default_retention_ms=HOUR, results_db=results_db, telemetry_tables=["flows"])
-    return catalog, ConversationStore(app_db, clock).create_conversation(), results_db
+    return catalog, "cell-1", results_db
 
 
 def test_kind_of_a_name_in_any_case(full):
     catalog, cid, results_db = full
     _make_tables(results_db, "rt_20260101_000000", "kept")
-    catalog.register("rt_20260101_000000", cid, 1)
-    catalog.register("kept", cid, 1)
+    register_table(catalog, "rt_20260101_000000", cid, 1)
+    register_table(catalog, "kept", cid, 1)
     catalog.add_lookup("hosts", "ip\n1.1.1.1")
     assert [catalog.kind_of(n) for n in ("FLOWS", "RT_20260101_000000", "Kept", "lookup_Hosts", "nope")] == [
         "telemetry", "result", "saved", "lookup", None]
@@ -258,8 +257,8 @@ def test_kind_of_a_name_in_any_case(full):
 def test_listing_gives_every_kind_with_retention_and_time_left(full, clock):
     catalog, cid, results_db = full
     _make_tables(results_db, "rt_20260101_000000", "kept")
-    catalog.register("rt_20260101_000000", cid, 1)
-    catalog.register("kept", cid, 1)
+    register_table(catalog, "rt_20260101_000000", cid, 1)
+    register_table(catalog, "kept", cid, 1)
     catalog.add_lookup("hosts", "ip\n1.1.1.1")
     clock.now += HOUR // 4
     assert catalog.listing() == {
@@ -271,7 +270,7 @@ def test_listing_gives_every_kind_with_retention_and_time_left(full, clock):
 def test_delete_drops_the_table_but_keeps_it_registered_as_expired(full):
     catalog, cid, results_db = full
     _make_tables(results_db, "kept")
-    catalog.register("kept", cid, 1)
+    register_table(catalog, "kept", cid, 1)
     catalog.delete("kept")
     assert not _exists(results_db, "kept")
     with pytest.raises(TableExpired):
@@ -291,33 +290,34 @@ def test_delete_of_a_lookup_table_unregisters_it_and_a_telemetry_table_is_refuse
         catalog.delete("nope")
 
 
-def test_owned_tables_follow_the_recorded_turn_split_into_result_and_saved(full):
+def test_a_runs_tables_are_split_into_result_and_saved_and_a_cells_cover_every_run(full):
     catalog, cid, _ = full
-    catalog.register("rt_20260101_000000", cid, 1)
-    catalog.register("kept", cid, 2)  # a Saved Table (renamed since) first used by turn 2
-    catalog.register("rt_20260101_000001", cid, 2)
-    assert [(len(o.result), len(o.saved)) for o in (catalog.owned(cid), catalog.owned(cid, 1), catalog.owned(cid, 2))] == [
-        (2, 1), (1, 0), (1, 1)]
+    register_table(catalog, "rt_20260101_000000", cid, 1)
+    register_table(catalog, "kept", cid, 2)  # a Saved Table (renamed since) first used by Run 2
+    register_table(catalog, "rt_20260101_000001", cid, 2)
+    by_run = [catalog.tables_of_run(cid, f"run-{n}") for n in (1, 2)]
+    assert [[(t.kind) for t in tables] for tables in by_run] == [["result"], ["saved", "result"]]
+    assert [t.kind for t in catalog.tables_of_cell(cid)] == ["saved", "result", "result"]  # same instant: by name
+    assert [t.name for t in catalog.earlier_tables_of_cell(cid, "run-2")] == ["rt_20260101_000000"]
 
 
-def test_drop_owned_drops_only_rt_tables_of_that_conversation_or_turn(full):
+def test_drop_of_cell_drops_only_rt_tables_of_that_cell_and_drop_earlier_spares_the_current_run(full):
     catalog, cid, results_db = full
-    other = ConversationStore(catalog.path).create_conversation()
     _make_tables(results_db, "rt_a", "rt_b", "kept", "rt_c")
-    catalog.register("rt_a", cid, 1)
-    catalog.register("rt_b", cid, 2)
-    catalog.register("kept", cid, 2)
-    catalog.register("rt_c", other, 3)
-    assert catalog.drop_owned(cid, 1) == ["rt_a"]
+    register_table(catalog, "rt_a", cid, 1)
+    register_table(catalog, "rt_b", cid, 2)
+    register_table(catalog, "kept", cid, 2)
+    register_table(catalog, "rt_c", "cell-2", 3)
+    assert catalog.drop_earlier_of_cell(cid, "run-2") == ["rt_a"]
     assert not _exists(results_db, "rt_a") and _exists(results_db, "rt_b")
-    assert catalog.drop_owned(cid) == ["rt_b"]
+    assert catalog.drop_of_cell(cid) == ["rt_b"]
     assert _exists(results_db, "kept") and _exists(results_db, "rt_c")
     assert "kept" in catalog and "rt_c" in catalog and "rt_b" not in catalog
 
 
 def test_the_view_reports_the_retention_policy_and_the_table_json_carries_it(world):
     catalog, cid = world
-    catalog.register("rt_a", cid, 1)
+    register_table(catalog, "rt_a", cid, 1)
     view = CatalogView(catalog.path, catalog._now, default_retention_ms=2 * DAY)
 
     assert (view.policy.result_days, view.policy.saved_days, view.policy.max_days) == (2, 30, 3650)
@@ -327,7 +327,7 @@ def test_the_view_reports_the_retention_policy_and_the_table_json_carries_it(wor
 def test_the_default_retention_follows_the_policy(world):
     catalog, cid = world
     catalog.policy = replace(catalog.policy, result_days=3)
-    catalog.register("rt_a", cid, 1)
+    register_table(catalog, "rt_a", cid, 1)
 
     assert catalog.default_retention_ms == 3 * DAY
     assert catalog["rt_a"].retention_days == 3

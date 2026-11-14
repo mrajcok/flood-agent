@@ -6,7 +6,6 @@ import pytest
 
 from flood_agent.catalog import Catalog
 from flood_agent.lookup_tables import InvalidLookupTable
-from flood_agent.store import ConversationStore
 
 DAY = 86_400_000
 
@@ -28,7 +27,6 @@ def clock():
 def lookups(tmp_path, clock):
     """(catalog, results database path): a Catalog that can write Lookup Tables."""
     app_db, results_db = tmp_path / "app.db", tmp_path / "results.db"
-    ConversationStore(app_db, clock)
     return Catalog(app_db, clock, results_db=results_db), results_db
 
 

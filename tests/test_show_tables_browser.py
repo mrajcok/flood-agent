@@ -3,14 +3,15 @@
 import pytest
 from conftest import ScriptedLLM
 from playwright.sync_api import expect
-from test_show_tables import two_conversations_with_tables
+from test_notebook_browser import open_new_notebook
+from test_show_tables import two_notebooks_with_tables
 
 
 @pytest.fixture
 def tables(build_agent, web_client):
     """Set up through HTTP: two Lookup Tables, a Result Table still named rt_* and one renamed ddos_victims.
     Returns (agent for the live app on the same files, the rt_* name)."""
-    client, _, _, rt_name, b_table = two_conversations_with_tables(build_agent, web_client)
+    client, _, _, rt_name, b_table = two_notebooks_with_tables(build_agent, web_client)
     client.post(f"/api/results/{b_table}/settings", data={"name": "ddos_victims", "retention_days": "30"})
     for name in ("watch", "bad_ips"):
         client.post("/api/lookup-tables", data={"name": name, "rows": "ip\n10.0.0.1"})
@@ -110,7 +111,8 @@ def test_checkboxes_hide_result_and_lookup_tables_and_are_remembered_after_reloa
 def test_copying_inserts_the_name_at_the_cursor_closes_the_dialog_and_focuses_the_input(live_page, tables):
     agent, _ = tables
     page = live_page(agent=agent)  # headless Chrome grants no clipboard permission: writeText rejects
-    chat = page.get_by_placeholder("Write a prompt")
+    open_new_notebook(page)
+    chat = page.get_by_label("Prompt").first
     chat.fill("count me rows")
     chat.evaluate("i => i.setSelectionRange(6, 6)")  # "count |me rows": touches "me" on its right
 
@@ -129,11 +131,12 @@ def test_copying_inserts_the_name_at_the_cursor_closes_the_dialog_and_focuses_th
 def test_copying_still_inserts_when_there_is_no_clipboard_api(live_page, tables):
     agent, _ = tables
     page = live_page(agent=agent)
+    open_new_notebook(page)
     page.evaluate("() => Object.defineProperty(navigator, 'clipboard', { value: undefined })")
     errors = []
     page.on("pageerror", lambda e: errors.append(e))
     open_tables(page).get_by_role("button", name="Copy flows").click()
-    expect(page.get_by_placeholder("Write a prompt")).to_have_value("flows")
+    expect(page.get_by_label("Prompt").first).to_have_value("flows")
     assert errors == []
 
 

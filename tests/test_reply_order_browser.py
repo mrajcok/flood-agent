@@ -1,7 +1,8 @@
-"""A turn's text, tables and charts appear in the order the LLM produced them, live and after a reload."""
+"""An AI Cell's text, tables and charts appear in the order the LLM produced them, live and after a reload."""
 
 from conftest import ScriptedLLM, last_tool_result, tool_call
 from playwright.sync_api import expect
+from test_notebook_browser import run_in_new_notebook
 
 from flood_agent.llm import TextChunk
 
@@ -16,9 +17,9 @@ def reply_script():
     ]
 
 
-def order_in(turn):
-    """The turn's text pieces and Displays, top to bottom, as 'text: ...' or 'display'."""
-    return turn.evaluate("""t => {
+def order_in(output):
+    """The cell output's text pieces and Displays, top to bottom, as 'text: ...' or 'display'."""
+    return output.evaluate("""t => {
         const out = [];
         const walk = n => {
             if (n.nodeType === Node.TEXT_NODE) { if (n.textContent.trim()) out.push('text: ' + n.textContent.trim()); return; }
@@ -35,33 +36,13 @@ def order_in(turn):
 
 def test_text_before_a_table_shows_above_it_and_text_after_below_it(live_page, build_agent):
     page = live_page(agent=build_agent(ScriptedLLM(*reply_script())))
-    page.get_by_placeholder("Write a prompt").fill("show me ports")
-    page.get_by_role("button", name="Send message (Enter)").click()
-    turn = page.locator("details.turn").last
-    expect(turn.locator("details.trace")).to_have_count(1)  # the Trace comes last: the turn is done
-    expect(turn.locator(".display table")).to_be_visible()
+    cell = run_in_new_notebook(page, "show me ports")
+    expect(cell.locator(".cell-foot")).to_be_visible()  # the run is done
+    expect(cell.locator(".display table")).to_be_visible()
     expected = ["text: Here they are:", "display", "text: That is the table."]
-    assert order_in(turn) == expected
+    assert order_in(cell.locator(".output")) == expected
 
-    page.locator("aside ul li a").first.click()  # the saved Conversation, rendered from history
-    turn = page.locator("details.turn").last
-    expect(turn.locator(".display table")).to_be_visible()
-    assert order_in(turn) == expected
-
-
-def test_the_trace_line_sits_right_after_the_prompt_live_and_after_a_reload(live_page, build_agent):
-    page = live_page(agent=build_agent(ScriptedLLM(*reply_script())))
-    page.get_by_placeholder("Write a prompt").fill("show me ports")
-    page.get_by_role("button", name="Send message (Enter)").click()
-    turn = page.locator("details.turn").last
-    expect(turn.locator("details.trace")).to_have_count(1)
-
-    def trace_is_before_the_reply(turn):
-        return turn.evaluate("t => !!(t.querySelector('details.trace').compareDocumentPosition(t.querySelector('.reply'))"
-                             " & Node.DOCUMENT_POSITION_FOLLOWING)")
-
-    assert trace_is_before_the_reply(turn)
-    page.locator("aside ul li a").first.click()  # the saved Conversation, rendered from history
-    turn = page.locator("details.turn").last
-    expect(turn.locator("details.trace")).to_have_count(1)
-    assert trace_is_before_the_reply(turn)
+    page.reload()  # rendered from the saved Run
+    cell = page.locator(".cellblock").first
+    expect(cell.locator(".display table")).to_be_visible()
+    assert order_in(cell.locator(".output")) == expected

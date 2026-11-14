@@ -3,7 +3,7 @@
 from conftest import ScriptedLLM
 from playwright.sync_api import expect
 from test_explain_browser import trace_with
-from test_stop_button_browser import send
+from test_notebook_browser import run_in_new_notebook
 from test_stop_turn import HangingLLM
 
 
@@ -25,9 +25,9 @@ def test_escape_closes_the_explain_dialog(live_page, build_agent):
     expect(dialog).to_be_hidden()
 
 
-def test_escape_in_a_dialog_while_a_turn_runs_closes_it_without_stopping_the_turn(live_page, build_agent):
+def test_escape_in_a_dialog_while_a_cell_runs_closes_it_without_stopping_it(live_page, build_agent):
     page = live_page(agent=build_agent(HangingLLM()))
-    send(page)
+    run_in_new_notebook(page, "slow one")
     stop = page.get_by_role("button", name="Stop")
     expect(stop).to_be_visible()
     page.get_by_role("button", name="Browse tables").click()
@@ -35,5 +35,5 @@ def test_escape_in_a_dialog_while_a_turn_runs_closes_it_without_stopping_the_tur
     expect(dialog).to_be_visible()
     page.keyboard.press("Escape")
     expect(dialog).to_be_hidden()
-    page.wait_for_timeout(2000)  # long enough for a stop to end the turn
+    page.wait_for_timeout(2000)  # long enough for a stop to end the run
     expect(stop).to_be_visible()

@@ -3,6 +3,7 @@
 from conftest import ScriptedLLM
 from playwright.sync_api import expect
 from test_chart_tooltip_browser import chart_script
+from test_notebook_browser import run_in_new_notebook
 from test_rename_browser import ask_for_a_table
 
 CHART = chart_script(
@@ -15,10 +16,9 @@ CHART = chart_script(
 def ask_for_a_chart(build_agent, live_page):
     agent = build_agent(ScriptedLLM(*CHART))
     page = live_page(agent=agent)
-    page.get_by_placeholder("Write a prompt").fill("chart it")
-    page.get_by_role("button", name="Send message (Enter)").click()
+    run_in_new_notebook(page, "chart it")
     expect(page.locator(".display.chart canvas")).to_be_visible()
-    expect(page.locator(".live-trace")).to_have_count(0)  # the layout stops moving once the live trace has folded away
+    expect(page.locator(".drawer")).to_have_count(0)  # the layout stops moving once the live trace has folded away
     (table,) = agent.tables.names()
     return agent, page, table
 
@@ -43,8 +43,7 @@ def test_renaming_from_a_chart_changes_the_table_and_its_time_left(build_agent, 
     expect(header.locator(".name")).to_have_text("port_bytes")
     expect(header.locator(".expires")).to_have_text("expires in 30d")
     assert agent.tables["port_bytes"].retention_days == 30
-    page.reload()  # the reopened Conversation shows the chart under its new name
-    page.locator("aside ul li a").first.click()
+    page.reload()  # the reopened notebook shows the chart under its new name
     expect(page.locator(".display.chart .table-name .name")).to_have_text("port_bytes")
     expect(page.locator(".display.chart canvas")).to_be_visible()
 

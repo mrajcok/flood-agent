@@ -2,12 +2,11 @@
 for the analyst (reply note + Trace `flag` entries), and never sent to the LLM."""
 
 import json
-import re
 
 import pytest
-from conftest import ScriptedLLM, collect, last_tool_result, tool_call
+from conftest import ScriptedLLM, ask, collect, last_tool_result, tool_call
 
-from flood_agent.agent import Conversation, FlagEvent, TraceReady
+from flood_agent.agent import FlagEvent, TraceReady
 from flood_agent.flagging import find_unseen_values
 from flood_agent.llm import TextChunk
 
@@ -75,18 +74,18 @@ async def test_row_count_in_query_metadata_is_not_flagged(make_agent):
 
 async def test_assistants_own_earlier_prose_does_not_whitelist_a_value(make_agent):
     agent = await make_agent(ScriptedLLM([TextChunk("It was 203.0.113.99.")], [TextChunk("Again 203.0.113.99.")]))
-    conv = Conversation()
-    first = await collect(agent, "q1", conv)
-    second = await collect(agent, "q2", conv)
+    nb = agent.create_notebook()
+    first = await collect(agent, "q1", nb)
+    second = await collect(agent, "q2", nb)
     assert flags_of(first) == ["203.0.113.99"] and flags_of(second) == ["203.0.113.99"]
 
 
 async def test_flags_never_reach_the_llm(make_agent):
     llm = ScriptedLLM([TextChunk("Host 203.0.113.99 sent 4.2M packets.")], [TextChunk("fine")])
     agent = await make_agent(llm)
-    conv = Conversation()
-    await collect(agent, "first", conv)
-    await collect(agent, "second", agent.open_conversation(conv.id))
+    nb = agent.create_notebook()
+    await collect(agent, "first", nb)
+    await collect(agent, "second", nb)
     # Everything except the LLM's own earlier prose must be flag-free.
     sent = json.dumps([[m for m in call if m["role"] != "assistant"] for call in llm.calls])
     assert "Unverified values" not in sent and "203.0.113.99" not in sent and "4.2M" not in sent
@@ -94,39 +93,32 @@ async def test_flags_never_reach_the_llm(make_agent):
     assert "flag-note" not in json.dumps(llm.calls) and "Unverified values" not in json.dumps(llm.calls)
 
 
-def ask(client, message, conversation_id=""):
-    posted = client.post("/chat", data={"message": message, "conversation_id": conversation_id, "max_rows": "1000"})
-    cid = re.search(r'name="conversation_id" value="([0-9a-f]+)"', posted.text).group(1)
-    stream_url = posted.text.split('sse-connect="')[1].split('"')[0]
-    return cid, client.get(stream_url).text
-
-
 def test_flag_note_streams_and_survives_restart(build_agent, web_client):
     llm = ScriptedLLM([TextChunk("Host 203.0.113.99 sent 4.2M <b>packets</b>.")])
     client = web_client(build_agent(llm))
-    cid, body = ask(client, "q")
+    nb, _, body = ask(client, "q")
     assert "event: flag" in body
     flag_part = body.split("event: flag")[1].split("event: ")[0]
     assert "203.0.113.99" in flag_part and "4.2M" in flag_part and "<b>" not in flag_part
 
     restarted = web_client(build_agent(ScriptedLLM()))
-    page = restarted.get(f"/c/{cid}").text
+    page = restarted.get(f"/n/{nb}").text
     assert 'class="flag-note"' in page and "203.0.113.99" in page and "4.2M" in page
-    assert page.index('class="trace"') < page.index('class="flag-note"')  # the note stays with the reply
+    assert page.index('class="flag-note"') < page.index('class="trace cell-trace"')  # the note stays with the reply
     assert "&lt;b&gt;packets&lt;/b&gt;" in page
 
 
-def test_unflagged_turn_has_no_flag_note(build_agent, web_client):
+def test_an_unflagged_run_has_no_flag_note(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM([TextChunk("Nothing numeric here, 42 rows.")])))
-    cid, body = ask(client, "q")
+    nb, _, body = ask(client, "q")
     assert "event: flag" not in body
-    assert 'class="flag-note"' not in client.get(f"/c/{cid}").text
+    assert 'class="flag-note"' not in client.get(f"/n/{nb}").text
 
 
 def test_trace_renders_flag_entries_readably(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM([TextChunk("9.9.9.9")])))
-    cid, _ = ask(client, "q")
-    page = client.get(f"/c/{cid}").text
+    nb, _, _ = ask(client, "q")
+    page = client.get(f"/n/{nb}").text
     assert 'class="trace-entry trace-flag"' in page and "Flagged IP address" in page
 
 
@@ -174,11 +166,9 @@ def test_heuristic_table(reply, expected):
     assert find_unseen_values(reply, CTX) == expected
 
 
-def test_a_saved_turn_shows_its_trace_after_the_prompt_and_its_flag_note_after_the_reply(build_agent, web_client):
+def test_a_run_shows_its_flag_note_after_the_reply_and_its_trace_after_that(build_agent, web_client):
     llm = ScriptedLLM([TextChunk("The server at 203.0.113.99 was busy.")])
     client = web_client(build_agent(llm))
-    posted = client.post("/chat", data={"message": "hello", "conversation_id": "", "max_rows": "1000"}).text
-    client.get(posted.split('sse-connect="')[1].split('"')[0])
-    cid = posted.split('name="conversation_id" value="')[1].split('"')[0]
-    page = client.get(f"/c/{cid}").text
-    assert page.index("hello") < page.index('class="trace"') < page.index("203.0.113.99 was busy") < page.index('class="flag-note"')
+    nb, _, _ = ask(client, "hello")
+    page = client.get(f"/n/{nb}").text
+    assert page.index("hello") < page.index("203.0.113.99 was busy") < page.index('class="flag-note"') < page.index('class="trace cell-trace"')

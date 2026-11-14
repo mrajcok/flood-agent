@@ -5,6 +5,7 @@ import functools
 import hashlib
 import json
 import os
+import re
 import shutil
 import socket
 import sqlite3
@@ -22,7 +23,8 @@ from fastapi.testclient import TestClient
 from mcp.shared.memory import create_client_server_memory_streams
 from playwright.sync_api import sync_playwright
 
-from flood_agent.agent import Agent, AgentConfig, Conversation, TextDelta
+from flood_agent.agent import Agent, AgentConfig, TextDelta
+from flood_agent.catalog import CellRun
 from flood_agent.config import Settings
 from flood_agent.llm import TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_server import ServerSettings, create_server
@@ -375,9 +377,69 @@ def mcp_children() -> list[int]:
 
 
 async def collect(
-    agent: Agent, message: str, conversation: Conversation | None = None, max_result_rows: int = 1_000_000
+    agent: Agent, message: str, notebook: str | None = None, max_result_rows: int = 1_000_000,
+    model: str | None = None, effort: str | None = None,
 ):
-    return [e async for e in agent.run_turn(conversation or Conversation(), message, max_result_rows)]
+    """Run `message` as a new AI Cell at the end of `notebook` (a new notebook if None) and return its events.
+    The cell's id is `agent.notebooks.cells(notebook)[-1]["id"]` afterwards."""
+    notebook = notebook or agent.create_notebook()
+    cell = agent.add_ai_cell(notebook, prompt=message, model=model, effort=effort, max_rows=max_result_rows)
+    return [e async for e in agent.run_cell(notebook, cell)]
+
+
+SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
+
+
+def table_script(reply="Here you go."):
+    """An AI Cell's script: run the ports query, show its Result Table, say `reply`."""
+    return [
+        [tool_call("run_query", sql=SQL, title="t")],
+        lambda msgs: [tool_call("show_table", result_table=last_tool_result(msgs)["result_table"])],
+        [TextChunk(reply)],
+    ]
+
+
+def main_pane(page: str) -> str:
+    """The page minus the sidebar."""
+    return page.split("</aside>")[1]
+
+
+def post_run(client, **data):
+    """POST a run of a new notebook's first AI Cell (prompt "hello", max_rows 1000 unless `data` says otherwise),
+    as the page does, without streaming it; returns the response (422 for a refused run)."""
+    nb = client.post("/notebooks", follow_redirects=False).headers["location"].removeprefix("/n/")
+    cell = re.search(r'data-cell-id="(\w+)"', client.get(f"/n/{nb}").text).group(1)
+    return client.post(f"/n/{nb}/cells/{cell}/run", data={"prompt": "hello", "max_rows": "1000", **data})
+
+
+def ask(client, message: str, notebook: str | None = None, **data) -> tuple[str, str, str]:
+    """Run `message` through the web client as an AI Cell: a new notebook's first cell, or a new cell at the end
+    of `notebook`; the form fields in `data` override the defaults (max_rows 1000). Returns (notebook id,
+    cell id, the cell's SSE stream)."""
+    if notebook is None:
+        notebook = client.post("/notebooks", follow_redirects=False).headers["location"].removeprefix("/n/")
+        cell = re.search(r'data-cell-id="(\w+)"', client.get(f"/n/{notebook}").text).group(1)
+    else:
+        cell = re.search(r'data-cell-id="(\w+)"', client.post(f"/n/{notebook}/cells", data={"kind": "ai"}).text).group(1)
+    ran = client.post(f"/n/{notebook}/cells/{cell}/run", data={"prompt": message, "max_rows": "1000", **data})
+    assert ran.status_code == 200, ran.text
+    return notebook, cell, client.get(f"/n/{notebook}/cells/{cell}/stream").text
+
+
+def register_table(catalog, name: str, cell_id: str = "cell-1", run: int = 1, *args, **kwargs) -> None:
+    """Register a Result Table in a Catalog as made by Run `run` of cell `cell_id`."""
+    catalog.register_for(CellRun(cell_id, f"run-{run}"), name, *args, **kwargs)
+
+
+def run_of(agent: Agent, notebook: str, index: int = -1) -> dict:
+    """The latest Run of the notebook's `index`th cell (default: the last), with its `messages`, `trace`, `status`."""
+    return agent.notebooks.cells(notebook)[index]["run"]
+
+
+def tables_in(agent: Agent, notebook: str) -> list:
+    """The live Result and Saved Tables any cell of the notebook made, oldest first."""
+    tables = [t for c in agent.notebooks.cells(notebook) for t in agent.tables.tables_of_cell(c["id"])]
+    return sorted(tables, key=lambda t: (t.created_at_ms, t.name))
 
 
 def text_of(events) -> str:

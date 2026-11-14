@@ -8,6 +8,7 @@ from contextlib import closing
 
 from conftest import Clock, ScriptedLLM, tool_call
 from playwright.sync_api import expect
+from test_notebook_browser import run_in_new_notebook
 
 from flood_agent import queries
 from flood_agent.llm import TextChunk
@@ -19,20 +20,20 @@ def test_count_display_shows_title_number_and_as_of_in_reply_order_and_survives_
         [TextChunk("Done counting.")],
     )
     page = live_page(agent=build_agent(llm))
-    page.get_by_placeholder("Write a prompt").fill("how many flows?")
-    page.get_by_role("button", name="Send message (Enter)").click()
+    run_in_new_notebook(page, "how many flows?")
     reply = page.locator(".reply")
     expect(reply.get_by_text("Done counting.")).to_be_visible()
+    expect(page.locator(".cell-foot")).to_be_visible()  # the run is done
 
-    line = reply.locator(".count-display")
+    line = page.locator(".count-display")
     expect(line).to_have_count(1)
     expect(line.locator(".count-title")).to_have_text("All flows")
     expect(line.locator(".count-value")).to_have_text("3")
     expect(line.locator(".as-of")).to_have_text(re.compile(r"^as of \d"))
-    text = reply.inner_text()
+    text = page.locator(".output").inner_text()
     assert text.index("Counting.") < text.index("All flows") < text.index("Done counting.")
 
-    page.goto(page.url.rstrip("/").split("/c/")[0] + page.locator("aside a[href^=\"/c/\"]").first.get_attribute("href"))
+    page.reload()
     page.locator(".count-display").wait_for()
     expect(page.locator(".count-display .count-value")).to_have_text("3")
 
@@ -46,9 +47,9 @@ def ask_for_recent_count(build_agent, live_page, monkeypatch):
     llm = ScriptedLLM([tool_call("run_count_query", sql=RECENT_COUNT, title="Recent")], [TextChunk("Counted.")])
     agent = build_agent(llm, clock=clock)
     page = live_page(agent=agent)
-    page.get_by_placeholder("Write a prompt").fill("recent flows")
-    page.get_by_role("button", name="Send message (Enter)").click()
+    run_in_new_notebook(page, "recent flows")
     expect(page.locator(".reply", has_text="Counted.")).to_be_visible()
+    expect(page.locator(".cell-foot")).to_be_visible()  # the run is done
     return agent, clock, page
 
 
@@ -87,8 +88,8 @@ def test_the_count_control_is_disabled_while_a_refresh_runs(build_agent, live_pa
 
 def test_a_failed_count_refresh_keeps_the_number_and_shows_a_plain_error(build_agent, live_page, monkeypatch):
     agent, _, page = ask_for_recent_count(build_agent, live_page, monkeypatch)
-    with closing(sqlite3.connect(agent.store.path)) as con, con:
-        con.execute("UPDATE displays SET definition=json_set(definition, '$.sql', 'DROP TABLE flows')")
+    with closing(sqlite3.connect(agent.notebooks.path)) as con, con:
+        con.execute("UPDATE run_displays SET definition=json_set(definition, '$.sql', 'DROP TABLE flows')")
     line = page.locator(".count-display")
 
     line.get_by_role("button", name="Refresh").click()
@@ -98,7 +99,7 @@ def test_a_failed_count_refresh_keeps_the_number_and_shows_a_plain_error(build_a
     expect(line.get_by_role("button", name="Refresh")).to_be_enabled()
 
 
-def test_a_reopened_conversation_shows_the_refresh_control_on_its_count(build_agent, live_page, monkeypatch):
+def test_a_reopened_notebook_shows_the_refresh_control_on_its_count(build_agent, live_page, monkeypatch):
     _, _, page = ask_for_recent_count(build_agent, live_page, monkeypatch)
-    page.goto(page.url.rstrip("/").split("/c/")[0] + page.locator("aside a[href^=\"/c/\"]").first.get_attribute("href"))
+    page.reload()
     expect(page.locator(".count-display").get_by_role("button", name="Refresh")).to_be_visible()

@@ -139,6 +139,45 @@
       {% endif %}
     </div>
 
+    {% if cell.status and not cell.running and cell.kind == "ai" and cell.output %}
+    {# Copy to Markdown Cell: offers to save the answer's rt_ tables first, so the copy does not expire with them. #}
+    <div class="copy-md" x-data="{ tables: [], names: {}, offer: false, error: '',
+           async start() {
+             this.error = '';
+             const url = '/n/{{ notebook_id }}/cells/{{ cell.id }}/copy-to-markdown';
+             try {
+               const r = await fetch(url);
+               if (!r.ok) { this.error = ((await r.json().catch(() => ({}))).detail) || 'Could not copy.'; return; }
+               this.tables = (await r.json()).tables; this.names = {};
+               if (this.tables.length) { this.offer = true; return; }
+               await this.copy();
+             } catch (e) { this.error = 'Could not copy. Try again.'; }
+           },
+           async copy() {
+             const body = new URLSearchParams();
+             for (const t of this.tables) if ((this.names[t] || '').trim()) body.append('save', t + ':' + this.names[t].trim());
+             try {
+               const r = await fetch('/n/{{ notebook_id }}/cells/{{ cell.id }}/copy-to-markdown', { method: 'POST', body });
+               if (!r.ok) { this.error = ((await r.json().catch(() => ({}))).detail) || 'Could not copy.'; return; }
+               this.offer = false;
+               const bar = this.$root.closest('.cellblock').nextElementSibling;
+               bar.insertAdjacentHTML('afterend', await r.text());
+               htmx.process(bar.nextElementSibling); htmx.process(bar.nextElementSibling.nextElementSibling);
+               window.dispatchEvent(new Event('cells-changed'));
+             } catch (e) { this.error = 'Could not copy. Try again.'; }
+           } }">
+      <button type="button" class="linkish" :disabled="busy" @click="start()" title="Insert a Markdown Cell below with this answer and its tables and charts">Copy to Markdown Cell</button>
+      <div class="save-offer" role="group" aria-label="Save tables" x-show="offer" x-cloak>
+        <p>These tables are deleted after a day unless saved. Name any you want to keep (letters, digits, underscores; not starting with <code>rt_</code>):</p>
+        <template x-for="t in tables" :key="t"><label class="f"><code x-text="t"></code> save as
+          <input type="text" maxlength="60" x-model="names[t]" :aria-label="'Save ' + t + ' as'" placeholder="leave blank to not save"></label></template>
+        <button type="button" class="primary" @click="copy()">Copy</button>
+        <button type="button" @click="offer = false">Cancel</button>
+      </div>
+      <p class="cell-error" role="alert" x-show="error" x-text="error" x-cloak></p>
+    </div>
+    {% endif %}
+
     {% if cell.footer and not cell.running %}
     {% set f = cell.footer %}
     <div class="cell-foot">

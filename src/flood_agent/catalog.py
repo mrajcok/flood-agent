@@ -499,6 +499,10 @@ class Catalog(CatalogView):
                 con.execute("UPDATE result_tables SET retention_ms=? WHERE name=?", (retention_ms, table.name))
         return self[new or table.name]
 
+    def check_new_name(self, new_name: str) -> None:
+        """ValueError unless `update` would accept this as a table's new name (it is lower-cased first)."""
+        self._check_new_name(canonical(new_name))
+
     def _check_new_name(self, new: str) -> None:
         if not table_names.is_identifier(new):
             raise ValueError(f"A table name must {table_names.RULE}.")

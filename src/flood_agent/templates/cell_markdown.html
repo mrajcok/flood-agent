@@ -29,6 +29,8 @@
               x-show="editing" {% if cell.text.strip() %}x-cloak{% endif %} @blur="save()"></textarea>
     <div class="output md-preview" x-show="!editing" {% if not cell.text.strip() %}x-cloak{% endif %} @dblclick="editing = true">
       <div class="reply"><span class="md-delta">{{ cell.text }}</span></div>
+      {# Embedded Displays: the same components an AI Cell uses, so they follow Refresh and renames and say "expired". #}
+      {% for item in cell.displays %}{% include "display_item.html" %}{% endfor %}
     </div>
   </div>
 </div>

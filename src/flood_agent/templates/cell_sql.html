@@ -31,8 +31,7 @@
                },
                async pickTable(name) {
                  this.tpop = false; this.tbl = name; this.cols = []; this.colError = '';
-                 if (this.command) { this.save(); return; }  /* DESCRIBE TABLE: the table is the choice, nothing is inserted */
-                 FloodSql.insertAt(this.$refs.sql, name, 'table'); this.save();
+                 if (this.command) { this.save(); return; }  /* DESCRIBE TABLE: the table is the choice */
                  try {
                    const r = await fetch('/api/tables/' + encodeURIComponent(name) + '/columns');
                    if (r.ok) this.cols = (await r.json()).columns; else this.colError = 'That table is no longer available.';

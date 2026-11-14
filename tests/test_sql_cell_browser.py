@@ -80,7 +80,7 @@ def pick_table(cell, name):
     cell.get_by_role("button", name=name, exact=True).click()
 
 
-def test_the_table_dropdown_is_grouped_and_searchable_and_starts_a_query_in_an_empty_cell(live_page, build_agent):
+def test_the_table_dropdown_is_grouped_and_searchable_and_leaves_the_sql_unchanged_and_shows_columns(live_page, build_agent):
     page = live_page(agent=build_agent(ScriptedLLM()))
     cell = add_sql_cell(page)
     cell.get_by_label("SQL").fill("SELECT dport AS x FROM flows")
@@ -99,9 +99,7 @@ def test_the_table_dropdown_is_grouped_and_searchable_and_starts_a_query_in_an_e
     expect(second.locator(".titem")).to_have_text(["flows"])
     second.get_by_role("button", name="flows", exact=True).click()
 
-    box = second.get_by_label("SQL", exact=True)
-    expect(box).to_have_value("SELECT \nFROM flows")
-    assert box.evaluate("e => e.selectionStart") == 7
+    expect(second.get_by_label("SQL", exact=True)).to_have_value("")
     expect(second.locator(".tbl-cols .col")).to_have_count(11)
     expect(second.locator(".tbl-cols .col").nth(3)).to_have_attribute("title", "INTEGER")
 
@@ -113,10 +111,12 @@ def test_clicking_columns_builds_a_list_at_the_cursor_and_the_table_name_goes_in
     box = cell.get_by_label("SQL")
     cols = cell.locator(".tbl-cols")
     cols.get_by_role("button", name="sip", exact=True).click()
-    expect(box).to_have_value("SELECT sip\nFROM flows")
+    expect(box).to_have_value("sip")
     cols.get_by_role("button", name="dport", exact=True).click()
     cols.get_by_role("button", name="bytes", exact=True).click()
-    expect(box).to_have_value("SELECT sip, dport, bytes\nFROM flows")
+    expect(box).to_have_value("sip, dport, bytes")
+    cols.get_by_role("button", name="flows", exact=True).click()
+    expect(box).to_have_value("sip, dport, bytes flows")
 
     box.fill("SELECT * FROM x WHERE ")
     cols.get_by_role("button", name="etime", exact=True).click()
@@ -149,7 +149,7 @@ def test_a_keyword_column_is_quoted_on_insert_and_unquoted_one_is_rejected_with_
     second = page.locator(".cellblock.sql").nth(1)
     pick_table(second, result)
     second.locator(".tbl-cols").get_by_role("button", name="analyze", exact=True).click()
-    expect(second.get_by_label("SQL", exact=True)).to_have_value(f'SELECT "analyze"\nFROM {result}')
+    second.get_by_label("SQL", exact=True).fill(f'SELECT "analyze" FROM {result}')
     second.get_by_role("button", name="Run").click()
     expect(second.locator(".sql-status")).to_contain_text("3 rows")
 

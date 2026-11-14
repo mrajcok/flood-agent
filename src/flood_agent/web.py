@@ -47,6 +47,7 @@ from flood_agent.context_usage import context_usage
 from flood_agent.lookup_tables import InvalidLookupTable
 from flood_agent.notebooks import DEFAULT_MAX_ROWS, MARKDOWN
 from flood_agent.queries import InvalidSort
+from flood_agent.show_commands import DESCRIBE_TABLE, SHOW_COMMANDS, SHOW_IN_TEXTBOX, is_show_statement
 from flood_agent.store import COUNT_KIND
 from flood_agent.trace import context_tokens, short_model, split_system_prompt
 
@@ -62,6 +63,7 @@ def static_version(name: str) -> int:
 
 
 TEMPLATES.env.globals["static_version"] = static_version
+TEMPLATES.env.globals["show_commands"] = SHOW_COMMANDS
 
 
 def _sse(event: str, data: str) -> str:
@@ -374,7 +376,7 @@ def create_app(
         model = draft.get("model") or default_model
         view = {
             "id": cell["id"], "notebook_id": cell["notebook_id"], "kind": cell["kind"], "prompt": draft.get("prompt", ""),
-            "sql": draft.get("sql", ""),
+            "sql": draft.get("sql", ""), "command": draft.get("command") or "", "table": draft.get("table") or "",
             "model": model, "effort": draft.get("effort") or "", "max_rows": draft.get("max_rows") or DEFAULT_MAX_ROWS,
             "running": starting, "streaming": starting, "polling": False, "status": None, "number": None,
             "output": [], "footer": None, "ran": None, "edited": False, "earlier_tables": [],
@@ -433,6 +435,11 @@ def create_app(
         chosen = model_choice(model)
         return {"prompt": prompt, "model": chosen, "effort": effort_choice(chosen, effort),
                 "max_rows": _parse_max_rows(max_rows)}
+
+    def posted_command(command: str, table: str) -> dict:
+        if command and command not in SHOW_COMMANDS:
+            raise HTTPException(422, f"unknown command {command!r}")
+        return {"command": command, "table": table.strip()}
 
     @app.post("/notebooks")
     def create_notebook():
@@ -549,11 +556,12 @@ def create_app(
 
     @app.post("/n/{notebook_id}/cells/{cell_id}/draft", status_code=204)
     def save_draft(notebook_id: str, cell_id: str, prompt: str = Form(""), model: str = Form(""),
-                   effort: str = Form(""), max_rows: str = Form(""), sql: str = Form("")):
+                   effort: str = Form(""), max_rows: str = Form(""), sql: str = Form(""),
+                   command: str = Form(""), table: str = Form("")):
         """Remember a cell's edited prompt (or SQL) and settings without running them."""
         cell = known_cell(notebook_id, cell_id)
         if cell["kind"] == "sql":
-            agent.notebooks.edit_cell(cell_id, sql=sql, max_rows=_parse_max_rows(max_rows))
+            agent.notebooks.edit_cell(cell_id, sql=sql, max_rows=_parse_max_rows(max_rows), **posted_command(command, table))
             return
         agent.notebooks.edit_ai_cell(cell_id, **posted_settings(prompt, model, effort, max_rows))
 
@@ -574,18 +582,24 @@ def create_app(
 
     @app.post("/n/{notebook_id}/cells/{cell_id}/run", response_class=HTMLResponse)
     def run_cell(notebook_id: str, cell_id: str, prompt: str = Form(""), model: str = Form(""),
-                 effort: str = Form(""), max_rows: str = Form(""), sql: str = Form("")):
+                 effort: str = Form(""), max_rows: str = Form(""), sql: str = Form(""),
+                 command: str = Form(""), table: str = Form("")):
         """Save the cell's prompt (or SQL) and settings as its Draft and return the cell, running; its stream starts the Run."""
         cell = known_cell(notebook_id, cell_id)
         if cell["kind"] not in ("ai", "sql"):
             raise HTTPException(422, "only AI and SQL Cells run")
         is_sql = cell["kind"] == "sql"
-        if not (sql if is_sql else prompt).strip():
+        if is_sql and command:
+            if command == DESCRIBE_TABLE and not table.strip():
+                raise HTTPException(422, "Pick a table to describe")
+        elif is_sql and is_show_statement(sql):
+            raise HTTPException(422, SHOW_IN_TEXTBOX)
+        elif not (sql if is_sql else prompt).strip():
             raise HTTPException(422, "Write some SQL to run" if is_sql else "Write a prompt to run")
         if agent.running_cell(notebook_id):
             raise HTTPException(409, "A cell in this notebook is already running")
         if is_sql:
-            agent.notebooks.edit_cell(cell_id, sql=sql, max_rows=_parse_max_rows(max_rows))
+            agent.notebooks.edit_cell(cell_id, sql=sql, max_rows=_parse_max_rows(max_rows), **posted_command(command, table))
         else:
             agent.notebooks.edit_ai_cell(cell_id, **posted_settings(prompt, model, effort, max_rows))
         return cell_html(notebook_id, cell_id, "notebook_cell.html", starting=True)

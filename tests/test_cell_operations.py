@@ -55,7 +55,7 @@ async def test_copying_sql_and_markdown_cells_copies_their_drafts(make_agent):
     nb = agent.create_notebook()
     s = agent.add_sql_cell(nb, sql="SELECT 1", max_rows=7)
     m = agent.add_markdown_cell(nb, text="note", send_to_ai=True)
-    assert agent.notebooks.cell(agent.copy_cell(nb, s))["draft"] == {"sql": "SELECT 1", "max_rows": 7}
+    assert agent.notebooks.cell(agent.copy_cell(nb, s))["draft"] == {"sql": "SELECT 1", "max_rows": 7, "command": "", "table": ""}
     assert agent.notebooks.cell(agent.copy_cell(nb, m))["draft"] == {"text": "note", "send_to_ai": True}
 
 

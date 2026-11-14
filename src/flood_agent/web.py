@@ -359,7 +359,7 @@ def create_app(
             "sql": draft.get("sql", ""),
             "model": model, "effort": draft.get("effort") or "", "max_rows": draft.get("max_rows") or DEFAULT_MAX_ROWS,
             "running": starting, "streaming": starting, "polling": False, "status": None, "number": None,
-            "output": [], "footer": None,
+            "output": [], "footer": None, "ran": None, "edited": False, "earlier_tables": [],
         }
         view["chip"] = settings_label(model, view["effort"], view["max_rows"])
         if starting or run is None:
@@ -374,6 +374,13 @@ def create_app(
             view["started_at_ms"] = run["started_at"]
             return view
         ran = run["settings"]
+        view["ran"] = {"prompt": run["prompt"], "model": ran["model"], "effort": ran["effort"] or "",
+                       "max_rows": ran["max_rows"]}
+        view["edited"] = (draft["prompt"], model, view["effort"], view["max_rows"]) != tuple(view["ran"].values())
+        if not view["running"]:
+            view["earlier_tables"] = [
+                {"name": t.name, "settings_url": _table_display_urls(t.name)["settings_url"]}
+                for t in agent.tables.earlier_tables_of_cell(cell["id"], run["id"])]
         trace = run["trace"]
         view["footer"] = {
             "started_at_ms": run["started_at"], "ran_utc": time.strftime("%H:%M UTC", time.gmtime(run["started_at"] / 1000)),
@@ -461,6 +468,14 @@ def create_app(
         if known_cell(notebook_id, cell_id)["kind"] != MARKDOWN:
             raise HTTPException(422, "not a Markdown Cell")
         agent.notebooks.edit_ai_cell(cell_id, text=text, send_to_ai=bool(send_to_ai))
+
+    @app.post("/n/{notebook_id}/cells/{cell_id}/earlier-tables/delete", response_class=HTMLResponse)
+    def delete_earlier_tables(notebook_id: str, cell_id: str):
+        """Drop the `rt_` tables of the cell's earlier Runs (never Saved Tables); returns the cell."""
+        cell = known_cell(notebook_id, cell_id)
+        if cell["run"]:
+            agent.tables.drop_earlier_of_cell(cell_id, cell["run"]["id"])
+        return cell_html(notebook_id, cell_id, "notebook_cell.html")
 
     @app.post("/n/{notebook_id}/cells/{cell_id}/run", response_class=HTMLResponse)
     def run_cell(notebook_id: str, cell_id: str, prompt: str = Form(""), model: str = Form(""),

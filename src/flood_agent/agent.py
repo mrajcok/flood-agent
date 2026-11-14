@@ -510,7 +510,7 @@ class Agent:
                 if other["draft"].get("send_to_ai") and text:
                     history.append({"role": "user", "content": f"{MARKDOWN_NOTE_LABEL} {text}"})
             elif other["run"]:
-                history += repair_history(other["run"]["messages"])
+                history += self._what_ran(other["run"])
                 above.append((other["id"], other["run"]["id"]))
         fingerprint = hashlib.sha256(json.dumps(history, sort_keys=True).encode()).hexdigest()
         settings = {"model": draft.get("model") or self.config.model, "effort": draft.get("effort"),
@@ -540,6 +540,27 @@ class Agent:
                 self.notebooks.finish_run(run_id, "stopped" if task in self._stopped_turns else "failed")
         task.add_done_callback(release)
         return task, queue, release
+
+    @staticmethod
+    def _what_ran(run: dict) -> list[dict]:
+        """A finished Run's messages as the cells below are sent them: a stopped or failed Run counts as having
+        run, with what it streamed plus "(stopped by the user)" or "failed: <value-free error>"."""
+        messages = repair_history(run["messages"])
+        if run["status"] not in ("stopped", "failed"):
+            return messages
+        last = messages[-1] if messages and messages[-1]["role"] == "assistant" else None
+        text = (last.get("content") or "") if last else ""
+        if run["status"] == "stopped":
+            note = "(stopped by the user)"
+            text = text.removesuffix(STOPPED_NOTE).rstrip()
+        else:
+            errors = [e["message"] for e in (run["trace"] or {}).get("entries", []) if e["kind"] == "error"]
+            note = f"failed: {errors[0] if errors else 'the Run did not finish'}"
+            if errors and text == errors[0]:
+                text = ""  # the error message was recorded as the answer: say it once
+        if last:
+            messages = messages[:-1]
+        return messages + [{"role": "assistant", "content": f"{text}\n\n{note}" if text else note}]
 
     async def _produce_cell(
         self, history: list[dict], prompt_tables: Callable[[], list[Table]], sink: _CellSink, prompt: str,

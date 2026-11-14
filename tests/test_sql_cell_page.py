@@ -46,6 +46,8 @@ def test_an_edited_sql_cell_is_marked_edited_not_run_and_a_never_run_one_is_not(
     client.post(f"/n/{nb}/cells/{cell}/run", data={"sql": sql, "max_rows": "10"})
     client.get(f"/n/{nb}/cells/{cell}/stream")
     assert not edited()
+    client.post(f"/n/{nb}/cells/{cell}/draft", data={"sql": "SELECT  dport\n  FROM flows ", "max_rows": "10"})
+    assert not edited()  # only the spacing changed
     for change in ({"sql": "SELECT sip FROM flows"}, {"max_rows": "5"}, {"command": "SHOW TABLES"}):
         client.post(f"/n/{nb}/cells/{cell}/draft", data={"sql": sql, "max_rows": "10", **change})
         page = client.get(f"/n/{nb}/cells/{cell}").text

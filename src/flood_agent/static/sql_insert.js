@@ -28,29 +28,16 @@
     return before + (before && !/\s$/.test(before) ? " " : "") + name;
   }
 
-  // What a table picked in an empty box becomes, and where the cursor goes.
-  function startQuery(table) {
-    return { text: "SELECT \nFROM " + table, cursor: 7 };
-  }
-
   // Put a column (kind "column") or a table/name (kind "name") into `el` at its cursor, and tell Alpine (input event).
-  // A table picked in an empty box (kind "table") starts the query instead.
   function insertAt(el, text, kind) {
-    const value = el.value;
-    const before = value.slice(0, el.selectionStart), after = value.slice(el.selectionEnd);
-    if (kind === "table" && !value.trim()) {
-      const q = startQuery(text);
-      el.value = q.text;
-      el.focus(); el.setSelectionRange(q.cursor, q.cursor);
-    } else {
-      const head = kind === "column" ? afterColumn(before, text) : afterName(before, text);
-      el.value = head + (after && !/^[\s,)]/.test(after) ? " " : "") + after;
-      el.focus(); el.setSelectionRange(head.length, head.length);
-    }
+    const before = el.value.slice(0, el.selectionStart), after = el.value.slice(el.selectionEnd);
+    const head = kind === "column" ? afterColumn(before, text) : afterName(before, text);
+    el.value = head + (after && !/^[\s,)]/.test(after) ? " " : "") + after;
+    el.focus(); el.setSelectionRange(head.length, head.length);
     el.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
-  const api = { afterColumn, afterName, startQuery, insertAt };
+  const api = { afterColumn, afterName, insertAt };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.FloodSql = api;
 })(typeof window !== "undefined" ? window : globalThis);

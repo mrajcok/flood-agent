@@ -30,6 +30,18 @@ def test_an_edited_cell_keeps_its_old_output_and_is_marked_edited_not_run(build_
     assert not edited(client.get(f"/n/{nb}/cells/{cell}").text)  # back to what ran
 
 
+def test_a_prompt_that_differs_only_in_spacing_is_not_edited(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM([TextChunk("Old answer.")])))
+    nb, cell = new_notebook(client)
+    run_cell(client, nb, cell, prompt="show  top ports", effort="high", max_rows="1000")
+    for spaced in ("show top ports", "  show top  ports  ", "show\ntop\tports"):
+        data = {"prompt": spaced, "model": SONNET, "effort": "high", "max_rows": "1000"}
+        client.post(f"/n/{nb}/cells/{cell}/draft", data=data)
+        assert not edited(client.get(f"/n/{nb}/cells/{cell}").text), repr(spaced)
+    client.post(f"/n/{nb}/cells/{cell}/draft", data={"prompt": "show topports", "model": SONNET, "effort": "high", "max_rows": "1000"})
+    assert edited(client.get(f"/n/{nb}/cells/{cell}").text)  # removing the space between words is a text change
+
+
 def test_earlier_runs_tables_are_listed_collapsed_and_clearing_them_spares_saved_tables(build_agent, web_client):
     agent = build_agent(ScriptedLLM(
         [tool_call("run_query", sql=SQL, title="First", call_id="c1"),

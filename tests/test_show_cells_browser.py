@@ -52,3 +52,22 @@ def test_a_show_typed_into_the_textbox_points_to_the_command_dropdown(live_page,
     cell.get_by_label("SQL").fill("SHOW TABLES")
     cell.get_by_role("button", name="Run").click()
     expect(cell.locator(".cell-error")).to_contain_text("Command drop-down")
+
+
+def test_an_ip_column_in_a_sql_cell_table_sorts_numerically(live_page, build_agent):
+    page = live_page(agent=build_agent(ScriptedLLM()))
+    cell = add_sql_cell(page)
+    cell.get_by_label("Command").select_option("SHOW COLUMNS")
+    cell.get_by_role("button", name="Run").click()
+    expect(cell.locator(".show-table tbody tr").first).to_be_visible()
+    # SHOW output holds no IPs; swap one column's cells for addresses so the real sort handler runs on them.
+    cell.locator(".show-table tbody").evaluate(
+        """b => { const ips = ['10.0.0.10', '10.0.0.2', '9.255.0.1'];
+                  Array.from(b.rows).forEach((r, k) => { const c = r.cells[0]; c.dataset.v = ips[k % 3]; c.textContent = ips[k % 3]; }); }"""
+    )
+    header = cell.locator(".show-table thead button").first
+    first = cell.locator(".show-table tbody tr td:first-child").first
+    header.click()
+    expect(first).to_have_text("9.255.0.1")
+    header.click()
+    expect(first).to_have_text("10.0.0.10")

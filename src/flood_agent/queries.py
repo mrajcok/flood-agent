@@ -488,6 +488,17 @@ class InvalidSort(ValueError):
     pass
 
 
+def _ipv4_key(value) -> int | None:
+    """The numeric value of a dotted-quad IPv4 string, or None if `value` is not one."""
+    if not isinstance(value, str):
+        return None
+    parts = value.split(".")
+    if len(parts) != 4 or not all(p.isascii() and p.isdigit() and int(p) <= 255 for p in parts):
+        return None
+    a, b, c, d = (int(p) for p in parts)
+    return (a << 24) | (b << 16) | (c << 8) | d
+
+
 def fetch_rows(
     results_db: Path,
     name: str,
@@ -509,11 +520,21 @@ def fetch_rows(
         raise InvalidSort(sort)
     cols = [c for c in (columns or all_cols) if c in all_cols]
     select = ", ".join(table_names.quote(c) for c in cols)
-    order = ""
-    if sort is not None:
-        order = f" ORDER BY {table_names.quote(sort)} {'DESC' if descending else 'ASC'}, rowid"
     con = sqlite3.connect(f"file:{results_db}?mode=ro", uri=True)
+    con.create_function("ipv4_key", 1, _ipv4_key, deterministic=True)
     try:
+        order = ""
+        if sort is not None:
+            q = table_names.quote(sort)
+            # An IP column (every non-null value a dotted quad) sorts by numeric address value.
+            tbl = table_names.quote(name)
+            has_values = con.execute(f"SELECT 1 FROM {tbl} WHERE {q} IS NOT NULL LIMIT 1").fetchone()
+            not_ip = has_values and con.execute(
+                f"SELECT 1 FROM {tbl} WHERE {q} IS NOT NULL AND ipv4_key({q}) IS NULL LIMIT 1"
+            ).fetchone()
+            is_ip = bool(has_values) and not not_ip
+            key = f"ipv4_key({q})" if is_ip else q
+            order = f" ORDER BY {key} {'DESC' if descending else 'ASC'}, rowid"
         total = con.execute(f"SELECT COUNT(*) FROM {table_names.quote(name)}").fetchone()[0]
         rows = [
             list(r)

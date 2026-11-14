@@ -2,7 +2,7 @@
 
 import re
 
-from conftest import ScriptedLLM, table_script, tool_call
+from conftest import ScriptedLLM, add_below, table_script, tool_call
 from playwright.sync_api import expect
 from test_notebook_browser import open_new_notebook, run, write_prompt
 from test_notebooks import SQL
@@ -96,6 +96,36 @@ def test_collapse_and_expand_outputs_hide_the_output_but_keep_the_prompt(live_pa
     expect(cell.locator(".reply")).to_be_visible()
 
 
+def test_with_outputs_collapsed_one_cell_can_show_and_hide_its_own_output(live_page, build_agent):
+    llm = ScriptedLLM([TextChunk("Port 8443 is the busiest.")], [TextChunk("Port 22 is the quietest.")])
+    page = live_page(agent=build_agent(llm))
+    first = open_new_notebook(page)
+    write_prompt(first, "busiest port?")
+    run(first)
+    expect(first.locator(".reply")).to_contain_text("8443")
+    add_below(page, "ai", first)
+    second = page.locator(".cellblock").nth(1)
+    write_prompt(second, "quietest port?")
+    run(second)
+    expect(second.locator(".reply")).to_contain_text("22")
+    expect(first.get_by_role("button", name="Show output")).to_be_hidden()  # only offered while collapsed
+
+    page.get_by_role("button", name="Collapse outputs").click()
+    expect(first.locator(".reply")).to_be_hidden()
+    first.get_by_role("button", name="Show output").click()
+    expect(first.locator(".reply")).to_be_visible()
+    expect(second.locator(".reply")).to_be_hidden()
+    first.get_by_role("button", name="Hide output").click()
+    expect(first.locator(".reply")).to_be_hidden()
+
+    second.get_by_role("button", name="Show output").click()
+    page.get_by_role("button", name="Expand outputs").click()
+    expect(first.locator(".reply")).to_be_visible()
+    expect(second.locator(".reply")).to_be_visible()
+    page.get_by_role("button", name="Collapse outputs").click()  # collapsing again hides the one shown by hand too
+    expect(second.locator(".reply")).to_be_hidden()
+
+
 def test_traces_off_hides_only_the_trace_not_the_footer_line_or_context_meter(live_page, build_agent):
     llm = ScriptedLLM([tool_call("run_query", sql=SQL, title="ports")], [TextChunk("Done.")])
     page = live_page(agent=build_agent(llm))
@@ -123,3 +153,39 @@ def test_table_info_off_hides_a_cells_table_name_line(live_page, build_agent):
     page.get_by_label("Table info").uncheck()
     expect(cell.locator(".table-name").first).to_be_hidden()
     expect(cell.locator(".display table").first).to_be_visible()
+
+
+def test_sql_cell_can_show_and_hide_its_own_output_while_outputs_are_collapsed(live_page, build_agent):
+    page = live_page(agent=build_agent(ScriptedLLM()))
+    open_new_notebook(page)
+    add_below(page, "sql")
+    cell = page.locator(".cellblock.sql")
+    cell.get_by_label("SQL").fill("SELECT dport FROM flows GROUP BY dport")
+    cell.get_by_role("button", name="Run").click()
+    expect(cell.locator(".output .display")).to_contain_text("8443")
+    page.get_by_role("button", name="Collapse outputs").click()
+    expect(cell.locator(".output .display")).to_be_hidden()
+    cell.get_by_role("button", name="Show output").click()
+    expect(cell.locator(".output .display")).to_be_visible()
+    cell.get_by_role("button", name="Hide output").click()
+    expect(cell.locator(".output .display")).to_be_hidden()
+
+
+def test_markdown_cell_output_toggle_is_offered_only_when_not_editing_and_survives_rendering(live_page):
+    page = live_page()
+    open_new_notebook(page)
+    add_below(page, "markdown")
+    cell = page.locator(".cellblock.markdown")
+    cell.get_by_label("Markdown").fill("**focus** on UDP")
+    cell.get_by_role("button", name="Done").click()
+    expect(cell.locator(".md-preview strong")).to_have_text("focus")
+    page.get_by_role("button", name="Collapse outputs").click()
+    expect(cell.locator(".md-preview")).to_be_hidden()
+    cell.get_by_role("button", name="Show output").click()
+    expect(cell.locator(".md-preview")).to_be_visible()
+    cell.get_by_role("button", name="Edit").click()
+    expect(cell.get_by_role("button", name="Hide output")).to_be_hidden()  # nothing to hide while editing
+    cell.get_by_role("button", name="Done").click()
+    expect(cell.locator(".md-preview")).to_be_visible()  # still open by hand after the re-render
+    cell.get_by_role("button", name="Hide output").click()
+    expect(cell.locator(".md-preview")).to_be_hidden()

@@ -29,6 +29,10 @@ def test_editing_a_ran_cell_shows_the_badge_until_it_is_back_to_what_ran(live_pa
     expect(cell.locator(".reply")).to_contain_text("Old answer.")  # the old output stays
     cell.get_by_label("Prompt").fill("original")
     expect(badge).to_be_hidden()
+    cell.get_by_label("Prompt").fill("  original  ")
+    expect(badge).to_be_hidden()  # extra spaces are not an edit
+    cell.get_by_label("Prompt").fill("orig inal")
+    expect(badge).to_be_visible()  # a space inside a word is
 
 
 def test_a_rerun_lists_the_earlier_tables_collapsed_and_delete_all_clears_them(live_page, build_agent):

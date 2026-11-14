@@ -25,6 +25,7 @@
                        if (r.ok) this.staleIds = await r.json();
                      } catch (e) {}
                    },
+                   squash(text) { return String(text).split(/\s+/).filter(Boolean).join(' '); },  /* spacing alone is not an edit */
                    placed(e) {
                      /* A cell added by the insert strip or the empty-notebook buttons: show it and put the cursor in it. */
                      const from = e.detail.requestConfig && e.detail.requestConfig.elt;

@@ -1,0 +1,33 @@
+{# A Markdown Cell: rendered notes (double-click or Edit to change them) and its Send to AI tick.
+   `cell` comes from web.cell_view. An empty cell opens in edit mode. #}
+<div class="cellblock markdown" id="cell-{{ cell.id }}" data-cell-id="{{ cell.id }}" data-kind="markdown"
+     x-data="{ text: {{ cell.text | tojson | forceescape }}, send: {{ cell.send_to_ai | tojson }}, editing: {{ (not cell.text.strip()) | tojson }},
+               async save() {
+                 try { await fetch('/n/{{ notebook_id }}/cells/{{ cell.id }}/markdown', { method: 'POST',
+                   body: new URLSearchParams({ text: this.text, send_to_ai: this.send ? '1' : '' }) }); } catch (e) {}
+               },
+               async done() {
+                 /* Save, then show the server's rendering of what was saved. */
+                 await this.save();
+                 if (!this.text.trim()) return;
+                 const r = await fetch('/n/{{ notebook_id }}/cells/{{ cell.id }}');
+                 if (!r.ok) return;
+                 this.$root.outerHTML = await r.text();
+               } }">
+  <div class="gutter"></div>
+  <div class="cell md-cell">
+    <div class="head">
+      <span class="kind">Markdown</span>
+      <span class="grow"></span>
+      <label class="send"><input type="checkbox" x-model="send" @change="save()" aria-label="Send to AI"> Send to AI</label>
+      <button type="button" class="linkish" x-show="!editing" @click="editing = true">Edit</button>
+      <button type="button" class="linkish" x-show="editing" x-cloak @click="done()">Done</button>
+    </div>
+    <p class="not-sent" x-show="!send" {% if cell.send_to_ai %}x-cloak{% endif %}>Not sent to AI Cells below</p>
+    <textarea class="cell-prompt" rows="4" aria-label="Markdown" placeholder="Write notes in Markdown" x-model="text"
+              x-show="editing" {% if cell.text.strip() %}x-cloak{% endif %} @blur="save()"></textarea>
+    <div class="output md-preview" x-show="!editing" {% if not cell.text.strip() %}x-cloak{% endif %} @dblclick="editing = true">
+      <div class="reply"><span class="md-delta">{{ cell.text }}</span></div>
+    </div>
+  </div>
+</div>

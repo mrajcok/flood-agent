@@ -45,7 +45,7 @@ from flood_agent.agent import (
 from flood_agent.catalog import TableExpired
 from flood_agent.context_usage import context_usage
 from flood_agent.lookup_tables import InvalidLookupTable
-from flood_agent.notebooks import DEFAULT_MAX_ROWS
+from flood_agent.notebooks import DEFAULT_MAX_ROWS, MARKDOWN
 from flood_agent.queries import InvalidSort
 from flood_agent.store import COUNT_KIND
 from flood_agent.trace import context_tokens, short_model, split_system_prompt
@@ -346,6 +346,9 @@ def create_app(
         """What the cell template needs. `starting`: its run has been asked for and its stream not yet opened,
         so it shows as running with no output."""
         draft, run = cell["draft"], cell["run"]
+        if cell["kind"] == MARKDOWN:
+            return {"id": cell["id"], "notebook_id": cell["notebook_id"], "kind": MARKDOWN,
+                    "text": draft.get("text", ""), "send_to_ai": bool(draft.get("send_to_ai"))}
         model = draft.get("model") or default_model
         view = {
             "id": cell["id"], "notebook_id": cell["notebook_id"], "kind": cell["kind"], "prompt": draft["prompt"],
@@ -415,11 +418,14 @@ def create_app(
         """Insert a cell after `after` (or at the end); returns it, with its "add a cell" bar, for htmx to place."""
         if not agent.notebooks.exists(notebook_id):
             raise HTTPException(404, "unknown notebook")
-        if kind != "ai":
+        if kind not in ("ai", MARKDOWN):
             raise HTTPException(422, f"unknown cell kind {kind!r}")
         if after:
             known_cell(notebook_id, after)
-        cell_id = add_ai_cell(notebook_id, after or None)
+        if kind == MARKDOWN:
+            cell_id = agent.add_markdown_cell(notebook_id, after=after or None)
+        else:
+            cell_id = add_ai_cell(notebook_id, after or None)
         return cell_html(notebook_id, cell_id, "notebook_slot.html")
 
     @app.get("/n/{notebook_id}/cells/{cell_id}", response_class=HTMLResponse)
@@ -434,11 +440,19 @@ def create_app(
         known_cell(notebook_id, cell_id)
         agent.notebooks.edit_ai_cell(cell_id, **posted_settings(prompt, model, effort, max_rows))
 
+    @app.post("/n/{notebook_id}/cells/{cell_id}/markdown", status_code=204)
+    def save_markdown(notebook_id: str, cell_id: str, text: str = Form(""), send_to_ai: str = Form("")):
+        """Remember a Markdown Cell's text and its Send to AI tick (a missing tick is unticked)."""
+        if known_cell(notebook_id, cell_id)["kind"] != MARKDOWN:
+            raise HTTPException(422, "not a Markdown Cell")
+        agent.notebooks.edit_ai_cell(cell_id, text=text, send_to_ai=bool(send_to_ai))
+
     @app.post("/n/{notebook_id}/cells/{cell_id}/run", response_class=HTMLResponse)
     def run_cell(notebook_id: str, cell_id: str, prompt: str = Form(""), model: str = Form(""),
                  effort: str = Form(""), max_rows: str = Form("")):
         """Save the cell's prompt and settings as its Draft and return the cell, running; its stream starts the Run."""
-        known_cell(notebook_id, cell_id)
+        if known_cell(notebook_id, cell_id)["kind"] != "ai":
+            raise HTTPException(422, "only AI Cells run")
         if not prompt.strip():
             raise HTTPException(422, "Write a prompt to run")
         if agent.running_cell(notebook_id):

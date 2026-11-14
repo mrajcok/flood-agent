@@ -1,7 +1,7 @@
 """Notebook storage: Notebooks, their ordered Cells (kind + Draft) and each Cell's latest Run.
 
 Lives in the app database beside Conversations. A Cell has at most one Run, its latest: starting a new
-Run replaces the old one (its messages, Displays and Trace) under a new id. Only AI Cells exist so far.
+Run replaces the old one (its messages, Displays and Trace) under a new id. AI and Markdown Cells exist so far (a Markdown Cell never has a Run).
 A Run's Result Tables are the Catalog's, recorded against the `CellRun(cell_id, run_id)` that made them.
 """
 
@@ -59,6 +59,8 @@ CREATE TABLE IF NOT EXISTS run_displays (
 """
 
 AI = "ai"
+MARKDOWN = "markdown"
+MARKDOWN_NOTE_LABEL = "[Markdown note]"  # prefixes a ticked Markdown Cell's text in an AI Cell's context
 DEFAULT_MAX_ROWS = 1000
 
 
@@ -113,8 +115,11 @@ class NotebookStore:
                 "ORDER BY last_activity_at DESC, created_at DESC")]
 
     def add_ai_cell(self, notebook_id: str, draft: dict, after: str | None = None) -> str:
-        """Insert an AI Cell with this Draft after cell `after`, or at the end. KeyError if the notebook
-        (or `after` in it) is unknown."""
+        return self.add_cell(notebook_id, AI, draft, after)
+
+    def add_cell(self, notebook_id: str, kind: str, draft: dict, after: str | None = None) -> str:
+        """Insert a cell of this kind with this Draft after cell `after`, or at the end. KeyError if the
+        notebook (or `after` in it) is unknown."""
         cell_id, now = uuid.uuid4().hex, self._now()
         with closing(self._connect()) as con, con:
             if con.execute("SELECT 1 FROM notebooks WHERE id=?", (notebook_id,)).fetchone() is None:
@@ -131,12 +136,13 @@ class NotebookStore:
                 con.execute("UPDATE cells SET position=position+1 WHERE notebook_id=? AND position>=?",
                             (notebook_id, position))
             con.execute("INSERT INTO cells(id, notebook_id, position, kind, draft, created_at) VALUES (?,?,?,?,?,?)",
-                        (cell_id, notebook_id, position, AI, json.dumps(draft), now))
+                        (cell_id, notebook_id, position, kind, json.dumps(draft), now))
             self._touch(con, notebook_id)
         return cell_id
 
     def edit_ai_cell(self, cell_id: str, **changes) -> None:
-        """Change fields of an AI Cell's Draft (prompt, model, effort, max_rows). The latest Run is untouched."""
+        """Change fields of a cell's Draft (an AI Cell's prompt, model, effort, max_rows; a Markdown Cell's
+        text, send_to_ai). The latest Run is untouched."""
         with closing(self._connect()) as con, con:
             row = con.execute("SELECT notebook_id, draft FROM cells WHERE id=?", (cell_id,)).fetchone()
             if row is None:

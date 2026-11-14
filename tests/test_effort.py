@@ -5,16 +5,11 @@ import json
 
 import httpx
 import pytest
-from conftest import ScriptedLLM
+from conftest import ScriptedLLM, collect, post_run
 
-from flood_agent.agent import Conversation
 from flood_agent.llm import OpenRouterClient
 
 SONNET, HAIKU, GLM = "anthropic/claude-sonnet-5.5", "anthropic/claude-haiku-5.5", "z-ai/glm-5.3"  # defaults: high, medium, maxne
-
-
-def post_chat(client, **data):
-    return client.post("/chat", data={"message": "hello", "max_rows": "1000", **data})
 
 
 def provider_bodies(build_agent):
@@ -31,8 +26,8 @@ def provider_bodies(build_agent):
     return agent, seen
 
 
-async def turn(agent, model, effort):
-    return [e async for e in agent.run_turn(Conversation(), "q", 1000, model, effort)]
+async def turn(agent, model, effort, notebook=None):
+    return await collect(agent, "q", notebook, 1000, model, effort)
 
 
 @pytest.mark.parametrize("model, effort", [(SONNET, "low"), (SONNET, "max"), (HAIKU, "none")])
@@ -59,29 +54,30 @@ def test_an_effort_the_model_does_not_offer_is_rejected_before_any_turn_starts(b
     client = web_client(agent)
 
     for model, effort in [(SONNET, "none"), (SONNET, "bogus"), (GLM, "none")]:
-        response = post_chat(client, model=model, effort=effort)
+        response = post_run(client, model=model, effort=effort)
         assert response.status_code == 422 and "does not offer reasoning effort" in response.json()["detail"]
 
-    assert llm.calls == [] and agent.store.list_conversations() == []
+    assert llm.calls == [] and all(
+        c["run"] is None for n in agent.notebooks.list_notebooks() for c in agent.notebooks.cells(n["id"]))
 
 
 def test_a_supported_or_empty_effort_is_accepted(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM()))
 
-    assert post_chat(client, model=SONNET, effort="max").status_code == 200
-    assert post_chat(client, model=GLM, effort="").status_code == 200  # empty means the model's default
+    assert post_run(client, model=SONNET, effort="max").status_code == 200
+    assert post_run(client, model=GLM, effort="").status_code == 200  # empty means the model's default
 
 
 SESSION_MODELS = [SONNET, "openai/gpt-5.6-terra", "qwen/qwen3.8-27b", "deepseek/deepseek-v4", GLM]
 
 
 @pytest.mark.parametrize("model", SESSION_MODELS)
-async def test_requests_share_a_session_id_within_a_conversation_and_differ_between_conversations(build_agent, model):
+async def test_requests_share_a_session_id_within_a_notebook_and_differ_between_notebooks(build_agent, model):
     agent, seen = provider_bodies(build_agent)
     async with agent:
-        first, second = Conversation(), Conversation()
-        for conversation in (first, second, first):
-            [e async for e in agent.run_turn(conversation, "q", 1000, model, None)]
+        first, second = agent.create_notebook(), agent.create_notebook()
+        for notebook in (first, second, first):
+            await turn(agent, model, None, notebook)
 
     ids = [body["session_id"] for body in seen]
     assert len(ids) == 3 and ids[0] == ids[2] and ids[0] != ids[1]

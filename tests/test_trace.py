@@ -3,9 +3,9 @@
 import json
 import re
 
-from conftest import ScriptedLLM, collect, last_tool_result, tool_call
+from conftest import ScriptedLLM, ask, collect, last_tool_result, tool_call
 
-from flood_agent.agent import Conversation, TraceReady
+from flood_agent.agent import TraceReady
 from flood_agent.llm import TextChunk
 
 SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
@@ -22,9 +22,9 @@ def chart_script():
     ]
 
 
-async def run(make_agent, llm, message="q", conversation=None):
+async def run(make_agent, llm, message="q", notebook=None):
     agent = await make_agent(llm)
-    events = await collect(agent, message, conversation)
+    events = await collect(agent, message, notebook)
     traces = [e for e in events if isinstance(e, TraceReady)]
     assert len(traces) == 1
     return agent, traces[0].trace
@@ -133,36 +133,26 @@ async def test_trace_never_reaches_the_llm(make_agent):
         lambda msgs: [tool_call("show_table", result_table=last_tool_result(msgs)["result_table"])],
         [TextChunk("ok")],
     )
-    conv = Conversation()
-    agent, trace = await run(make_agent, llm, "first", conv)
+    agent, trace = await run(make_agent, llm, "first")
     raw = of_kind(trace, "query_error")[0]["raw_error"]
     executed = of_kind(trace, "tool_call")[1]["executed_sql"]
 
     follow = ScriptedLLM([TextChunk("fine")])
     agent.client_for = lambda model: follow
-    await collect(agent, "second", agent.open_conversation(conv.id))
+    await collect(agent, "second", agent.notebooks.list_notebooks()[0]["id"])
     sent = llm.all_sent_text() + follow.all_sent_text()
     for secret in [raw, executed, "executed_sql", "raw_error", "prompt_tokens", "duration_ms", "query_metadata"]:
         assert secret not in sent, secret
 
 
-def ask(client, message, conversation_id=""):
-    posted = client.post("/chat", data={"message": message, "conversation_id": conversation_id, "max_rows": "1000"})
-    cid = re.search(r'name="conversation_id" value="([0-9a-f]+)"', posted.text).group(1)
-    stream_url = posted.text.split('sse-connect="')[1].split('"')[0]
-    return cid, client.get(stream_url).text
-
-
 def test_trace_is_collapsed_details_in_stream_and_after_restart(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM(*chart_script())))
-    cid, body = ask(client, "chart please")
-    assert "event: trace" in body
-    assert "<details" in body and body.count("open><summary>Result Tables and turn activity") == 1
-
+    nb, _, body = ask(client, "chart please")
+    assert "event: live-step" in body  # while it runs, each LLM call shows live
     restarted = web_client(build_agent(ScriptedLLM()))
-    page = restarted.get(f"/c/{cid}").text
+    page = restarted.get(f"/n/{nb}").text
     assert "<details" in page and page.count("open><summary>Result Tables and turn activity") == 1
-    assert page.count('class="trace"') == 1
+    assert page.count('class="trace cell-trace"') == 1
     assert page.count('class="trace-part"') >= 3
     assert '<details class="trace-part" open><summary>Result Tables' in page
     assert "CREATE TABLE results." in page and "z-ai/glm-5.3" in page
@@ -172,19 +162,19 @@ def test_trace_content_is_html_escaped(build_agent, web_client):
     sql = "SELECT '<script>alert(1)</script>' AS x FROM flows"
     llm = ScriptedLLM([tool_call("run_query", sql=sql, title="t")], [TextChunk("<b>hi</b>")])
     client = web_client(build_agent(llm))
-    cid, body = ask(client, "q")
-    page = client.get(f"/c/{cid}").text
+    nb, _, body = ask(client, "q")
+    page = client.get(f"/n/{nb}").text
     for text in (body, page):
         assert "<script>alert(1)</script>" not in text
         assert "&lt;script&gt;alert(1)&lt;/script&gt;" in text or "\\u003cscript" in text
 
 
-def test_each_turn_has_its_own_trace_on_reopen(build_agent, web_client):
+def test_each_cell_has_its_own_trace_on_reopen(build_agent, web_client):
     llm = ScriptedLLM([TextChunk("one")], [TextChunk("two")])
     client = web_client(build_agent(llm))
-    cid, _ = ask(client, "a")
-    ask(client, "b", cid)
-    assert client.get(f"/c/{cid}").text.count('class="trace"') == 2
+    nb, _, _ = ask(client, "a")
+    ask(client, "b", nb)
+    assert client.get(f"/n/{nb}").text.count('class="trace cell-trace"') == 2
 
 
 def test_split_system_prompt_into_three_parts():
@@ -203,8 +193,8 @@ def test_only_a_changed_result_tables_section_is_called_a_change_and_every_syste
     build_agent, web_client
 ):
     client = web_client(build_agent(ScriptedLLM(*chart_script())))
-    cid, _ = ask(client, "chart please")
-    page = client.get(f"/c/{cid}").text
+    nb, _, _ = ask(client, "chart please")
+    page = client.get(f"/n/{nb}").text
     # run_query adds a Result Table, so the second step's prompt differs in that section only
     assert "System prompt changed" not in page
     assert "Result Tables changed" in page
@@ -216,9 +206,9 @@ def test_an_unchanged_system_prompt_is_not_reported_as_changed(build_agent, web_
     client = web_client(
         build_agent(ScriptedLLM([tool_call("run_count_query", sql="SELECT COUNT(*) FROM flows", title="T")], [TextChunk("n")]))
     )
-    cid, _ = ask(client, "how many")
-    page = client.get(f"/c/{cid}").text
-    assert "changed" not in page.split('class="trace"')[1]
+    nb, _, _ = ask(client, "how many")
+    page = client.get(f"/n/{nb}").text
+    assert "changed" not in page.split('<details class="trace-part"')[1]
 
 
 async def test_each_llm_step_records_how_many_bytes_were_sent_to_the_model(make_agent):
@@ -233,8 +223,8 @@ async def test_each_llm_step_records_how_many_bytes_were_sent_to_the_model(make_
 
 def test_trace_shows_kilobytes_sent_after_each_llm_call(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM([TextChunk("hi")])))
-    _, body = ask(client, "hello")
-    assert re.search(r"LLM step \d+ &middot; \d+ ms &middot; [\d.]+ KB sent", body)
+    nb, _, _ = ask(client, "hello")
+    assert re.search(r"LLM step \d+ &middot; \d+ ms &middot; [\d.]+ KB sent", client.get(f"/n/{nb}").text)
 
 
 def render_trace(totals, usage):

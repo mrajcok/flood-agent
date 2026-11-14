@@ -6,11 +6,11 @@ import sqlite3
 from html import unescape
 
 import pytest
-from conftest import all_telemetry_values, collect, text_of
+from conftest import all_telemetry_values, collect, post_run, text_of
 from fastapi.testclient import TestClient
 
 from flood_agent.__main__ import build_app, picker_entries
-from flood_agent.agent import Conversation, DisplayEvent, TraceReady, TurnError
+from flood_agent.agent import DisplayEvent, TraceReady, TurnError
 from flood_agent.config import Settings
 from flood_agent.fake_llm import CannedPrompt, FakeClient, Step, load_canned_prompts, parent_of
 from flood_agent.llm import TextChunk, ToolCallChunk
@@ -52,12 +52,12 @@ async def test_the_too_many_rows_prompt_shows_a_table_truncated_to_the_row_cap(m
 async def test_every_canned_prompt_produces_its_declared_outcome(canned, make_agent, telemetry_db):
     llm = Recorder(fake_client())
     agent = await make_agent(llm, model="fake")
-    conversation = Conversation()
+    notebook = agent.create_notebook()
     parent = parent_of(canned, CANNED)
     if parent:
-        await collect(agent, parent.prompt, conversation, max_result_rows=FAKE_CAP)
+        await collect(agent, parent.prompt, notebook, max_result_rows=FAKE_CAP)
 
-    events = await collect(agent, canned.prompt, conversation, max_result_rows=FAKE_CAP)
+    events = await collect(agent, canned.prompt, notebook, max_result_rows=FAKE_CAP)
 
     assert [e.kind for e in events if isinstance(e, DisplayEvent)] == list(canned.expect.displays)
     trace = next(e.trace for e in events if isinstance(e, TraceReady))
@@ -111,12 +111,12 @@ async def test_a_failed_query_after_an_earlier_success_does_not_show_the_earlier
 ):
     agent = await make_agent(fake_client(), model="fake")
     top_dest = next(c for c in CANNED if c.id == "top-destinations")
-    conversation = Conversation()
-    await collect(agent, top_dest.prompt, conversation)
+    notebook = agent.create_notebook()
+    await collect(agent, top_dest.prompt, notebook)
     with sqlite3.connect(telemetry_db) as con:
         con.execute("DROP TABLE flows")
 
-    events = await collect(agent, top_dest.prompt, conversation)
+    events = await collect(agent, top_dest.prompt, notebook)
 
     assert "query failed" in text_of(events)
     assert not [e for e in events if isinstance(e, DisplayEvent)]
@@ -131,10 +131,10 @@ async def test_a_follow_up_whose_parent_query_failed_says_the_query_failed_not_r
     follow_up = next(c for c in CANNED if c.after)
     parent = parent_of(follow_up, CANNED)
     assert parent
-    conversation = Conversation()
-    await collect(agent, parent.prompt, conversation, max_result_rows=FAKE_CAP)
+    notebook = agent.create_notebook()
+    await collect(agent, parent.prompt, notebook, max_result_rows=FAKE_CAP)
 
-    events = await collect(agent, follow_up.prompt, conversation)
+    events = await collect(agent, follow_up.prompt, notebook)
 
     text = text_of(events)
     assert "query failed" in text
@@ -169,7 +169,7 @@ def test_no_model_works_without_an_api_key(tmp_path, telemetry_db, semantic_laye
     )
 
     with TestClient(build_app(settings)) as client:
-        reply = client.post("/chat", data={"message": "hi", "max_rows": "10", "model": "no-model"})
+        reply = post_run(client, max_rows="10", model="no-model")
     assert reply.status_code == 200
 
 
@@ -182,7 +182,7 @@ def test_real_models_are_refused_without_a_key_and_refuses_real_models_until_one
     )
 
     with TestClient(build_app(settings)) as client:
-        refused = client.post("/chat", data={"message": "hi", "max_rows": "10", "model": "anthropic/claude-sonnet-5.5"})
+        refused = post_run(client, max_rows="10", model="anthropic/claude-sonnet-5.5")
     assert refused.status_code == 422 and "OPENROUTER_API_KEY" in refused.json()["detail"]
 
 
@@ -204,10 +204,10 @@ async def test_a_follow_up_after_an_unrelated_prompt_replies_parent_first_and_ma
     unrelated = next(c for c in CANNED if c.id == "flow-count")
     assert parent and parent is not unrelated
     agent = await make_agent(fake_client(), model="fake")
-    conversation = Conversation()
-    await collect(agent, unrelated.prompt, conversation)
+    notebook = agent.create_notebook()
+    await collect(agent, unrelated.prompt, notebook)
 
-    events = await collect(agent, follow_up.prompt, conversation)
+    events = await collect(agent, follow_up.prompt, notebook)
 
     assert f"Fake Mode: run *{parent.prompt}* first in an AI Cell above" in text_of(events)
     assert not [e for e in events if isinstance(e, DisplayEvent)]

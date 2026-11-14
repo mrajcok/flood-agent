@@ -1,11 +1,9 @@
-"""Tool calls from different Conversations run concurrently on the shared MCP server."""
+"""Tool calls from different notebooks run concurrently on the shared MCP server."""
 
 import asyncio
 import time
 
 from conftest import ScriptedLLM, TextChunk, collect, tool_call
-
-from flood_agent.agent import Conversation
 
 SLOW_SQL = (
     "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c) SELECT count(*) AS n FROM c"
@@ -31,7 +29,7 @@ class RoutedLLM(ScriptedLLM):
             self.served[user].set()  # the turn's tool call is about to run
 
 
-async def test_slow_query_does_not_block_other_conversations(make_agent):
+async def test_slow_query_does_not_block_other_notebooks(make_agent):
     llm = RoutedLLM(
         {
             "slow": [tool_call("run_query", sql=SLOW_SQL, title="slow")],
@@ -43,7 +41,7 @@ async def test_slow_query_does_not_block_other_conversations(make_agent):
     finished = {}
 
     async def turn(message):
-        await collect(agent, message, Conversation())
+        await collect(agent, message)
         finished[message] = time.monotonic() - start
 
     slow = asyncio.create_task(turn("slow"))

@@ -1,2 +1,3 @@
-{# Context Usage: "187k tokens of 1M" and a bar. The page refreshes it from /context-meter when a turn ends. #}
-<span id="context-meter" class="ctx {{ context.level }}" title="{% if context.window %}Conversation context used (includes cached tokens), from the latest LLM call{% else %}No model is called{% endif %}">{{ context.text }}{% if context.window %} <span class="meter"><i style="width: {{ context.percent }}%"></i></span>{% endif %}</span>
+{# Context Usage: "187k tokens of 1M" and a bar. The page refreshes it from /context-meter when a turn ends.
+   In a cell's footer (`in_cell`) it is that cell's last LLM call against the window of the model it ran with. #}
+<span {% if not in_cell %}id="context-meter" {% endif %}class="ctx {{ context.level }}" title="{% if not context.window %}No model is called{% elif in_cell %}Context used by this cell's last LLM call (includes cached tokens), of the window of the model it ran with{% else %}Conversation context used (includes cached tokens), from the latest LLM call{% endif %}">{{ context.text }}{% if context.window %} <span class="meter"><i style="width: {{ context.percent }}%"></i></span>{% endif %}</span>

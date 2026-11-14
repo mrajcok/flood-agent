@@ -1,0 +1,41 @@
+  <div class="topbar">
+    <h1>Flood Agent</h1>
+    <div class="controls" x-data="{
+        show: { traces: true, live: true, tables: true },
+        init() {
+          try { Object.assign(this.show, JSON.parse(localStorage.getItem('viewToggles') || '{}')); } catch (e) {}
+          this.apply();
+          this.$watch('show', () => { this.apply(); try { localStorage.setItem('viewToggles', JSON.stringify(this.show)); } catch (e) {} });
+        },
+        apply() {
+          const c = document.body.classList;
+          c.toggle('hide-traces', !this.show.traces); c.toggle('hide-live', !this.show.live); c.toggle('hide-tables', !this.show.tables);
+        } }">
+    {% if dev %}
+    <span class="dev-shift" x-data="{ busy: false, msg: '',
+          async shift() {
+            this.busy = true; this.msg = '';
+            try {
+              const r = await fetch('/api/dev/shift-timestamps', { method: 'POST' });
+              const d = await r.json();
+              this.msg = r.ok ? 'Data shifted ' + (d.delta_ms / 86400000).toFixed(2) + ' days; its latest record is now.' : (d.detail || 'Could not shift the data.');
+            } catch (e) { this.msg = 'Could not shift the data.'; }
+            this.busy = false;
+          } }">
+      <button type="button" class="toggle-all" :disabled="busy" @click="shift()" title="Dev mode: move all timestamps so the latest record is the current time">Shift data to now</button>
+      <small role="status" x-show="msg" x-text="msg" x-cloak></small>
+    </span>
+    {% endif %}
+    <label class="view-switch"><input type="checkbox" x-model="show.traces"> Traces</label>
+    <label class="view-switch"><input type="checkbox" x-model="show.live" :disabled="!show.traces"> Live traces</label>
+    <label class="view-switch"><input type="checkbox" x-model="show.tables"> Table info</label>
+    {% if not notebook_page %}
+    <button type="button" class="toggle-all" x-data="{ anyOpen: true }"
+            x-init="const refresh = () => { anyOpen = !!document.querySelector('details.turn[open]') };
+                    new MutationObserver(refresh).observe(document.getElementById('chat'), { childList: true, subtree: true, attributes: true, attributeFilter: ['open'] });
+                    refresh()"
+            @click="const open = !anyOpen; document.querySelectorAll('details.turn').forEach(d => d.open = open)"
+            x-text="anyOpen ? 'Collapse turns' : 'Expand turns'">Collapse turns</button>
+    {% endif %}
+    </div>
+  </div>

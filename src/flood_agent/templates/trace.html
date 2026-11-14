@@ -7,15 +7,5 @@
       {% endif %}      {{ trace.totals.prompt_tokens }} tokens in / {{ trace.totals.completion_tokens }} out{{ cache_parts(trace.totals) }} &middot;
       {% if trace.totals.cost is not none %}${{ "%.3f"|format(trace.totals.cost) }}{% else %}cost n/a{% endif %} &middot;
       {{ "%.1f"|format(trace.totals.duration_ms / 1000) }} secs{% if trace.entries|selectattr("kind", "equalto", "stopped")|list %} &middot; stopped{% endif %}</span></summary>
-  {% set parts = trace.system_prompt|split_system_prompt %}
-  <details class="trace-part"><summary>System prompt</summary><pre>{{ parts[0] }}</pre></details>
-  <details class="trace-part"><summary>Semantic Layer</summary><pre>{{ parts[1] }}</pre></details>
-  <details class="trace-part" open><summary>Result Tables and turn activity</summary>
-  <pre>{{ parts[2] }}</pre>
-  {% set steps = namespace(n=0) %}
-  {% for e in trace.entries %}
-  {% if e.kind == "llm_step" %}{% set steps.n = steps.n + 1 %}{% endif %}{% set step = steps.n %}
-  {% include "trace_entry.html" %}
-  {% endfor %}
-  </details>
+  {% include "trace_body.html" %}
 </details>

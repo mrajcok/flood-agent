@@ -14,7 +14,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Callable
 
-from .store import COUNT_KIND
+from .store import COUNT_KIND, rename_data_source
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS notebooks (
@@ -361,6 +361,23 @@ class NotebookStore:
                 raise KeyError(display_id)
             definition = {**json.loads(row[0]), "value": value, "computed_at_ms": computed_at_ms}
             con.execute("UPDATE run_displays SET definition=? WHERE id=?", (json.dumps(definition), display_id))
+
+    def follow_rename(self, con: sqlite3.Connection, old: str, new: str) -> None:
+        """The Catalog's rename hook: point every Run Display and every Markdown Cell's embedded Display (and
+        their Chart Spec data references) at `new`, on the Catalog's connection so it commits or rolls back with
+        the registry rename."""
+        for row in con.execute("SELECT id, definition FROM run_displays WHERE result_table=?", (old,)).fetchall():
+            definition = json.dumps(rename_data_source(json.loads(row[1]), old, new))
+            con.execute("UPDATE run_displays SET result_table=?, definition=? WHERE id=?", (new, definition, row[0]))
+        for row in con.execute("SELECT id, draft FROM cells WHERE kind=? AND draft LIKE ?",
+                               (MARKDOWN, f"%{old}%")).fetchall():
+            draft = json.loads(row[1])
+            displays = rename_data_source(draft.get("displays") or [], old, new)
+            for d in displays:
+                if d.get("table") == old:
+                    d["table"] = new
+            if displays != (draft.get("displays") or []):
+                con.execute("UPDATE cells SET draft=? WHERE id=?", (json.dumps({**draft, "displays": displays}), row[0]))
 
     def displays(self, run_id: str) -> list[dict]:
         """The Display definitions of a Run: {id, after_message_id, kind, result_table, **definition}."""

@@ -371,8 +371,13 @@ def create_app(
         so it shows as running with no output."""
         draft, run = cell["draft"], cell["run"]
         if cell["kind"] == MARKDOWN:
+            embedded = draft.get("displays") or []
+            tables = {d["table"] for d in embedded}
+            expired = tables - agent.tables.live_among(tables)
+            displays = [display_item({"kind": d["kind"], "result_table": d["table"], "spec": d.get("spec"), "columns": []},
+                                     expired) for d in embedded]
             return {"id": cell["id"], "notebook_id": cell["notebook_id"], "kind": MARKDOWN,
-                    "text": draft.get("text", ""), "send_to_ai": bool(draft.get("send_to_ai"))}
+                    "text": draft.get("text", ""), "send_to_ai": bool(draft.get("send_to_ai")), "displays": displays}
         model = draft.get("model") or default_model
         view = {
             "id": cell["id"], "notebook_id": cell["notebook_id"], "kind": cell["kind"], "prompt": draft.get("prompt", ""),
@@ -539,6 +544,25 @@ def create_app(
     def copy_cell(notebook_id: str, cell_id: str):
         """Copy the cell's Draft into a new cell just below it; returns it with its bar, for htmx to place."""
         new_id = cell_operation(notebook_id, cell_id, lambda: agent.copy_cell(notebook_id, cell_id))
+        return cell_html(notebook_id, new_id, "notebook_slot.html")
+
+    @app.get("/n/{notebook_id}/cells/{cell_id}/copy-to-markdown")
+    def copy_to_markdown_preview(notebook_id: str, cell_id: str):
+        """The `rt_` tables a Copy to Markdown Cell would embed: the user may save (rename) them first."""
+        try:
+            return {"tables": cell_operation(notebook_id, cell_id, lambda: agent.markdown_copy_tables(notebook_id, cell_id))}
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+
+    @app.post("/n/{notebook_id}/cells/{cell_id}/copy-to-markdown", response_class=HTMLResponse)
+    def copy_to_markdown(notebook_id: str, cell_id: str, save: list[str] = Form([])):
+        """Insert a Markdown Cell below the AI Cell with its answer and Displays; each `save` is "rt_name:new_name"
+        (that table is renamed, so a Saved Table). Returns the new cell with its bar, for htmx to place."""
+        pairs = {old: new for old, _, new in (item.partition(":") for item in save)}
+        try:
+            new_id = cell_operation(notebook_id, cell_id, lambda: agent.copy_to_markdown_cell(notebook_id, cell_id, pairs))
+        except ValueError as e:
+            raise HTTPException(422, str(e))
         return cell_html(notebook_id, new_id, "notebook_slot.html")
 
     @app.get("/n/{notebook_id}/cells/{cell_id}/delete-preview")

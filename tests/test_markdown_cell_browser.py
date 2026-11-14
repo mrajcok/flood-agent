@@ -97,3 +97,9 @@ def test_the_edit_button_tooltip_mentions_double_click(live_page):
     cell.get_by_label("Markdown").fill("note")
     cell.get_by_role("button", name="Done").click()
     expect(cell.get_by_role("button", name="Edit")).to_have_attribute("title", re.compile("double-click", re.I))
+
+
+def test_the_done_button_tooltip_mentions_shift_enter(live_page):
+    page = live_page()
+    cell = open_notebook_with_markdown(page)
+    expect(cell.get_by_role("button", name="Done")).to_have_attribute("title", re.compile("shift.?enter", re.I))

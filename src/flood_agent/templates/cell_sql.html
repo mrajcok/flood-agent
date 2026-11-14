@@ -126,6 +126,7 @@
       {%- else -%}
         {{ r.status }}
       {%- endif %} &middot; {{ r.elapsed_s }} s &middot; ran <time data-ms="{{ cell.started_at_ms }}" x-data x-text="new Date({{ cell.started_at_ms }}).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })">{{ cell.ran_utc }}</time>
+      {%- if cell.refreshed_at_ms %} &middot; refreshed <time data-ms="{{ cell.refreshed_at_ms }}" x-data x-text="new Date({{ cell.refreshed_at_ms }}).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })"></time>{% endif %}
       {%- if r.truncated_to %} <span class="badge truncated">stopped at the {{ "{:,}".format(r.truncated_to) }}-row cap: there are probably more rows</span>{% endif %}
     </div>
     {% endif %}

@@ -44,7 +44,7 @@ from flood_agent.context_usage import context_usage
 from flood_agent.lookup_tables import InvalidLookupTable
 from flood_agent.notebooks import COUNT_KIND, DEFAULT_MAX_ROWS, MARKDOWN
 from flood_agent.queries import InvalidSort
-from flood_agent.show_commands import DESCRIBE_TABLE, SHOW_COMMANDS, SHOW_IN_TEXTBOX, is_show_statement
+from flood_agent.show_commands import DESCRIBE_TABLE, SHOW_COMMANDS, SHOW_IN_TEXTBOX, is_show_statement, statement_of
 from flood_agent.trace import short_model, split_system_prompt
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -305,6 +305,11 @@ def create_app(
             view["ran_utc"] = time.strftime("%H:%M UTC", time.gmtime(run["started_at"] / 1000))
             view["started_at_ms"] = run["started_at"]
             view["refreshed_at_ms"] = refreshed_elsewhere(run)
+            view["ran"] = {"statement": run["prompt"], "command": run["settings"].get("command") or "",
+                           "max_rows": run["settings"]["max_rows"]}
+            now = (statement_of(view["command"], view["table"]) if view["command"] else view["sql"],
+                   view["command"], view["max_rows"])
+            view["edited"] = now != tuple(view["ran"].values())
             return view
         ran = run["settings"]
         view["ran"] = {"prompt": run["prompt"], "model": ran["model"], "effort": ran["effort"] or "",

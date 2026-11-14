@@ -709,7 +709,8 @@ class Agent:
         sql, max_rows = draft.get("sql", ""), draft.get("max_rows") or DEFAULT_MAX_ROWS
         command, table = draft.get("command") or "", draft.get("table") or ""
         statement = statement_of(command, table) if command else sql
-        prior = (self.tables.tables_of_cell(cell_id) or [None])[-1]  # the table a re-run replaces, if still live
+        last = cell["run"]  # the table a re-run replaces: the latest Run's own Result Table, if still live; never a Saved Table
+        prior = next((t for t in (self.tables.tables_of_run(cell_id, last["id"]) if last else []) if t.kind == "result"), None)
         run_id = self.notebooks.start_run(cell_id, statement, {"max_rows": max_rows, "command": command}, "")
         stop = self._sql_stops[cell_id] = threading.Event()
         started = time.monotonic()
@@ -731,7 +732,7 @@ class Agent:
         displays: list[tuple] = []
         event: Event | None = None
         if outcome["status"] == "stopped":
-            detail = "Stopped by the user."
+            detail = "(stopped by the user)"  # as an AI Cell's stopped Run reads below
         elif outcome["status"] == "failed":
             detail = f"Failed: {outcome['error']}"
         elif "rows" in outcome:

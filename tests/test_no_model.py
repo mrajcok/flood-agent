@@ -50,7 +50,7 @@ def test_a_blank_model_field_means_the_default_model(build_agent, web_client):
 def test_no_model_is_listed_last_and_is_always_selectable(build_agent, web_client):
     page = web_client(build_agent(ScriptedLLM()), has_api_key=False).get("/").text
 
-    models = json.loads(html.unescape(re.search(r"models: (\[.*?\]), noModel", page, re.S).group(1)))
+    models = json.loads(html.unescape(re.search(r"models: (\[.*?\]), busy", page, re.S).group(1)))
     assert models[-1]["label"] == "No model" and models[-1]["disabled"] is False
     assert all(m["disabled"] is True for m in models[:-1])
 

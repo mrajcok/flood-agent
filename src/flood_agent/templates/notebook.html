@@ -17,7 +17,7 @@
     {# One flat list: each cell block is followed by its "add a cell" bar, so a cell of any kind can be placed
        between any two. The models and the busy flag are the scope every cell reads. #}
     <div id="cells" data-notebook-id="{{ notebook_id }}"
-         x-data="{ models: {{ models | tojson | forceescape }}, noModel: {{ no_model | tojson | forceescape }}, busy: false, staleIds: {{ stale_ids | tojson | forceescape }},
+         x-data="{ models: {{ models | tojson | forceescape }}, busy: false, staleIds: {{ stale_ids | tojson | forceescape }},
                    async refreshStale() {
                      /* Which AI Cells are stale can change whenever a cell does: ask the server. */
                      try {

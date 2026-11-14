@@ -139,7 +139,7 @@
       {% endif %}
     </div>
 
-    {% if cell.status and not cell.running and cell.kind == "ai" and cell.output %}
+    {% if cell.status and not cell.running and cell.output %}
     {# Copy to Markdown Cell: offers to save the answer's rt_ tables first, so the copy does not expire with them. #}
     <div class="copy-md" x-data="{ tables: [], names: {}, offer: false, error: '',
            async start() {

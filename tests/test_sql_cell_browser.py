@@ -155,3 +155,20 @@ def test_a_keyword_column_is_quoted_on_insert_and_unquoted_one_is_rejected_with_
     second.get_by_label("SQL", exact=True).fill(f"SELECT analyze FROM {result}")
     second.get_by_role("button", name="Run").click()
     expect(second.locator(".sql-error")).to_contain_text("put it in double quotes")
+
+
+def test_editing_a_ran_sql_cell_shows_the_edited_not_run_badge_until_it_is_back_to_what_ran(live_page, build_agent):
+    page = live_page(agent=build_agent(ScriptedLLM()))
+    cell = add_sql_cell(page)
+    badge = cell.get_by_text("edited, not run")
+    cell.get_by_label("SQL", exact=True).fill("SELECT dport FROM flows")
+    expect(badge).to_have_count(0)  # never run
+    cell.get_by_role("button", name="Run").click()
+    expect(cell.locator(".sql-status")).to_be_visible()
+    expect(badge).to_have_count(0)  # no element when not edited
+
+    cell.get_by_label("SQL", exact=True).fill("SELECT sip FROM flows")
+    expect(badge).to_be_visible()
+    expect(cell.locator(".output .display")).to_be_visible()  # the old output stays
+    cell.get_by_label("SQL", exact=True).fill("SELECT dport FROM flows")
+    expect(badge).to_have_count(0)

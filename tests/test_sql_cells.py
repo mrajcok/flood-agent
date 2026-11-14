@@ -219,3 +219,74 @@ async def test_a_second_cell_cannot_run_while_a_sql_cell_runs(make_agent):
         await run(agent, nb, other)
     agent.stop_cell(slow)
     await asyncio.wait_for(task, 10)
+
+
+async def test_a_re_run_never_overwrites_a_saved_table_it_makes_a_new_one(make_agent):
+    agent = await make_agent(ScriptedLLM())
+    nb = agent.create_notebook()
+    cell = agent.add_sql_cell(nb, sql="SELECT dport FROM flows", max_rows=2)
+    await run(agent, nb, cell)
+    first = table_of(agent, nb, 0)
+    agent.tables.update(first.name, new_name="my_ports")  # saved: no longer a Result Table
+    saved_rows = rows_of(agent, "my_ports")
+    agent.notebooks.edit_cell(cell, sql="SELECT sip FROM flows", max_rows=3)
+    await run(agent, nb, cell)
+
+    saved = agent.tables["my_ports"]
+    assert saved.kind == "saved" and saved.sql == "SELECT dport FROM flows" and rows_of(agent, "my_ports") == saved_rows
+    new = table_of(agent, nb, 0)
+    assert new.name != "my_ports" and new.kind == "result" and new.sql == "SELECT sip FROM flows"
+
+
+async def test_a_re_run_after_a_run_that_made_no_table_creates_a_new_table(make_agent):
+    agent = await make_agent(ScriptedLLM())
+    nb = agent.create_notebook()
+    cell = agent.add_sql_cell(nb, sql="SELECT dport FROM flows", max_rows=2)
+    await run(agent, nb, cell)
+    old = table_of(agent, nb, 0)
+    agent.notebooks.edit_cell(cell, sql="SELECT nosuchcolumn FROM flows")
+    await run(agent, nb, cell)  # failed: the latest Run made no table
+    agent.notebooks.edit_cell(cell, sql="SELECT sip FROM flows")
+    await run(agent, nb, cell)
+
+    new = table_of(agent, nb, 0)
+    assert new.name != old.name and agent.tables[old.name].sql == "SELECT dport FROM flows"
+
+
+async def test_a_stopped_sql_cell_reaches_the_ai_cell_below_as_stopped_by_the_user(make_agent):
+    llm = ScriptedLLM([TextChunk("ok")])
+    agent = await make_agent(llm, query_timeout_s=60)
+    nb = agent.create_notebook()
+    cell = agent.add_sql_cell(nb, sql=SLOW)
+    ai = agent.add_ai_cell(nb, prompt="q")
+    task = asyncio.create_task(run(agent, nb, cell))
+    for _ in range(100):
+        await asyncio.sleep(0.05)
+        if agent.running_cell(nb):
+            break
+    await asyncio.sleep(0.2)
+    agent.stop_cell(cell)
+    await asyncio.wait_for(task, 10)
+    await run(agent, nb, ai)
+
+    assert llm.calls[0][1]["content"] == f"[SQL Cell, run by the user] {SLOW}\n(stopped by the user)"
+
+
+async def test_the_context_roles_when_notes_and_sql_and_show_cells_precede_an_ai_prompt(make_agent):
+    llm = ScriptedLLM([TextChunk("ok")])
+    agent = await make_agent(llm)
+    nb = agent.create_notebook()
+    agent.add_markdown_cell(nb, text="a note", send_to_ai=True)
+    sql = agent.add_sql_cell(nb, sql="SELECT dport FROM flows", max_rows=2)
+    show = agent.add_sql_cell(nb, command="SHOW TABLES")
+    ai = agent.add_ai_cell(nb, prompt="q")
+    await run(agent, nb, sql)
+    await run(agent, nb, show)
+    await run(agent, nb, ai)
+
+    # Consecutive user messages are intentional (and valid for OpenRouter): each cell is its own message.
+    assert [m["role"] for m in llm.calls[0]] == ["system", "user", "user", "user", "user"]
+    contents = [m["content"] for m in llm.calls[0][1:]]
+    assert "a note" in contents[0]
+    assert contents[1].startswith("[SQL Cell, run by the user]") and contents[2].startswith("[SHOW Cell, run by the user]")
+    assert contents[3] == "q"

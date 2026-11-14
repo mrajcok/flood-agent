@@ -63,8 +63,20 @@
                async stop() {
                  this.stopping = true;
                  try { await fetch('/n/{{ notebook_id }}/cells/{{ cell.id }}/stop', { method: 'POST' }); } catch (e) {}
+               },
+               interrupt(e) {
+                 /* Esc, or Ctrl-C with nothing selected, stops this cell's run. Esc first closes an open popup or dialog. */
+                 if (!this.running || this.stopping || e.isComposing || e.metaKey || e.shiftKey) return;
+                 if (e.key === 'Escape') {
+                   if (this.pop || document.querySelector('dialog[open]')) return;
+                 } else {
+                   const f = document.activeElement, inField = f && f.selectionStart !== undefined && f.selectionStart !== f.selectionEnd;
+                   if (!(e.ctrlKey && !e.altKey && e.code === 'KeyC') || inField || window.getSelection().toString()) return;
+                   e.preventDefault();
+                 }
+                 this.stop();
                } }"
-     @keydown.escape.window="pop = false">
+     @keydown.escape.window="pop = false" @keydown.window="interrupt($event)">
   <div class="gutter">
     <span class="stale-dot" title="Cells above changed since this ran" role="img" aria-label="Stale: cells above changed since this ran"
           x-show="stale" {% if not cell.stale %}x-cloak{% endif %}></span>
@@ -114,8 +126,14 @@
           <span x-text="c.prompt"></span> <small class="fails" x-show="c.fails">fails on purpose</small></li></template>
       </ul>
     </div>
-    <textarea class="cell-prompt" x-show="!fake" rows="2" placeholder="Write a prompt (Shift-Enter to run)" aria-label="Prompt" x-model="prompt"
-              @blur="save()" @keydown.shift.enter.prevent="run()" {% if cell.running %}readonly{% else %}:readonly="running"{% endif %}></textarea>
+    <div class="prompt-box" x-show="!fake">
+      <textarea class="cell-prompt" rows="2" placeholder="Write a prompt (Shift-Enter to run)" aria-label="Prompt" x-model="prompt"
+                @blur="save()" @keydown.shift.enter.prevent="run()" {% if cell.running %}readonly{% else %}:readonly="running"{% endif %}></textarea>
+      {# The enter arrow and, while this cell runs, a Stop with a turning ring in the same spot (they cross-fade on .running).
+         Named "Send" and "Interrupt" so they stay distinct from the gutter's Run and Stop. #}
+      <button type="button" class="send" title="Send (Shift-Enter)" aria-label="Send" :disabled="busy || running || !prompt.trim()" @click="run()"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M20 4v9a2 2 0 0 1-2 2H9v4l-6-5.5L9 8v4h8V4z"/></svg></button>
+      <button type="button" class="send stop" title="Stop (Esc)" aria-label="Interrupt" :disabled="stopping" @click="stop()"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><rect x="8.5" y="8.5" width="7" height="7" rx="1" fill="currentColor" stroke="none"/></svg></button>
+    </div>
     <p class="cell-error" role="alert" x-show="error" x-text="error" x-cloak></p>
 
     <div class="output">

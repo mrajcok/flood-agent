@@ -99,4 +99,22 @@
   .cell-insert:hover button, .cell-insert:focus-within button, .cellblock:focus-within .cell-insert button { opacity: 1; visibility: visible; transition-delay: 0s; }
   .cell-tools button { border: 0; background: none; border-radius: .3rem; padding: .1rem .45rem; min-width: 1.8rem; color: #4b5568; font-size: .95rem; }
   .cell-tools button:disabled { opacity: .3; cursor: default; }
+  /* The AI Cell's enter arrow, inside the prompt box: a Send that becomes a Stop with a turning ring while the cell runs. */
+  .cellblock .prompt-box { position: relative; margin-top: .4rem; }
+  .cellblock .prompt-box textarea.cell-prompt { display: block; margin-top: 0; padding-right: 3.2rem; }
+  .prompt-box .send { position: absolute; right: 1.2rem; bottom: .4rem; width: 1.9rem; height: 1.9rem; padding: 0; border: 0; border-radius: .4rem;
+                      background: #4a6fd3; color: #fff; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+                      transition: opacity var(--fade, .2s) ease, transform var(--fade, .2s) ease, background .15s; }
+  .prompt-box .send:hover:not(:disabled) { background: #2a4ba0; }
+  .prompt-box .send:disabled { opacity: .45; cursor: default; }
+  .prompt-box .send.stop:disabled { opacity: .6; }
+  .prompt-box .send:focus-visible { outline: 2px solid #2a4ba0; outline-offset: 2px; }
+  .cellblock:not(.running) .prompt-box .send.stop, .cellblock.running .prompt-box .send:not(.stop) {
+    opacity: 0; transform: scale(.7); pointer-events: none; visibility: hidden;
+    transition: opacity var(--fade, .2s) ease, transform var(--fade, .2s) ease, visibility 0s linear var(--fade, .2s);
+  }
+  .prompt-box .send.stop circle { transform-box: fill-box; transform-origin: center; stroke-dasharray: 10 6; }
+  .cellblock.running .prompt-box .send.stop circle { animation: ring-turn 3s linear infinite; }
+  @keyframes ring-turn { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .cellblock.running .prompt-box .send.stop circle { animation-duration: 12s; } }
 </style>

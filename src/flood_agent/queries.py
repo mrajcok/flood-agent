@@ -75,6 +75,18 @@ _FORBIDDEN_WORDS = {
     "rollback", "savepoint", "release",
 }
 _ONLY_SELECT = "Only a single read-only SELECT statement is allowed."
+_QUOTE_HINT = (' A word the check does not allow (such as "analyze") may be a column name: put it in double quotes, '
+               'like "analyze".')
+# Words that are SQL keywords, not names: a column called one of these must be quoted to be selected.
+_KEYWORDS = _FORBIDDEN_WORDS | {
+    "select", "from", "where", "group", "order", "by", "having", "limit", "offset", "union", "all", "distinct",
+    "as", "on", "join", "left", "right", "inner", "outer", "cross", "natural", "using", "and", "or", "not", "in",
+    "is", "null", "like", "glob", "between", "case", "when", "then", "else", "end", "with", "table", "index",
+    "view", "values", "set", "into", "exists", "except", "intersect", "default", "key", "primary", "references",
+    "replace", "to", "add", "column", "check", "collate", "constraint", "foreign", "unique", "if", "for", "no",
+    "of", "row", "rows", "range", "window", "over", "partition", "filter", "current", "escape", "cast", "plan",
+    "query", "explain",
+}
 
 
 class QueryRejected(Exception):
@@ -131,7 +143,7 @@ def validate_select(sql: str) -> str:
     if not words or words[0] not in ("select", "with"):
         raise QueryRejected(_ONLY_SELECT)
     if _FORBIDDEN_WORDS & set(words):
-        raise QueryRejected(_ONLY_SELECT)
+        raise QueryRejected(_ONLY_SELECT + _QUOTE_HINT)
     if len(semis) > 1:
         raise QueryRejected(_ONLY_SELECT)
     if semis:
@@ -141,6 +153,30 @@ def validate_select(sql: str) -> str:
             raise QueryRejected(_ONLY_SELECT)
         return sql[: semis[0]]
     return sql
+
+
+def sql_name(identifier: str) -> str:
+    """`identifier` as it is written in a query: bare when it is a plain name, double-quoted when it is a keyword
+    or has odd characters."""
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", identifier) and identifier.lower() not in _KEYWORDS:
+        return identifier
+    return table_names.quote(identifier)
+
+
+def table_columns(telemetry_db: Path, results_db: Path, name: str, telemetry: bool) -> list[dict] | None:
+    """A table's column names and types (never rows), each with `insert`, the text to put in a query. `telemetry`
+    says which database `name` is in; None if it has no columns there. The caller has checked `name` is readable."""
+    if telemetry:
+        con = sqlite3.connect(f"file:{telemetry_db}?mode=ro", uri=True)
+        try:
+            cols = [{"name": n, "type": t or "ANY"} for n, t in
+                    con.execute("SELECT name, type FROM pragma_table_info(?)", (name,))]
+        finally:
+            con.close()
+    else:
+        described = describe_results_table(results_db, name)
+        cols = described["columns"] if described else []
+    return [{**c, "insert": sql_name(c["name"])} for c in cols] or None
 
 
 def now_ms() -> int:

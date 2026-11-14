@@ -177,3 +177,29 @@ async def test_a_pre_notebook_database_is_upgraded_by_dropping_its_old_data(buil
     assert upgraded.tables.names() == ["rt_new"]
     with sqlite3.connect(config.results_db) as con:
         assert con.execute("SELECT 1 FROM sqlite_master WHERE name='rt_old'").fetchone() is None
+
+
+async def test_runs_are_numbered_in_the_order_they_start_within_a_notebook(make_agent):
+    agent = await make_agent(ScriptedLLM([TextChunk("a")], [TextChunk("b")], [TextChunk("c")], [TextChunk("d")]))
+    nb, other = agent.create_notebook(), agent.create_notebook()
+    first, second = agent.add_ai_cell(nb, prompt="one"), agent.add_ai_cell(nb, prompt="two")
+    elsewhere = agent.add_ai_cell(other, prompt="three")
+    await run(agent, nb, first)
+    await run(agent, other, elsewhere)
+    await run(agent, nb, second)
+    await run(agent, nb, first)  # a re-run takes the next number
+
+    assert [run_of(agent, nb, i)["number"] for i in (0, 1)] == [3, 2]
+    assert run_of(agent, other, 0)["number"] == 1
+
+
+async def test_the_last_settings_run_are_those_of_the_most_recently_started_run(make_agent):
+    agent = await make_agent(ScriptedLLM([TextChunk("a")], [TextChunk("b")]))
+    assert agent.notebooks.last_settings() is None
+    nb = agent.create_notebook()
+    one = agent.add_ai_cell(nb, prompt="one", effort="high", max_rows=50)
+    two = agent.add_ai_cell(nb, prompt="two", effort="low", max_rows=7)
+    await run(agent, nb, one)
+    await run(agent, nb, two)
+    assert agent.notebooks.last_settings() == run_of(agent, nb, 1)["settings"]
+    assert agent.notebooks.last_settings()["max_rows"] == 7

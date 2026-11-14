@@ -535,6 +535,10 @@ class Agent:
         except BaseException as e:  # surfaced to the consumer
             await queue.put(e)
 
+    def running_cell(self, notebook_id: str) -> str | None:
+        """The id of the cell running in this notebook now, or None."""
+        return self._running_cells.get(notebook_id)
+
     def stop_cell(self, cell_id: str) -> bool:
         """Stop a running cell now. What it had streamed is kept and its Run is recorded as stopped.
         False if the cell is not running."""

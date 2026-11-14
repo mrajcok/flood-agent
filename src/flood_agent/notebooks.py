@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS runs (
   settings TEXT NOT NULL,
   context_fingerprint TEXT NOT NULL,
   started_at INTEGER NOT NULL,
+  number INTEGER NOT NULL DEFAULT 0,
   finished_at INTEGER,
   context_tokens INTEGER,
   trace BLOB
@@ -72,6 +73,8 @@ class NotebookStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as con, con:
             con.executescript(SCHEMA)
+            if not any(r["name"] == "number" for r in con.execute("PRAGMA table_info(runs)")):
+                con.execute("ALTER TABLE runs ADD COLUMN number INTEGER NOT NULL DEFAULT 0")  # a database from before it
 
     def _connect(self) -> sqlite3.Connection:
         con = sqlite3.connect(self.path)
@@ -171,7 +174,7 @@ class NotebookStore:
         return {
             "id": run["id"], "status": run["status"], "prompt": run["prompt"],
             "settings": json.loads(run["settings"]), "context_fingerprint": run["context_fingerprint"],
-            "started_at": run["started_at"], "finished_at": run["finished_at"],
+            "number": run["number"], "started_at": run["started_at"], "finished_at": run["finished_at"],
             "context_tokens": run["context_tokens"], "messages": messages,
             "trace": json.loads(run["trace"]) if run["trace"] else None,
         }
@@ -182,16 +185,27 @@ class NotebookStore:
         """Replace the cell's latest Run with a new, running one; returns its id."""
         run_id, now = uuid.uuid4().hex, self._now()
         with closing(self._connect()) as con, con:
+            notebook_id = con.execute("SELECT notebook_id FROM cells WHERE id=?", (cell_id,)).fetchone()[0]
+            number = con.execute(  # the notebook's run counter: the highest number in use, plus one
+                "SELECT COALESCE(MAX(r.number), 0) + 1 FROM runs r JOIN cells c ON c.id = r.cell_id"
+                " WHERE c.notebook_id=?", (notebook_id,)).fetchone()[0]
             old = con.execute("SELECT id FROM runs WHERE cell_id=?", (cell_id,)).fetchone()
             if old:
                 for table in ("run_displays", "run_messages"):
                     con.execute(f"DELETE FROM {table} WHERE run_id=?", (old["id"],))
                 con.execute("DELETE FROM runs WHERE id=?", (old["id"],))
             con.execute(
-                "INSERT INTO runs(id, cell_id, status, prompt, settings, context_fingerprint, started_at)"
-                " VALUES (?,?,?,?,?,?,?)", (run_id, cell_id, "running", prompt, json.dumps(settings), fingerprint, now))
-            self._touch(con, con.execute("SELECT notebook_id FROM cells WHERE id=?", (cell_id,)).fetchone()[0])
+                "INSERT INTO runs(id, cell_id, status, prompt, settings, context_fingerprint, started_at, number)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                (run_id, cell_id, "running", prompt, json.dumps(settings), fingerprint, now, number))
+            self._touch(con, notebook_id)
         return run_id
+
+    def last_settings(self) -> dict | None:
+        """The settings (model, effort, max_rows) of the most recently started Run in any notebook, or None."""
+        with closing(self._connect()) as con:
+            row = con.execute("SELECT settings FROM runs ORDER BY started_at DESC, rowid DESC LIMIT 1").fetchone()
+        return json.loads(row[0]) if row else None
 
     def finish_run(self, run_id: str, status: str) -> None:
         with closing(self._connect()) as con, con:
@@ -228,6 +242,20 @@ class NotebookStore:
         with closing(self._connect()) as con, con:
             con.execute("UPDATE runs SET trace=?, context_tokens=? WHERE id=?",
                         (json.dumps(trace).encode("utf-8"), context_tokens, run_id))
+
+    def transcript(self, run_id: str) -> list[dict]:
+        """A Run's messages interleaved with its Displays, as `ConversationStore.transcript` gives them (no Trace):
+        {"type": "message", "message"} and {"type": "display", "display_id", "kind", "result_table", **definition}."""
+        displays = self.displays(run_id)
+        with closing(self._connect()) as con:
+            rows = con.execute("SELECT id, body FROM run_messages WHERE run_id=? ORDER BY id", (run_id,)).fetchall()
+        out: list[dict] = []
+        for row in rows:
+            out.append({"type": "message", "message": json.loads(row["body"])})
+            out += [{"type": "display", "display_id": d["id"],
+                     **{k: v for k, v in d.items() if k not in ("id", "after_message_id")}}
+                    for d in displays if d["after_message_id"] == row["id"]]
+        return out
 
     def displays(self, run_id: str) -> list[dict]:
         """The Display definitions of a Run: {id, after_message_id, kind, result_table, **definition}."""

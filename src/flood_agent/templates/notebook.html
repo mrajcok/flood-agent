@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} - Flood Agent</title>
+  {% include "_head.html" %}
+  {% include "notebook_style.html" %}
+</head>
+<body data-model="{{ default_model }}">
+  {% include "_topbar.html" %}
+  <div class="layout">
+  <div class="scroll-y" id="history-area">{% include "sidebar.html" %}</div>
+  <main>
+  <div class="scroll-y nb" id="prompt-area">
+    <h2 class="nb-title">{{ title }}</h2>
+    {# One flat list: each cell block is followed by its "add a cell" bar, so a cell of any kind can be placed
+       between any two. The models and the busy flag are the scope every cell reads. #}
+    <div id="cells" data-notebook-id="{{ notebook_id }}"
+         x-data="{ models: {{ models | tojson | forceescape }}, noModel: {{ no_model | tojson | forceescape }}, busy: false,
+                   watch() {
+                     const update = () => { this.busy = !!this.$el.querySelector('.cellblock.running'); };
+                     new MutationObserver(update).observe(this.$el, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+                     update();
+                   } }" x-init="watch()">
+      {% for cell in cells %}{% include "notebook_slot.html" %}{% endfor %}
+    </div>
+  </div>
+  </main>
+  </div>
+  {% include "_dialogs.html" %}
+  <script>
+    // The prompt box last used takes a table name copied from the Tables dialog or a Display (insertIntoChat).
+    document.addEventListener("focusin", (e) => { if (e.target.matches && e.target.matches("textarea.cell-prompt")) window.lastPromptBox = e.target; });
+  </script>
+</body>
+</html>

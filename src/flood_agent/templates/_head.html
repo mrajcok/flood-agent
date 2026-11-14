@@ -1,0 +1,295 @@
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
+  <script src="/static/format.js?v={{ static_version('format.js') }}"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
+  <script src="/static/markdown.js?v={{ static_version('markdown.js') }}"></script>
+  <script defer src="https://unpkg.com/alpinejs@3.14.8/dist/cdn.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vega@5.30.0"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vega-lite@5.21.0"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vega-embed@6.26.0"></script>
+  <script src="/static/chart.js?v={{ static_version('chart.js') }}"></script>
+  <script src="/static/refresh.js?v={{ static_version('refresh.js') }}"></script>
+  <script src="/static/table_name.js?v={{ static_version('table_name.js') }}"></script>
+  <style>
+    html, body { height: 100%; }
+    body { font-family: system-ui, sans-serif; max-width: 60rem; margin: 0 auto; padding: 0 1rem; box-sizing: border-box;
+           display: flex; flex-direction: column; overflow: hidden; }
+    .topbar { flex: none; display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+    .topbar h1 { margin: .6rem 0; }
+    .controls { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+    /* View toggles: sliders that hide traces, live traces and table info. On = shown. */
+    .hide-traces details.trace, .hide-traces .live-trace, .hide-live .live-trace, .hide-tables .table-name { display: none !important; }
+    .view-switch { display: inline-flex; align-items: center; gap: .4rem; font-size: .9rem; cursor: pointer; user-select: none; }
+    .view-switch input { appearance: none; width: 2rem; height: 1.1rem; border-radius: 999px; background: #c5cbd8; position: relative; margin: 0; cursor: pointer; transition: background var(--fade, .2s); }
+    .view-switch input::after { content: ""; position: absolute; top: .1rem; left: .1rem; width: .9rem; height: .9rem; border-radius: 50%; background: #fff; transition: left var(--fade, .2s); }
+    .view-switch input:checked { background: #2a4ba0; }
+    .view-switch input:checked::after { left: 1rem; }
+    .view-switch input:disabled { opacity: .45; cursor: default; }
+    .view-switch input:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 2px; }
+    .toggle-all { font: inherit; color: #2a4ba0; background: #eef3fd; border: 1px solid #b9c7e6; border-radius: 999px; padding: .25rem .8rem; }
+    .toggle-all:hover { background-color: #dce7fb; }
+    .toggle-all:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
+    /* The strip under the prompt box: model and context on the left, the row cap on the right.
+       Controls read as plain text until hovered; they open rounded popovers above. */
+    .strip { position: relative; margin-top: .3rem; color: #444; font-size: .9rem; }
+    .strip .row { display: flex; align-items: center; flex-wrap: wrap; gap: .15rem .5rem; white-space: nowrap; }
+    .strip .spacer { flex: 1; min-width: .5rem; }
+    .strip .sep { color: #b4b8c2; }
+    .strip .dd { position: relative; }
+    .strip .trig { font: inherit; color: inherit; background: transparent; border: 0; border-radius: .4rem; padding: .1rem .3rem; margin: 0 -.3rem; cursor: pointer; line-height: 1.5; }
+    .strip .trig:hover, .strip .trig.open { background: #e3e8f4; }
+    .strip .trig:disabled { cursor: default; color: #8a91a3; background: transparent; }
+    .strip .trig:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
+    .strip .meter { display: inline-block; width: 4.5rem; height: .4rem; background: #e3e7ef; border-radius: 999px; overflow: hidden; vertical-align: middle; }
+    .strip .meter i { display: block; height: 100%; background: #4a6fd3; }
+    .strip .amber .meter i { background: #d98e04; } .strip .red .meter i { background: #c0392b; }
+    .strip .ctx.amber { color: #8a5a00; } .strip .ctx.red { color: #a52a1e; font-weight: 600; }
+    .strip .panel { position: absolute; bottom: calc(100% + .45rem); right: -.4rem; z-index: 10; background: #fff; border: 1px solid #cfd5e2; border-radius: 1rem;
+                    box-shadow: 0 8px 24px rgba(30,40,80,.18); padding: .5rem; min-width: 12rem; display: grid; gap: .1rem; white-space: nowrap; }
+    .strip .panel.left { right: auto; left: -.4rem; }
+    .strip .item:disabled { color: #8a91a3; cursor: not-allowed; background: transparent; }
+    .strip .item small { color: #8a91a3; }
+    .strip .panel h6 { margin: .2rem .7rem .15rem; font-size: .7rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #8a91a3; }
+    .strip .panel h6.sentence { text-transform: none; letter-spacing: 0; font-size: .75rem; }
+    .strip .item { display: flex; align-items: center; gap: .5rem; width: 100%; text-align: left; font: inherit; color: #333; background: transparent; border: 0;
+                   border-radius: .6rem; cursor: pointer; padding: .4rem .7rem; }
+    .strip .item:hover { background: #e9eefb; }
+    .strip .item .tick { width: 1em; color: #4a6fd3; }
+    .strip .panel input[type=text] { font: inherit; width: 8ch; margin: .2rem .7rem; padding: .25rem .5rem; border: 1px solid #cfd5e2; border-radius: .5rem; text-align: right; }
+    .toggle-all { cursor: pointer; font-size: .9rem; }
+    .scroll-y { overflow-y: auto; min-height: 0; }
+    .user { margin: 1.25rem 0 .45rem; padding: .6rem .9rem; background: #e8f0fe; border-radius: .75rem; white-space: pre-wrap; }
+    summary.user { cursor: pointer; position: relative; padding-right: 2.2rem; }
+    .turn-actions { position: absolute; top: .45rem; right: .6rem; }
+    .turn-actions form { margin: 0; display: block; }
+    .turn-delete button { background: none; border: 0; color: #667; cursor: pointer; font-size: 1.1rem; line-height: 1; padding: 0 .2rem; }
+    .turn-delete button:hover { color: #a00; }
+    /* Reply text is Markdown rendered by markdown.js into .md segments. */
+    .reply .md-plain, .reply .md-delta { white-space: pre-wrap; }
+    .reply .md { line-height: 1.5; }
+    .reply .md > :first-child { margin-top: 0; }
+    .reply .md > :last-child { margin-bottom: 0; }
+    .reply .md p, .reply .md ul, .reply .md ol, .reply .md pre, .reply .md table, .reply .md blockquote { margin: .5rem 0; }
+    .reply .md ul, .reply .md ol { padding-left: 1.5rem; }
+    .reply .md h1, .reply .md h2, .reply .md h3, .reply .md h4 { font-size: 1rem; margin: .75rem 0 .25rem; }
+    .reply .md code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: .85em;
+                      background: #f2f4f8; border-radius: .25rem; padding: .05rem .3rem; }
+    .reply .md pre { background: #f2f4f8; border-radius: .4rem; padding: .5rem .75rem; overflow-x: auto; }
+    .reply .md pre code { background: none; padding: 0; }
+    .reply .md table { border-collapse: collapse; font-size: .9rem; }
+    .reply .md th, .reply .md td { border: 1px solid #d6dae3; padding: .2rem .5rem; text-align: left; }
+    .reply .md blockquote { border-left: 3px solid #d6dae3; padding-left: .75rem; color: #4b5563; }
+    .layout { display: flex; gap: 1.5rem; align-items: stretch; flex: 1; min-height: 0; padding-bottom: 1rem; }
+    aside { width: 14rem; flex: none; }
+    main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    #prompt-area { flex: 1; padding-right: .5rem; }
+    /* Two sections: Tables (its actions as links), then Conversations (its heading carries New chat). */
+    aside .sec-head { display: flex; align-items: center; justify-content: space-between; margin: 1rem .2rem .3rem .6rem;
+                      font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #6b7280; }
+    aside .sec-head:first-child { margin-top: .1rem; }
+    aside .sec-head small { font-weight: 400; color: #9ca3af; margin-left: .25rem; letter-spacing: 0; }
+    aside a.new, aside button.new { display: inline-flex; align-items: center; justify-content: center; width: 1.6rem; height: 1.6rem; border-radius: .4rem;
+                  background: #4a6fd3; color: #fff; text-decoration: none; font-size: .9rem; letter-spacing: 0; }
+    aside button.new { border: 0; padding: 0; font: inherit; font-size: .9rem; cursor: pointer; }
+    aside .sec-head form { margin: 0; }
+    aside a.new:hover, aside button.new:hover { background: #3b5cb8; }
+    aside a.new:focus-visible, aside button.new:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
+    aside .lookup, aside .show-tables { margin: 0; }
+    aside .sidebar-action { display: block; width: 100%; text-align: left; font: inherit; font-size: .92rem; padding: .3rem .6rem; border: 0; border-radius: .4rem; background: none; color: #2a4ba0; cursor: pointer; }
+    aside .sidebar-action:hover { background: #eef3fd; }
+    aside .sidebar-action:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
+    dialog { border: 1px solid #ccc; border-radius: .75rem; box-shadow: 0 8px 24px rgba(0,0,0,.2); padding: 1.25rem 1.5rem; }
+    dialog::backdrop { background: rgba(0,0,0,.35); }
+    dialog form { flex-direction: column; align-items: stretch; gap: .75rem; margin: 0; }
+    dialog h3, dialog p { margin: 0; }
+    dialog label:has(input[type=radio]), dialog label:has(input[type=checkbox]) { display: flex; align-items: baseline; gap: .5rem; }
+    dialog [hidden] { display: none !important; }
+    dialog .actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .25rem; }
+    dialog .actions button { font: inherit; font-size: .9rem; padding: .4rem 1.1rem; border-radius: .5rem; cursor: pointer;
+      border: 1px solid #c4c9d4; background: #fff; color: #333; }
+    dialog .actions button:hover { background: #f2f4f8; }
+    dialog .actions button:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 2px; }
+    dialog .actions button:disabled { opacity: .6; cursor: default; }
+    dialog .actions button.primary { border-color: #4a6fd3; background: #4a6fd3; color: #fff; }
+    dialog .actions button.primary:hover:not(:disabled) { background: #3b5cb8; border-color: #3b5cb8; }
+    dialog .actions button.danger { border-color: #c62828; background: #c62828; color: #fff; }
+    dialog .actions button.danger:hover { background: #a31f1f; border-color: #a31f1f; }
+    dialog .actions button.danger:focus-visible { outline-color: #c62828; }
+    #delete-dialog { width: min(30rem, 90vw); }
+    #delete-result-choice { display: flex; flex-direction: column; gap: .75rem; }
+    .lookup dialog { width: min(36rem, 90vw); }
+    .lookup dialog textarea { width: 100%; box-sizing: border-box; font-family: monospace; }
+    .lookup dialog .prefix { font-family: monospace; }
+    .lookup dialog .hint { font-size: .85rem; }
+    .lookup dialog .add-fields { display: flex; flex-direction: column; gap: .75rem; }
+    .lookup dialog .separator { display: flex; flex-wrap: wrap; gap: .25rem 1.25rem; border: 0; padding: 0; margin: 0; font-size: .9rem; }
+    .lookup dialog .separator legend { padding: 0; margin-bottom: .25rem; }
+    .lookup dialog .error, .show-tables dialog .error { color: #b3261e; }
+    .show-tables dialog.table-viewer[open] { min-width: min(24rem, 90vw); max-width: min(70rem, 95vw); margin: 3rem auto auto; max-height: calc(100vh - 5rem); box-sizing: border-box; overflow: auto; }
+    .show-tables dialog.table-viewer .viewer-body { overflow-x: auto; }
+    .show-tables dialog[open]:not(.table-viewer) { width: min(30rem, 90vw); margin: 4rem auto auto; max-height: calc(100vh - 6rem); box-sizing: border-box; display: flex; flex-direction: column; gap: .75rem; }
+    .show-tables dialog .filters { display: flex; flex-wrap: wrap; gap: .25rem 1.25rem; font-size: .9rem; }
+    .show-tables dialog .table-list { flex: 1 1 auto; min-height: 4rem; overflow-y: auto; border-top: 1px solid #e3e6ec; border-bottom: 1px solid #e3e6ec; padding: .25rem 0; }
+    .show-tables dialog h4 { margin: .6rem 0 .25rem; font-size: .9rem; color: #2a4ba0; }
+    .show-tables dialog ul { list-style: none; padding: 0; margin: 0; }
+    .show-tables dialog li { display: block; padding: .1rem .25rem; border-radius: .35rem; }  /* not the sidebar's flex li */
+    .show-tables dialog li .row { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+    .show-tables dialog li .row-actions { flex: none; display: flex; gap: .25rem; }
+    .show-tables dialog li .confirm button { font: inherit; font-size: .8rem; padding: .1rem .6rem; border-radius: .4rem; border: 1px solid #b9c3d6; background: #fff; cursor: pointer; }
+    .show-tables dialog li .confirm button.danger { border-color: #c62828; background: #c62828; color: #fff; }
+    .show-tables dialog li:hover { background: #f2f4f8; }
+    .show-tables dialog li code { overflow-wrap: anywhere; }
+    .show-tables dialog li .row code { flex: 1 1 auto; }
+    .show-tables dialog li .expires { flex: none; font-size: .8rem; color: #6b7280; white-space: nowrap; }
+    .show-tables dialog .copy, .show-tables dialog .view, .show-tables dialog .edit, .show-tables dialog .delete { flex: none; background: none; border: 0; color: #4a6fd3; cursor: pointer; font-size: 1rem; line-height: 1; width: 1.6rem; padding: .15rem 0; text-align: center; border-radius: .3rem; }  /* fixed width: glyph widths differ, names must line up */
+    .show-tables dialog .copy:hover, .show-tables dialog .view:hover, .show-tables dialog .edit:hover, .show-tables dialog .delete:hover { background: #dce7fb; }
+    .show-tables dialog .delete { color: #c62828; }
+    .show-tables dialog .delete:hover { background: #fbe3e3; }
+    .show-tables dialog .copy:focus-visible, .show-tables dialog .view:focus-visible, .show-tables dialog .edit:focus-visible, .show-tables dialog .delete:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
+    .toast { position: fixed; left: 50%; top: 1rem; transform: translateX(-50%); z-index: 20; max-width: min(36rem, 90vw);
+             padding: .6rem 1rem; border-radius: .6rem; background: #1f3a2b; color: #fff; box-shadow: 0 4px 16px rgba(0,0,0,.25); }
+    aside ul { list-style: none; padding: 0; margin: .5rem 0; }
+    aside li { display: flex; align-items: center; gap: .25rem; padding: 0 .4rem 0 .6rem; }
+    aside li a { display: block; flex: 1; min-width: 0; padding: .25rem 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* Conversations read as a list, not links or buttons: plain text, gray on hover, darker gray for the open one. */
+    aside > ul > li { border-radius: .4rem; }
+    aside > ul > li a { color: #1f2937; text-decoration: none; }
+    aside > ul > li:hover { background: #f4f5f7; }
+    aside > ul > li.current { background: #eceef2; }
+    aside > ul > li.current a { font-weight: 600; }
+    [x-cloak] { display: none !important; }
+    aside .menu { position: relative; }
+    aside .dots { background: none; border: 0; color: #666; cursor: pointer; padding: 0 .4rem; font-size: 1.1rem; line-height: 1; }
+    aside .dots:hover { color: #000; }
+    aside .popup { position: absolute; right: 0; z-index: 10; min-width: 7rem; background: #fff; border: 1px solid #ccc; border-radius: .5rem; box-shadow: 0 2px 8px rgba(0,0,0,.15); padding: .25rem 0; }
+    aside form.rename { flex: 1; margin: 0; display: block; }
+    aside form.rename input { width: 100%; box-sizing: border-box; padding: .2rem .35rem; }
+    aside .popup form { margin: 0; display: block; }
+    aside .popup button { display: block; width: 100%; text-align: left; background: none; border: 0; padding: .3rem .75rem; cursor: pointer; }
+    aside .popup button:hover { background: #f0f0f0; }
+    .display table { border-collapse: collapse; border-spacing: 0; margin: .5rem 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: .85rem; }
+    .display th.num, .display td.num { text-align: right; }
+    th, td { border: 0; border-bottom: 1px solid #ddd; padding: .25rem .6rem; text-align: left; }
+    th { border-bottom-color: #999; }
+    .table-name { margin: .5rem 0 .25rem; font-size: .95rem; }
+    .table-name .name { font-weight: 600; color: #2a4ba0; }
+    .table-name .icons { display: inline-flex; gap: .1rem; margin-left: .3rem; vertical-align: middle; }
+    .table-name .icons button { background: none; border: 0; color: #4a6fd3; cursor: pointer; font-size: 1rem; line-height: 1; width: 1.6rem; padding: .15rem 0; text-align: center; border-radius: .3rem; }
+    .table-name .icons button:hover:not(:disabled) { background: #dce7fb; }
+    .table-name .icons button:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 1px; }
+    .table-name .icons .delete { color: #c62828; }
+    .table-name .icons .delete:hover { background: #fbe3e3; }
+    .table-name .icons .refresh:disabled { cursor: progress; color: #6b7280; }
+    .table-name .icons .refresh.busy { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .table-name .confirm { margin-left: .4rem; }
+    .table-name .confirm button { font: inherit; font-size: .8rem; padding: .1rem .6rem; border-radius: .4rem; border: 1px solid #b9c3d6; background: #fff; cursor: pointer; }
+    .table-name .confirm button.danger { border-color: #c62828; background: #c62828; color: #fff; }
+    .table-name .expires { margin-left: .4rem; font-size: .8rem; color: #6b7280; white-space: nowrap; }
+    .count-display .refresh { font: inherit; font-size: .85rem; margin-left: .4rem; padding: .05rem .6rem; border: 1px solid #c4c9d4; border-radius: .4rem; background: #fff; color: #333; cursor: pointer; }
+    .count-display .refresh:hover:not(:disabled) { background: #f2f4f8; }
+    .count-display .refresh:disabled { cursor: progress; color: #6b7280; }
+    .table-name .as-of { margin-left: .4rem; font-size: .8rem; color: #6b7280; white-space: nowrap; }
+    .table-name .refresh-error, .count-display .refresh-error { margin-left: .4rem; }
+    .table-name .editor { display: flex; flex-direction: row; gap: .5rem; align-items: center; flex-wrap: wrap; }  /* row: also in the Tables viewer, where "dialog form" stacks */
+    .table-name input[type=text] { font: inherit; min-width: 14rem; padding: .2rem .5rem; border: 1px solid #b9c7e6; border-radius: .4rem; }
+    .table-name input[type=number] { font: inherit; width: 6rem; padding: .2rem .4rem; border: 1px solid #b9c7e6; border-radius: .4rem; }
+    .table-name select { font: inherit; padding: .2rem .4rem; border: 1px solid #c4c9d4; border-radius: .4rem; color: #333; background: #f6f7f9; cursor: pointer; }
+    .table-name .editor button { font: inherit; font-size: .9rem; padding: .25rem .9rem; border-radius: .5rem; cursor: pointer; border: 1px solid #c4c9d4; background: #fff; color: #333; }
+    .table-name .editor button:hover { background: #f2f4f8; }
+    .table-name .editor button:focus-visible { outline: 2px solid #4a6fd3; outline-offset: 2px; }
+    .table-name .editor button.primary { border-color: #4a6fd3; background: #4a6fd3; color: #fff; }
+    .table-name .editor button.primary:hover { background: #3b5cb8; border-color: #3b5cb8; }
+    .table-name .err { color: #a00; font-size: .85rem; }
+    .pager { display: flex; gap: .75rem; align-items: center; font-size: .9rem; }
+    .chart-hint { margin: .2rem 0 0; font-size: .8rem; color: #6b7280; text-align: right; }
+    /* No gap under a chart: a block canvas has no baseline space below it, and Vega's (empty) form
+       for parameter widgets would otherwise pick up the page's form margin. */
+    .display.chart canvas, .display.chart svg { display: block; }
+    .display.chart .vega-bindings:empty { display: none; }
+    .badge-truncated { padding: .1rem .6rem; border: 1px solid #e0c36a; border-radius: 999px; background: #fdf3d0; color: #7a5b00; font-size: .8rem; }
+    .pager button { padding: .25rem .8rem; border: 1px solid #b9c7e6; border-radius: 999px; background: #eef3fd; color: #2a4ba0; font: inherit; cursor: pointer; }
+    .pager button:hover:not(:disabled) { background: #dce7fb; }
+    .pager button:disabled { opacity: .45; cursor: default; }
+    th { user-select: none; }
+    .flag-note { margin: .4rem 0; padding: .4rem .6rem; border-left: 4px solid #c60; background: #fff4e5; font-size: .9rem; }
+    .trace { margin: .5rem 0; font-size: .85rem; color: #444; }
+    .trace summary { cursor: pointer; }
+    .trace pre { white-space: pre-wrap; word-break: break-word; background: #f6f6f6; padding: .4rem; margin: .2rem 0; }
+    .trace h4 { margin: .6rem 0 .2rem; }
+    .sql-label .explain { font: inherit; font-size: .8rem; margin-left: .4rem; padding: 0 .5rem; border: 1px solid #e0c36a; border-radius: .4rem; background: #fff4d1; color: #5c4300; cursor: pointer; }  /* amber: stands out from the grey trace without the blue of the table icons */
+    .sql-label .explain:hover { background: #ffe8a3; }
+    .sql-label .explain:focus-visible { outline: 2px solid #b8860b; outline-offset: 1px; }
+    dialog.explain { width: min(44rem, 90vw); display: none; flex-direction: column; gap: .6rem; }
+    dialog.explain[open] { display: flex; }
+    dialog.explain pre.sql { white-space: pre-wrap; word-break: break-word; background: #f6f6f6; padding: .4rem; margin: 0; max-height: 12rem; overflow: auto; }
+    dialog.explain .note { font-size: .85rem; color: #6b7280; }
+    dialog.explain .error { color: #b3261e; white-space: pre-wrap; }
+    dialog.explain .plan { list-style: none; margin: 0; padding: 0; font-family: monospace; font-size: .9rem; }
+    dialog.explain .plan li { margin: .15rem 0; }
+    .live-trace { margin: .5rem 0; font-size: .85rem; color: #444; }
+    .live-trace summary { cursor: pointer; }
+    .live-trace .live-step { margin: .15rem 0; }
+    .live-trace pre { white-space: pre-wrap; word-break: break-word; background: #f6f6f6; padding: .4rem; margin: .2rem 0; }
+    .live-trace h4 { margin: .6rem 0 .2rem; }
+    form { display: flex; gap: .5rem; margin-top: 1rem; }
+    .canned { display: none; position: relative; margin-top: .5rem; font-size: .9rem; }
+    body[data-model={{ no_model }}] .canned { display: block; }  /* Canned Prompts show only under "No model" */
+    .canned input { width: 100%; box-sizing: border-box; font: inherit; padding: .45rem .6rem; border: 1px solid #cfd5e2; border-radius: .6rem; }
+    .canned ul { position: absolute; left: 0; right: 0; bottom: calc(100% + .3rem); margin: 0; padding: .3rem; list-style: none; max-height: 50vh; overflow: auto;
+                 background: #fff; border: 1px solid #cfd5e2; border-radius: .8rem; box-shadow: 0 8px 24px rgba(30,40,80,.18); z-index: 10; }
+    .canned li { padding: .35rem .6rem; border-radius: .5rem; cursor: pointer; }
+    .canned li.on { background: #e9eefb; }
+    .canned li.follow { padding-left: 1.6rem; }
+    .canned .fails { color: #a40; font-size: .8em; }
+    .refusal { margin: .4rem 0; padding: .4rem .6rem; border-left: 4px solid #b00; background: #fdecec; font-size: .9rem; }
+    .chat-box { flex: 1; position: relative; display: flex; }
+    textarea[name=message] { flex: 1; box-sizing: border-box; padding: .5rem 2.4rem .5rem .5rem; font: inherit; line-height: 1.4;
+                             resize: none; overflow-y: auto; max-height: 40vh; border: 1px solid #999; border-radius: .5rem; }
+    .chat-box .send { position: absolute; right: .3rem; bottom: .3rem; width: 1.9rem; height: 1.9rem; padding: 0; border: 0; border-radius: .4rem;
+                      background: #4a6fd3; color: #fff; font-size: 1.1rem; line-height: 1; cursor: pointer;
+                      display: inline-flex; align-items: center; justify-content: center; }
+    .chat-box .send:hover { background: #2a4ba0; }
+    .chat-box .send.stop:disabled { opacity: .6; cursor: default; }
+    /* Send and Stop share one spot and cross-fade as the turn starts and ends (the form's data-busy). */
+    .chat-box .send { transition: opacity var(--fade) ease, transform var(--fade) ease, background .15s; }
+    form:not([data-busy]) .send.stop, form[data-busy] .send:not(.stop) {
+      opacity: 0; transform: scale(.7); pointer-events: none; visibility: hidden;
+      transition: opacity var(--fade) ease, transform var(--fade) ease, visibility 0s linear var(--fade);
+    }
+    /* While busy, the Stop icon's dashed ring turns slowly. */
+    .send.stop circle { transform-box: fill-box; transform-origin: center; stroke-dasharray: 10 6; }
+    form[data-busy] .send.stop circle { animation: ring-turn 3s linear infinite; }
+    @keyframes ring-turn { to { transform: rotate(360deg); } }
+    /* A turn's live trace: each LLM call fades in, the one before folds away smoothly, and the whole block
+       fades and folds away when the turn's Trace line fades in. (Folding needs Chrome 131+; elsewhere it is abrupt.) */
+    :root { --fade: .35s; --appear: .4s; --collapse: .5s; --leave: .6s; interpolate-size: allow-keywords; }
+    @keyframes fade-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+    .live-step, .live-step section, .turn[data-turn-id] details.trace { animation: fade-in var(--appear) ease-out; }
+    .live-step::details-content { height: 0; overflow: clip; transition: height var(--collapse) ease, content-visibility var(--collapse) allow-discrete; }
+    .live-step[open]::details-content { height: auto; }
+    /* A turn, and a finished Trace, slide and fade as they collapse and expand. */
+    details.turn::details-content, details.trace::details-content { height: 0; overflow: clip; opacity: 0;
+      transition: height var(--collapse) ease, opacity var(--collapse) ease, content-visibility var(--collapse) allow-discrete; }
+    details.turn[open]::details-content, details.trace[open]::details-content { height: auto; opacity: 1; }
+    /* Closing starts and ends gently: scrolled into a tall Trace, the shrinking chat drags its scroll position with it, which
+       the default curve's fast start made a lurch. Opening keeps `ease`. */
+    details.turn:not([open])::details-content, details.trace:not([open])::details-content { transition-timing-function: ease-in-out; }
+    /* Opening another conversation is a page load: cross-fade the chat pane and keep the sidebar still. */
+    @view-transition { navigation: auto; }
+    #sidebar { view-transition-name: sidebar; }
+    #prompt-area { view-transition-name: chat; }
+    ::view-transition-group(chat) { overflow: clip; }
+    @keyframes chat-out { to { opacity: 0; } } @keyframes chat-in { from { opacity: 0; } }
+    ::view-transition-old(chat) { animation: chat-out .22s ease both; }
+    ::view-transition-new(chat) { animation: chat-in .3s ease .1s both; }
+    @media (prefers-reduced-motion: reduce) { ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; } }
+    .live-trace.leaving { overflow: hidden; opacity: 0; max-height: 0 !important; margin-top: 0; margin-bottom: 0; pointer-events: none;
+                          transition: opacity var(--leave) ease, max-height var(--leave) ease, margin var(--leave) ease; }
+    @media (prefers-reduced-motion: reduce) {
+      :root { --fade: 0s; --appear: 0s; --collapse: 0s; --leave: 0s; }
+      form[data-busy] .send.stop circle { animation-duration: 12s; }
+    }
+    .chat-box .send:focus-visible { outline: 2px solid #2a4ba0; outline-offset: 2px; }
+  </style>

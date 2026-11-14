@@ -229,6 +229,15 @@
       </form>
     </dialog>
   </div>
+  <h2 class="sec-head notebooks"><span>Notebooks <small>{{ notebooks|length }}</small></span>
+    <form method="post" action="/notebooks"><button type="submit" class="new" aria-label="New notebook" title="New notebook">&#xFF0B;</button></form></h2>
+  <ul class="notebook-list">
+    {% for n in notebooks %}
+    <li{% if n.id == current_notebook_id %} class="current"{% endif %}>
+      <a href="/n/{{ n.id }}" @mouseenter="$el.title = $el.scrollWidth <= $el.clientWidth ? '' : $el.textContent">{{ n.title }}</a>
+    </li>
+    {% endfor %}
+  </ul>
   <h2 class="sec-head conversations"><span>Conversations <small>{{ conversations|length }}</small></span><a class="new" href="/" aria-label="New chat" title="New chat">&#xFF0B;</a></h2>
   <ul>
     {% for c in conversations %}

@@ -1,0 +1,44 @@
+<style>
+  .nb { padding-right: .5rem; }
+  .nb .nb-title { margin: .2rem 0 .4rem; font-size: 1.15rem; }
+  .cellblock { display: flex; gap: .4rem; margin: .5rem 0 0; }
+  .cellblock .gutter { width: 3.2rem; flex: none; text-align: right; font-family: ui-monospace, Menlo, monospace; font-size: .78rem; color: #8a91a3; padding-top: .45rem; }
+  .cellblock .gbtn { font: inherit; border: 0; background: #eef3fd; color: #2a4ba0; border-radius: 50%; width: 1.7rem; height: 1.7rem; cursor: pointer; }
+  .cellblock .gbtn:disabled { opacity: .45; cursor: default; }
+  .cellblock .gbtn.stop { background: #fde8e8; color: #a40; }
+  .cellblock .cell { flex: 1; min-width: 0; position: relative; border: 1px solid #dfe3ec; border-left: 4px solid #c5cbd8; border-radius: .6rem; padding: .55rem .8rem; background: #fff; }
+  .cellblock .cell.ai { border-left-color: #4a6fd3; }
+  .cellblock.running .cell { box-shadow: 0 0 0 2px #c9d6f6; }
+  .cellblock .head { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; font-size: .85rem; }
+  .cellblock .kind { font-size: .7rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #8a91a3; }
+  .cellblock .grow { flex: 1; }
+  .cellblock .chip-wrap { position: relative; }
+  .cellblock .chip { font: inherit; font-size: .82rem; color: #2a4ba0; background: #eef3fd; border: 1px solid #b9c7e6; border-radius: 999px; padding: .05rem .65rem; cursor: pointer; }
+  .cellblock .chip:disabled { opacity: .55; cursor: default; }
+  .cellblock .pop { position: absolute; right: 0; top: calc(100% + .3rem); z-index: 20; background: #fff; border: 1px solid #cfd5e2; border-radius: .8rem;
+                    box-shadow: 0 8px 24px rgba(30,40,80,.18); padding: .7rem; display: grid; gap: .4rem; min-width: 17rem; font-size: .9rem; }
+  .cellblock .pop label.f { display: grid; grid-template-columns: 5rem 1fr; align-items: center; gap: .5rem; }
+  .cellblock .pop select, .cellblock .pop input { font: inherit; font-size: .88rem; padding: .15rem .3rem; border: 1px solid #cfd5e2; border-radius: .4rem; }
+  .cellblock .pop small { color: #6b7280; }
+  .cellblock textarea.cell-prompt { width: 100%; box-sizing: border-box; font: inherit; padding: .45rem .65rem; border: 1px solid #cfd5e2; border-radius: .5rem; resize: vertical; margin-top: .4rem; }
+  .cellblock textarea.cell-prompt[readonly] { background: #f6f7fa; }
+  .cellblock .cell-error { color: #a52a1e; margin: .3rem 0 0; font-size: .85rem; }
+  .cellblock .output { margin-top: .4rem; line-height: 1.5; }
+  .cellblock .output .reply { margin: .3rem 0; }
+  .cellblock .cell-stopped { margin: .3rem 0; color: #6b2fa0; font-size: .85rem; }
+  .cellblock .drawer { background: #f8f9fb; border: 1px solid #e3e7ef; border-radius: .5rem; padding: .3rem .6rem; }
+  .cellblock .drawer:empty, .cellblock .drawer:not(:has(.live-step)) { display: none; }
+  .cellblock .cell-foot { margin-top: .35rem; font-size: .82rem; color: #6b7280; }
+  .cellblock .cell-trace { margin: 0; }
+  .cellblock .cell-trace > summary { display: flex; flex-wrap: wrap; gap: .25rem .4rem; align-items: center; }
+  .cellblock .cell-trace > summary .trace-totals { white-space: normal; }
+  .cellblock .badge { font-size: .75rem; border-radius: 999px; padding: .05rem .55rem; white-space: nowrap; }
+  .cellblock .badge.stopped { background: #f3e8fd; color: #6b2fa0; }
+  .cellblock .badge.failed { background: #fde8e8; color: #a52a1e; }
+  .cellblock .cell-foot .meter { display: inline-block; width: 3.5rem; height: .35rem; background: #e3e7ef; border-radius: 999px; overflow: hidden; vertical-align: middle; }
+  .cellblock .cell-foot .meter i { display: block; height: 100%; background: #4a6fd3; }
+  .cellblock .cell-foot .amber .meter i { background: #d98e04; } .cellblock .cell-foot .red .meter i { background: #c0392b; }
+  .add-bar { display: flex; gap: .5rem; justify-content: center; margin: .25rem 0; opacity: .55; padding-left: 3.6rem; }
+  .add-bar:hover, .add-bar:focus-within { opacity: 1; }
+  .add-bar button { font: inherit; font-size: .8rem; color: #2a4ba0; background: #eef3fd; border: 1px solid #b9c7e6; border-radius: 999px; padding: .05rem .7rem; cursor: pointer; }
+</style>

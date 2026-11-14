@@ -2,9 +2,16 @@
    `cell` comes from web.cell_view; `models` and `busy` are the notebook's (see notebook.html). #}
 {% set state = "running" if cell.running else (cell.status or "not-run") %}
 <div class="cellblock ai{% if cell.running %} running{% endif %}" id="cell-{{ cell.id }}" data-cell-id="{{ cell.id }}" data-kind="ai" data-state="{{ state }}"
+     data-edited="{{ 'true' if cell.edited else 'false' }}" :data-edited="edited"
      {% if cell.polling %}hx-get="/n/{{ notebook_id }}/cells/{{ cell.id }}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}
      x-data="{ prompt: {{ cell.prompt | tojson | forceescape }}, model: {{ cell.model | tojson | forceescape }}, effort: {{ cell.effort | tojson | forceescape }},
                maxRows: {{ cell.max_rows | tojson | forceescape }}, pop: false, error: '', stopping: false,
+               ran: {{ cell.ran | tojson | forceescape }},
+               get edited() {
+                 /* The Draft differs from what ran: the old output stays, marked, and cells below are sent what ran. */
+                 const r = this.ran;
+                 return !!r && (this.prompt !== r.prompt || this.model !== r.model || this.effort !== r.effort || String(this.maxRows) !== String(r.max_rows));
+               },
                running: {{ cell.running | tojson }},
                get spec() { return models.find(m => m.id === this.model) || {}; },
                get efforts() { return this.spec.efforts || []; },
@@ -35,6 +42,14 @@
                    el.outerHTML = html;  /* the running cell: it opens its own stream */
                    htmx.process(document.getElementById('cell-{{ cell.id }}'));
                  } catch (e) { this.error = 'Could not run this cell. Try again.'; }
+               },
+               async clearEarlier() {
+                 try {
+                   const r = await fetch('/n/{{ notebook_id }}/cells/{{ cell.id }}/earlier-tables/delete', { method: 'POST' });
+                   if (!r.ok) return;
+                   this.$root.outerHTML = await r.text();
+                   htmx.process(document.getElementById('cell-{{ cell.id }}'));
+                 } catch (e) {}
                },
                async stop() {
                  this.stopping = true;
@@ -109,10 +124,22 @@
           {%- if f.calls is not none %} &middot; {{ f.calls }} LLM call{{ "" if f.calls == 1 else "s" }}{% endif %}
           {%- if f.trace %} &middot; {% if f.cost is not none %}${{ "%.3f"|format(f.cost) }}{% else %}cost n/a{% endif %}{% endif %}</span>
           {%- with context=f.context, in_cell=true %} &middot; {% include "context_meter.html" %}{% endwith %}
-          {%- if f.stopped %} <span class="badge stopped">stopped</span>{% elif f.failed %} <span class="badge failed">failed</span>{% endif %}</summary>
+          {%- if f.stopped %} <span class="badge stopped">stopped</span>{% elif f.failed %} <span class="badge failed">failed</span>{% endif %}
+          <span class="badge edited" x-show="edited" {% if not cell.edited %}x-cloak{% endif %} title="The prompt or settings changed since this ran; the cells below were sent what ran">edited, not run</span></summary>
         {% if f.trace %}{% with trace=f.trace %}{% include "trace_body.html" %}{% endwith %}{% endif %}
       </details>
     </div>
+    {% endif %}
+
+    {% if cell.earlier_tables and not cell.running %}
+    <details class="earlier-tables">
+      <summary>Tables from earlier runs ({{ cell.earlier_tables|length }})</summary>
+      <p class="note">Kept until their Retention ends; not sent to the AI. Cells below can still query them.</p>
+      {% for t in cell.earlier_tables %}
+      {% with settings_url=t.settings_url %}{% include "table_name.html" %}{% endwith %}
+      {% endfor %}
+      <button type="button" class="danger" @click="clearEarlier()" :disabled="running">Delete all <code>rt_</code> tables</button>
+    </details>
     {% endif %}
   </div>
 </div>

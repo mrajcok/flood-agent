@@ -1,6 +1,14 @@
 <style>
   .nb { padding-right: .5rem; position: relative; }
   .nb .nb-title { margin: .2rem 0 .4rem; font-size: 1.15rem; }
+  /* Report View: the cells show only what they produced. Traces and table info are hidden by the body's hide-* classes. */
+  .report-view #cells .gutter, .report-view #cells .cell-tools, .report-view #cells .cell-insert, .report-view #cells .head,
+  .report-view #cells .sql-tools, .report-view #cells .cell-canned, .report-view #cells .cell-actions, .report-view #cells .earlier-tables,
+  .report-view #cells .output-toggle, .report-view #cells .sql-note, .report-view #cells .badge.edited, .report-view #cells .pager a,
+  .report-view #cells .cells-empty, .report-view #cells .cellblock[data-state="not-run"], .report-view #cells .cellblock[data-empty="true"] { display: none !important; }
+  .report-view.outputs-collapsed #cells .cellblock .output { display: block !important; }
+  .report-view #cells .cell { border: 0; padding: 0; background: none; }
+  .report-view #cells textarea { pointer-events: none; resize: none; border: 0; background: #f6f7fa; }
   .cellblock { display: flex; gap: .4rem; margin: calc(.5rem + 4px) 0 0; }
   /* Room above the first cell so its hover toolbar is not clipped by the fixed title line. */
   #cells { padding: .6rem 0 .8rem; }

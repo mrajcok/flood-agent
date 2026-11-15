@@ -1,5 +1,5 @@
 # work items
-- /grill-with-docs I want to add a "report view" that removes the cell gutters, buttons and links. It makes the notebook essentially read-only. Maybe add a "Report" or "Report view" button in the top area that toggles this mode. It should only affect the cells area of the page. The AI, SQL, Markdown lines should be hidden in the cells too. Any row cap yellow
+- /grill-with-docs I want to add a "report view" that removes the cell gutters, buttons and links. It makes the notebook essentially read-only. Maybe add a "Report" or "Report view" button in the top area that toggles this mode. It should only affect the cells area of the page. The AI, SQL, Markdown lines should be hidden in the cells too. Table info should be hidden. Traces should be hidden. The SQL note about only metadata is sent to AI cells below should be hidden.
 - AI cell: add a toggle (off by default) for prompt results/answers to go to the LLM. Are there cases we want the LLM to see the data? What if the data is sensitive?
 - Run all / Run all below. This is the start of the workflow idea, and #106 ruled it out.
 - more eval. In particular, there were eval errors. Can we adjust the prompts/semantic layer to get better ressults, or do we need to use a better model?

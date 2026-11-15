@@ -1,15 +1,21 @@
   <div class="topbar">
     <h1 title="Cyber AI Notebook for Operations, Peering, and telemetrY"><span class="initial">C</span><span class="rest">ANOPY</span></h1>
     <div class="controls" x-data="{
-        show: { traces: true, live: true, tables: true },
+        show: { traces: true, live: true, tables: true, report: false },
         init() {
           try { Object.assign(this.show, JSON.parse(localStorage.getItem('viewToggles') || '{}')); } catch (e) {}
           this.apply();
           this.$watch('show', () => { this.apply(); try { localStorage.setItem('viewToggles', JSON.stringify(this.show)); } catch (e) {} });
+          /* Report View is for reading: a Cell's text cannot be focused, and a Markdown note cannot be double-clicked open. */
+          const reading = () => document.body.classList.contains('report-view');
+          document.addEventListener('focusin', e => { if (reading() && e.target.closest && e.target.closest('#cells textarea')) e.target.blur(); });
+          document.addEventListener('dblclick', e => { if (reading() && e.target.closest && e.target.closest('#cells .md-preview')) e.stopPropagation(); }, true);
         },
         apply() {
           const c = document.body.classList;
-          c.toggle('hide-traces', !this.show.traces); c.toggle('hide-live', !this.show.live); c.toggle('hide-tables', !this.show.tables);
+          /* Report View hides traces and table info whatever their own switches say; those keep their values. */
+          const r = this.show.report;
+          c.toggle('report-view', r); c.toggle('hide-traces', r || !this.show.traces); c.toggle('hide-live', r || !this.show.live); c.toggle('hide-tables', r || !this.show.tables);
         } }">
     {% if dev %}
     <span class="dev-shift" x-data="{ busy: false, msg: '',
@@ -26,10 +32,11 @@
       <small role="status" x-show="msg" x-text="msg" x-cloak></small>
     </span>
     {% endif %}
-    <label class="view-switch"><input type="checkbox" x-model="show.traces"> Traces</label>
-    <label class="view-switch"><input type="checkbox" x-model="show.live" :disabled="!show.traces"> Live traces</label>
-    <label class="view-switch"><input type="checkbox" x-model="show.tables"> Table info</label>
-    <button type="button" class="toggle-all" x-data="{ collapsed: false }"
+    <label class="view-switch" title="Show only what the cells produced: no controls, no editing"><input type="checkbox" x-model="show.report"> Report view</label>
+    <label class="view-switch"><input type="checkbox" x-model="show.traces" :disabled="show.report"> Traces</label>
+    <label class="view-switch"><input type="checkbox" x-model="show.live" :disabled="show.report || !show.traces"> Live traces</label>
+    <label class="view-switch"><input type="checkbox" x-model="show.tables" :disabled="show.report"> Table info</label>
+    <button type="button" class="toggle-all" :disabled="show.report" x-data="{ collapsed: false }"
             @click="collapsed = !collapsed; document.body.classList.toggle('outputs-collapsed', collapsed); document.querySelectorAll('.output-shown').forEach(c => c.classList.remove('output-shown'))"
             ><span class="toggle-label" :class="{ 'label-hidden': collapsed }">Collapse outputs</span><span class="toggle-label label-hidden" :class="{ 'label-hidden': !collapsed }">Expand outputs</span></button>
     </div>

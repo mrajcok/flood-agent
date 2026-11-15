@@ -62,6 +62,9 @@
   .cell-canned li.follow { padding-left: 1.6rem; }
   .cell-canned .fails { color: #a40; font-size: .8em; }
   .cellblock textarea.cell-prompt[readonly] { background: #f6f7fa; }
+  /* The AI and SQL boxes are one line, and grow with their text (a newline, or a wrapped line). */
+  .cellblock textarea.autosize { min-height: 0; }
+  @supports (field-sizing: content) { .cellblock textarea.autosize { field-sizing: content; resize: none; } }
   .cellblock .cell-actions { display: flex; flex-wrap: wrap; align-items: baseline; gap: .1rem 1rem; margin-top: .3rem; }
   .cellblock .copy-md { display: contents; }  /* its button joins the row; its save offer and error take a line of their own, below */
   .cellblock .copy-md .save-offer, .cellblock .copy-md .cell-error { flex-basis: 100%; order: 1; }

@@ -29,7 +29,7 @@
       <button type="button" class="linkish" x-show="!editing" title="Edit this note (double-clicking it also edits)" @click="editing = true">Edit</button>
       <button type="button" class="linkish" x-show="editing" x-cloak title="Render the Markdown (Shift+Enter also renders it)" @click="done()">Done</button>
     </div>
-    <textarea class="cell-prompt" rows="4" aria-label="Markdown" placeholder="Write notes in Markdown" x-model="text"
+    <textarea class="cell-prompt autosize" rows="1" aria-label="Markdown" placeholder="Write notes in Markdown" x-model="text"
               x-show="editing" {% if cell.text.strip() %}x-cloak{% endif %} @blur="save()" @keydown.shift.enter.prevent="done()"></textarea>
     <button type="button" class="linkish output-toggle" x-show="!editing" @click="$el.closest('.cellblock').classList.toggle('output-shown')"><span class="show-label">Show output</span><span class="hide-label">Hide output</span></button>
     <div class="output md-preview" x-show="!editing" {% if not cell.text.strip() %}x-cloak{% endif %} @dblclick="editing = true">

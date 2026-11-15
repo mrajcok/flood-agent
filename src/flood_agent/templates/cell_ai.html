@@ -124,7 +124,7 @@
           <span x-text="c.prompt"></span> <small class="fails" x-show="c.fails">fails on purpose</small></li></template>
       </ul>
     </div>
-    <textarea class="cell-prompt" x-show="!fake" rows="2" placeholder="Write a prompt (Shift-Enter to run)" aria-label="Prompt" x-model="prompt"
+    <textarea class="cell-prompt autosize" x-show="!fake" rows="1" placeholder="Write a prompt (Shift-Enter to run)" aria-label="Prompt" x-model="prompt"
               @blur="save()" @keydown.shift.enter.prevent="run()" {% if cell.running %}readonly{% else %}:readonly="running"{% endif %}></textarea>
     <p class="cell-error" role="alert" x-show="error" x-text="error" x-cloak></p>
 

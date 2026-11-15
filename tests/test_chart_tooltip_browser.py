@@ -26,21 +26,59 @@ def chart_script(sql, mark, encoding):
     ]
 
 
+# A chart is drawn by a library loaded from a CDN, and the full suite runs several browsers at once: wait generously
+# for it, then for it to stop moving, rather than hovering a chart that is still being laid out.
+CHART_TIMEOUT = 20_000
+
+
+def settled_box(page, plot):
+    """The plot's bounding box once it has stopped changing (a chart can be resized as it finishes drawing)."""
+    last = None
+    for _ in range(100):
+        box = plot.bounding_box()
+        if box and box == last:
+            return box
+        last = box
+        page.wait_for_timeout(100)
+    raise AssertionError("the chart never stopped moving")
+
+
+def chart_plot(page):
+    plot = page.locator(".display.chart canvas, .display.chart svg.marks").first
+    expect(plot).to_be_visible(timeout=CHART_TIMEOUT)
+    expect(page.locator(".drawer")).to_have_count(0, timeout=CHART_TIMEOUT)  # the layout stops moving once the live trace has folded away
+    return plot
+
+
 def tooltip_on_hover(page):
     """Ask for the scripted chart, then sweep the pointer over the plot until a tooltip shows."""
     run_in_new_notebook(page, "chart it")
-    plot = page.locator(".display.chart canvas, .display.chart svg.marks").first
-    expect(plot).to_be_visible()
-    expect(page.locator(".drawer")).to_have_count(0)  # the layout stops moving once the live trace has folded away
+    plot = chart_plot(page)
     tooltip = page.locator("#vg-tooltip-element.visible")
-    box = plot.bounding_box()
-    assert box
+    box = settled_box(page, plot)
     for i in range(1, 40):
         for j in range(1, 10):
             page.mouse.move(box["x"] + box["width"] * i / 40, box["y"] + box["height"] * j / 10)
+            page.wait_for_timeout(15)  # let the chart handle the move before looking for its tooltip
             if tooltip.count():
                 return tooltip
     raise AssertionError("no tooltip anywhere on the plot")
+
+
+def hover_until(page, point, tooltip, *texts):
+    """Move the pointer to `point()` until the tooltip shows every text: the chart may still be settling when the
+    pointer first arrives, so the point is worked out again each time."""
+    for _ in range(40):
+        x, y = point()
+        page.mouse.move(x, y)
+        try:
+            for text in texts:
+                expect(tooltip).to_contain_text(text, timeout=250)
+            return
+        except AssertionError:
+            page.wait_for_timeout(100)
+    for text in texts:  # report the real failure
+        expect(tooltip).to_contain_text(text)
 
 
 def test_hovering_a_bar_shows_its_fields_in_a_tooltip_with_thousands_separators(live_page, build_agent):
@@ -81,19 +119,19 @@ def test_a_line_chart_shows_the_nearest_points_tooltip_with_the_pointer_anywhere
     )
     page = live_page(agent=build_agent(ScriptedLLM(*script)))
     run_in_new_notebook(page, "chart it")
-    plot = page.locator(".display.chart canvas, .display.chart svg.marks").first
-    expect(plot).to_be_visible()
-    # The line runs from 987,654 bytes down to 123,457 and back up to 555,321: the plot's top-right
-    # corner is far from it, and the nearest point is the last one.
-    origin = page.locator(".display.chart").evaluate(
-        "el => { const v = Alpine.$data(el).view; return [...v.origin(), v.width()]; }"
-    )
-    box = plot.bounding_box()
-    assert box
-    page.mouse.move(box["x"] + origin[0] + origin[2] - 5, box["y"] + origin[1] + 5)
-    tooltip = page.locator("#vg-tooltip-element.visible")
-    expect(tooltip).to_contain_text("555,321")
-    expect(tooltip).to_contain_text("2023-11-14 22:13:22")
+    plot = chart_plot(page)
+    page.wait_for_function("() => { const v = Alpine.$data(document.querySelector('.display.chart')).view; return !!v && v.width() > 0; }")
+
+    def top_right_corner():
+        # The line runs from 987,654 bytes down to 123,457 and back up to 555,321: the plot's top-right
+        # corner is far from it, and the nearest point is the last one.
+        origin = page.locator(".display.chart").evaluate(
+            "el => { const v = Alpine.$data(el).view; return [...v.origin(), v.width()]; }"
+        )
+        box = settled_box(page, plot)
+        return box["x"] + origin[0] + origin[2] - 5, box["y"] + origin[1] + 5
+
+    hover_until(page, top_right_corner, page.locator("#vg-tooltip-element.visible"), "555,321", "2023-11-14 22:13:22")
 
 
 def embed_steep_line(page):
@@ -124,8 +162,7 @@ def test_a_steep_line_shows_the_time_under_the_pointer_at_any_height(live_page):
         return [p.left + v.origin()[0] + v.scale('x')(Date.UTC(2026, 0, 2, 12)), p.top + v.origin()[1], v.height()]; }""")
     tooltip = page.locator("#vg-tooltip-element.visible")
     for frac in (0.05, 0.5, 0.95):
-        page.mouse.move(box["x"] + noon[0], box["y"] + noon[1] + noon[2] * frac)
-        expect(tooltip).to_contain_text("2026-01-02 12:00:00")
+        hover_until(page, lambda frac=frac: (box["x"] + noon[0], box["y"] + noon[1] + noon[2] * frac), tooltip, "2026-01-02 12:00:00")
     expect(tooltip).to_contain_text(re.compile(r"\d{3},\d{3},\d{3}\.\d(?!\d)"))  # at most 1 decimal
 
 
@@ -159,7 +196,6 @@ def test_only_charts_with_a_time_axis_show_the_zoom_hint(live_page, build_agent)
     for script, shown in ((bar_chart, False), (time_chart, True)):
         page = live_page(agent=build_agent(ScriptedLLM(*script)))
         run_in_new_notebook(page, "chart it")
-        expect(page.locator(".display.chart canvas")).to_be_visible()
+        chart_plot(page)
         hint = page.get_by_text("Ctrl+scroll to zoom, drag to pan, double-click to reset")
-        expect(hint).to_be_visible() if shown else expect(hint).to_be_hidden()
-    expect(page.locator(".drawer")).to_have_count(0)  # the layout stops moving once the live trace has folded away
+        expect(hint).to_be_visible(timeout=CHART_TIMEOUT) if shown else expect(hint).to_be_hidden()

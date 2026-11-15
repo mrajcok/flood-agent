@@ -195,3 +195,17 @@ def test_the_rows_chip_offers_preset_row_caps_and_a_custom_value(live_page, buil
     cell.get_by_label("Custom row cap").press("Tab")
     expect(cell.locator(".chip")).to_have_text("\u2264 250 rows \u25be")
     expect(caps).to_have_value("custom")
+
+
+def test_the_selected_table_stays_after_a_run_and_a_reload(live_page, build_agent):
+    page = live_page(agent=build_agent(ScriptedLLM()))
+    cell = add_sql_cell(page)
+    pick_table(cell, "flows")
+    columns = cell.locator(".tbl-cols .col")
+    expect(columns.first).to_be_visible()
+    cell.get_by_label("SQL").fill("SELECT dport FROM flows")
+    cell.get_by_role("button", name="Run").click()
+    expect(cell.locator(".sql-status")).to_contain_text("row")
+    expect(columns.first).to_be_visible()
+    page.reload()
+    expect(page.locator(".cellblock.sql .tbl-cols .col").first).to_be_visible()

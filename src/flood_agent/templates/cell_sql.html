@@ -15,7 +15,7 @@
                },
                get statement() { return this.command ? (this.command === this.describe ? this.command + ' ' + this.tbl.trim() : this.command) : this.sql; },
                command: {{ cell.command | tojson | forceescape }}, describe: 'DESCRIBE TABLE',
-               tpop: false, tq: '', listing: null, tbl: {{ (cell.table if cell.command == 'DESCRIBE TABLE' else '') | tojson | forceescape }}, cols: [], colError: '',
+               tpop: false, tq: '', listing: null, tbl: {{ cell.table | tojson | forceescape }}, cols: [], colError: '',
                get runnable() { return this.command ? (this.command !== this.describe || !!this.tbl) : !!this.sql.trim(); },
                async openTables() {
                  this.tpop = !this.tpop; this.tq = '';
@@ -30,8 +30,11 @@
                    .filter(g => g.names.length);
                },
                async pickTable(name) {
-                 this.tpop = false; this.tbl = name; this.cols = []; this.colError = '';
-                 if (this.command) { this.save(); return; }  /* DESCRIBE TABLE: the table is the choice */
+                 this.tpop = false; this.tbl = name; this.save();  /* the choice is kept with the Draft, so a Run or a reload leaves it */
+                 if (!this.command) await this.loadCols(name);  /* DESCRIBE TABLE: the table is the choice */
+               },
+               async loadCols(name) {
+                 this.cols = []; this.colError = '';
                  try {
                    const r = await fetch('/api/tables/' + encodeURIComponent(name) + '/columns');
                    if (r.ok) this.cols = (await r.json()).columns; else this.colError = 'That table is no longer available.';
@@ -39,7 +42,7 @@
                },
                put(text, kind) { FloodSql.insertAt(this.$refs.sql, text, kind); this.save(); },
                get chip() { return '≤ ' + Number(this.maxRows).toLocaleString('en-US') + ' rows ▾'; },
-               fields() { return new URLSearchParams({ sql: this.sql, max_rows: this.maxRows, command: this.command, table: this.command === this.describe ? this.tbl : '' }); },
+               fields() { return new URLSearchParams({ sql: this.sql, max_rows: this.maxRows, command: this.command, table: this.tbl }); },
                cleanRows() {
                  this.maxRows = String(this.maxRows).replace(/\D/g, '').replace(/^0+/, '') || '{{ cell.max_rows }}';
                  this.save();
@@ -76,7 +79,7 @@
                  this.stopping = true;
                  try { await fetch('/n/{{ notebook_id }}/cells/{{ cell.id }}/stop', { method: 'POST' }); } catch (e) {}
                } }"
-     @keydown.escape.window="pop = false">
+     x-init="if (tbl && !command) loadCols(tbl)" @keydown.escape.window="pop = false">
   <div class="gutter">
     {% if cell.running %}
     <button type="button" class="gbtn stop" aria-label="Stop" title="Stop this cell" :disabled="stopping" @click="stop()">&#x25A0;</button>
@@ -92,7 +95,7 @@
       <span class="kind">SQL</span>
       <span class="grow"></span>
       <select class="command" aria-label="Command" title="What this cell runs: your SQL query, or a SHOW / DESCRIBE command" x-model="command"
-              @change="error = ''; save()" {% if cell.running %}disabled{% else %}:disabled="running"{% endif %}>
+              @change="error = ''; save(); if (!command && tbl && !cols.length) loadCols(tbl)" {% if cell.running %}disabled{% else %}:disabled="running"{% endif %}>
         <option value="">SQL query</option>
         {% for c in show_commands %}<option value="{{ c }}"{% if c == cell.command %} selected{% endif %}>{{ c }}</option>{% endfor %}
       </select>
@@ -129,7 +132,7 @@
       </template>
       <span class="tname chosen" x-show="command && tbl" x-text="tbl"></span>
     </div>
-    <textarea x-ref="sql" class="cell-prompt cell-sql" rows="3" spellcheck="false" placeholder="SELECT ... FROM ... (Shift-Enter to run)" aria-label="SQL" x-model="sql" x-show="!command"
+    <textarea x-ref="sql" class="cell-prompt cell-sql autosize" rows="1" spellcheck="false" placeholder="SELECT ... FROM ... (Shift-Enter to run)" aria-label="SQL" x-model="sql" x-show="!command"
               @blur="save()" @keydown.shift.enter.prevent="run()" {% if cell.running %}readonly{% else %}:readonly="running"{% endif %}></textarea>
     <p class="cell-error" role="alert" x-show="error" x-text="error" x-cloak></p>
 

@@ -346,29 +346,25 @@ class Catalog(CatalogView):
                  truncated_to, self.default_retention_ms, sql, max_rows),
             )
 
-    def record_refresh(self, name: str, columns: list[dict], truncated_to: int | None) -> Table:
-        """Record that live table `name` now holds fresh rows: its "as of" time is now, its columns and
-        truncation are the new ones, and Retention restarts (its length is kept). Returns the table as it
-        was before, so a Refresh that then fails can `restore_refresh` it. `TableExpired` if it is not live."""
-        before = self[name]
-        self._write_refresh(before.name, self._now(), columns, truncated_to)
+    def record_replacement(self, after: Table) -> Table:
+        """Record, in one write, that live table `after.name` is about to hold fresh rows described by `after`:
+        its columns, truncation, owner, title, SQL and row cap. Its "as of" time is now, and Retention restarts
+        (its length is kept). Returns the table as it was, for `restore_replacement`. `TableExpired` if it is
+        not live."""
+        before = self[after.name]
+        self._describe(after, self._now())
         return before
 
-    def restore_refresh(self, before: Table) -> None:
-        """Put back what `record_refresh` changed, given the table it returned. Needs no liveness check."""
-        self._write_refresh(before.name, before.as_of_ms, before.columns, before.truncated_to)
+    def restore_replacement(self, before: Table) -> None:
+        """Put back everything `record_replacement` changed, given the table it returned. Needs no liveness check."""
+        self._describe(before, before.as_of_ms)
 
-    def reown_for_rerun(self, name: str, owner: CellRun, title: str, sql: str, max_rows: int) -> None:
-        """A SQL Cell's re-run has put fresh rows under `name` (after `record_refresh`): the table now belongs
-        to the cell's new Run and is described by the SQL that made them."""
+    def _describe(self, table: Table, as_of_ms: int) -> None:
         with closing(self._connect()) as con, con:
-            con.execute("UPDATE result_tables SET cell_id=?, run_id=?, title=?, sql=?, max_rows=? WHERE name=?",
-                        (owner.cell_id, owner.run_id, title, sql, max_rows, canonical(name)))
-
-    def _write_refresh(self, name: str, as_of_ms: int, columns: list[dict], truncated_to: int | None) -> None:
-        with closing(self._connect()) as con, con:
-            con.execute("UPDATE result_tables SET refreshed_at=?, columns=?, truncated_to=? WHERE name=?",
-                        (as_of_ms, json.dumps(columns), truncated_to, name))
+            con.execute("UPDATE result_tables SET refreshed_at=?, columns=?, truncated_to=?,"
+                        " cell_id=?, run_id=?, title=?, sql=?, max_rows=? WHERE name=?",
+                        (as_of_ms, json.dumps(table.columns), table.truncated_to, table.cell_id, table.run_id,
+                         table.title, table.sql, table.max_rows, table.name))
 
     def _drop_physical(self, names: Iterable[str]) -> None:
         names = list(names)

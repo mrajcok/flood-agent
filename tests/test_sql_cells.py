@@ -4,7 +4,7 @@ import asyncio
 import logging
 import sqlite3
 
-from conftest import ScriptedLLM
+from conftest import DAY, Clock, ScriptedLLM
 
 from flood_agent import queries
 from flood_agent.agent import CountEvent, DisplayEvent, TurnEnd
@@ -310,3 +310,26 @@ async def test_the_context_roles_when_notes_and_sql_and_show_cells_precede_an_ai
     assert "a note" in contents[0]
     assert contents[1].startswith("[SQL Cell, run by the user]") and contents[2].startswith("[SHOW Cell, run by the user]")
     assert contents[3] == "q"
+
+
+async def test_a_table_swept_during_a_re_run_fails_the_cell_telling_the_user_to_run_it_again(make_agent, monkeypatch):
+    clock = Clock()
+    agent = await make_agent(ScriptedLLM(), clock=clock, result_ttl_ms=DAY)
+    nb = agent.create_notebook()
+    cell = agent.add_sql_cell(nb, sql="SELECT dport FROM flows", max_rows=2)
+    await run(agent, nb, cell)
+    real = queries.run_query
+
+    def sweep_during(*args, **kwargs):
+        result = real(*args, **kwargs)
+        clock.ms += 2 * DAY
+        agent.tables.sweep()  # the table's Retention is over while the query runs
+        return result
+
+    monkeypatch.setattr(queries, "run_query", sweep_during)
+    await run(agent, nb, cell)
+
+    run_ = run_of(agent, nb, 0)
+    assert run_["status"] == "failed"
+    assert "expired during the run" in run_["result"]["raw_error"] and "run the cell again" in run_["result"]["raw_error"].lower()
+    assert agent.tables.names() == []  # no new table was made in its place

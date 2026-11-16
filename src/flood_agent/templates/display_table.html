@@ -39,10 +39,10 @@
       <button type="button" @click="go(page - 1)" :disabled="page <= 1">Prev</button>
       <span x-text="'Page ' + page + ' of ' + pages + ' (' + total + ' rows)'"></span>
       <button type="button" @click="go(page + 1)" :disabled="page >= pages">Next</button>
-      <a :href="urls.psv" download>Download PSV</a>
       <span class="badge-truncated" x-show="truncatedTo" x-cloak
             :title="'The query returned at least ' + (truncatedTo || 0).toLocaleString('en-US') + ' rows; only the first ' + (truncatedTo || 0).toLocaleString('en-US') + ' were kept.'"
             x-text="'truncated to ' + (truncatedTo || 0).toLocaleString('en-US')"></span>
+      <a :href="urls.psv" download style="margin-left:auto">Download PSV</a>
     </div>
     <table>
       <thead><tr><template x-for="(c, j) in columns" :key="c"><th :class="{ num: numeric(j) }" @click="sortBy(c)" style="cursor:pointer" :aria-sort="sort === c ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'"><span x-text="c"></span><span x-text="sort === c ? (dir === 'asc' ? ' ▲' : ' ▼') : ''"></span></th></template></tr></thead>

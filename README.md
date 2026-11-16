@@ -32,12 +32,6 @@ the Telemetry Database's timestamps so its latest record is the current time (th
 fixed week, and "the last hour" means the real last hour).
 Reload the page after a restart.
 
-### Upgrading from Conversations
-
-Starting the app on a database from before Notebooks (one with Conversation tables) drops all its old data and every
-Result, Saved and Lookup Table once, then creates the new schema; there is nothing to run by hand, and a second start
-changes nothing (`src/flood_agent/upgrade.py`).
-
 ### Fake Mode ("No model")
 
 Choosing "No model" in an AI Cell's settings runs that cell to a scripted stand-in instead of a

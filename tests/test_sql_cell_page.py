@@ -21,6 +21,7 @@ def test_a_sql_cell_is_added_run_and_shown_without_the_llm(build_agent, web_clie
     assert "event: end" in client.get(f"/n/{nb}/cells/{cell}/stream").text
     page = client.get(f"/n/{nb}/cells/{cell}").text
     assert re.search(r"\d+ rows? &middot; [\d.]+ s &middot; ran", page) and "/api/results/rt_" in page
+    assert "Only metadata about these results" in page and "AI Cells below" in page
     assert llm.calls == []
 
     bad = "SELECT nope FROM flows"
@@ -28,7 +29,8 @@ def test_a_sql_cell_is_added_run_and_shown_without_the_llm(build_agent, web_clie
     assert bad in client.get(f"/n/{nb}").text  # the Draft survives a reload
     client.post(f"/n/{nb}/cells/{cell}/run", data={"sql": bad, "max_rows": "10"})
     client.get(f"/n/{nb}/cells/{cell}/stream")
-    assert "no such column: nope" in client.get(f"/n/{nb}/cells/{cell}").text
+    failed = client.get(f"/n/{nb}/cells/{cell}").text
+    assert "no such column: nope" in failed and "Only metadata about these results" not in failed
 
 
 def test_an_edited_sql_cell_is_marked_edited_not_run_and_a_never_run_one_is_not(build_agent, web_client):

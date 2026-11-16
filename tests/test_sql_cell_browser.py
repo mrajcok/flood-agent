@@ -47,7 +47,7 @@ def test_the_rows_chip_caps_the_table_and_the_next_sql_cell_starts_with_it(live_
     cell.get_by_label("SQL").fill("SELECT dport FROM flows")
     cell.get_by_role("button", name="Run").click()
     expect(cell.locator(".sql-status")).to_contain_text("1 row")
-    expect(cell.locator(".sql-status")).to_contain_text("1-row cap")
+    expect(cell.locator(".pager .badge-truncated")).to_have_text("truncated to 1")
 
     add_below(page, "sql")
     expect(page.locator(".cellblock.sql").nth(1).locator(".chip")).to_have_text("≤ 1 rows ▾")

@@ -129,6 +129,10 @@ _Avoid_: Widget, view, output
 A single number from a count query, shown to the user with its title, the time it was computed and a Refresh control. It is saved with its Run and has no Retention.
 _Avoid_: Count result, metric
 
+**Report View**:
+A way of looking at the Notebook's Cells that shows only what they produced, for reading: each Cell's text and outputs stay, but its controls, editing, Traces, table info and other machinery are hidden, and Cells with nothing to show are left out. It changes only how the Cells are shown, never the Notebook, and a reader can still page and sort a table.
+_Avoid_: Read-only mode, presentation mode, preview
+
 ## Fake Mode
 
 **Fake Mode**:

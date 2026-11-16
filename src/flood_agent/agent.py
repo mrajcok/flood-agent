@@ -27,6 +27,7 @@ from flood_agent.mcp_server import ServerSettings
 from flood_agent.notebooks import AI, COUNT_KIND, DEFAULT_MAX_ROWS, MARKDOWN, MARKDOWN_NOTE_LABEL, SQL, NotebookStore
 from flood_agent.semantic_layer import SemanticLayer
 from flood_agent.show_commands import SHOW_IN_TEXTBOX, ShowFailed, is_show_statement, run_show, statement_of
+from flood_agent.table_replacement import RefreshInProgress, ReplacementFailed, Rerun, TableReplacement
 from flood_agent.trace import TraceBuilder, context_tokens
 from flood_agent.upgrade import drop_pre_notebook_data
 
@@ -37,10 +38,6 @@ SHOW_ROWS_TO_AI = 100  # how many rows of a SHOW Cell's result an AI Cell below 
 
 class NotRefreshable(Exception):
     """The table has no stored query, so Refresh cannot run it."""
-
-
-class RefreshInProgress(Exception):
-    """The table is already being refreshed."""
 
 
 class NotebookBusy(Exception):
@@ -333,6 +330,7 @@ class Agent:
             config.app_db, config.clock, config.result_ttl_ms, telemetry_tables=self.semantic_layer.table_names(),
             results_db=config.results_db, on_rename=self._follow_rename,
         )
+        self.replacement = TableReplacement(self.tables, config.telemetry_db, config.results_db, config.query_timeout_s)
         self._connection: McpConnection | None = None
         self._restart_lock = asyncio.Lock()
         self._turn_tasks: set[asyncio.Task] = set()
@@ -340,7 +338,7 @@ class Agent:
         self._stopped_turns: set[asyncio.Task] = set()  # turns `stop_turn` cancelled
         self._running_cells: dict[str, str] = {}  # notebook id -> the cell running in it now
         self._sql_stops: dict[str, threading.Event] = {}  # SQL Cell id -> its running query's stop flag
-        self._refreshing: set[tuple[str, str | int]] = set()  # ("table", name) or ("count", id) being refreshed now
+        self._refreshing: set[tuple[str, str | int]] = set()  # ("count", id) being refreshed now (tables: see TableReplacement)
         self._refreshing_lock = threading.Lock()
         self.tables.sweep()
 
@@ -801,28 +799,27 @@ class Agent:
             if counted.get("stopped") or counted["error"] != queries.COUNT_GUIDANCE:
                 return failure(counted)  # a real failure; only the wrong shape falls back to a table
         title = queries.shorten_sql(sql)
+        if prior is not None:  # a re-run: new rows under the same name, all or nothing
+            try:
+                done = self.replacement.replace(prior.name, sql, max_rows, stop=stop, rerun=Rerun(owner, title))
+            except ReplacementFailed as e:
+                return failure({"error": e.error, "raw_error": e.raw_error, "stopped": e.stopped})
+            except RefreshInProgress as e:
+                return failure({"error": str(e)})
+            except TableExpired:
+                return failure({"error": f"The table {prior.name} expired during the run. Run the cell again."})
+            total = queries.fetch_rows(cfg.results_db, done.name, page_size=1)["total"]
+            return {"status": "ok", "table": done.name, "columns": done.columns, "row_count": total,
+                    "truncated_to": done.truncated_to}
         result = queries.run_query(cfg.telemetry_db, cfg.results_db, sql, cfg.query_timeout_s, max_rows, readable, title, stop)
         if not result["success"]:
             return failure(result)
-        temp = name = result["result_table"]
-        before = None
-        if prior is not None:
-            try:  # Catalog first (it refuses a table a sweep has expired), then the atomic swap
-                before = self.tables.record_refresh(prior.name, result["columns"], result.get("truncated_to"))
-            except TableExpired:
-                prior = None
+        name = result["result_table"]
         try:
-            if prior is None:
-                self.tables.register_for(owner, temp, title, result["columns"], table_names.SQL_CELL_REQUEST,
-                                         result.get("truncated_to"), sql, max_rows)
-            else:
-                queries.swap_table(cfg.results_db, temp, prior.name)
-                name = prior.name
-                self.tables.reown_for_rerun(name, owner, title, sql, max_rows)
+            self.tables.register_for(owner, name, title, result["columns"], table_names.SQL_CELL_REQUEST,
+                                     result.get("truncated_to"), sql, max_rows)
         except BaseException:
-            if before is not None:
-                self.tables.restore_refresh(before)
-            queries.drop_table(cfg.results_db, temp)
+            queries.drop_table(cfg.results_db, name)
             raise
         return {"status": "ok", "table": name, "columns": result["columns"], "row_count": result["row_count"],
                 "truncated_to": result.get("truncated_to")}
@@ -853,8 +850,8 @@ class Agent:
 
     def refresh_table(self, name: str) -> Table:
         """Refresh a live Result or Saved Table: run its stored query again, without the LLM, and replace
-        it under the same name (ADR 0006). The new rows are built under a temporary name and swapped in,
-        so any failure leaves the table, its rows and its catalog row as they were.
+        it under the same name (ADR 0006), through Table Replacement: any failure leaves the table, its rows and
+        its catalog row as they were.
 
         KeyError if unknown, `TableExpired` if no longer live, `NotRefreshable` if it has no stored query,
         `RefreshInProgress` if it is already being refreshed, `RefreshFailed` (with a plain message) if the
@@ -862,27 +859,10 @@ class Agent:
         table = self.tables[name]
         if table.sql is None or table.max_rows is None:
             raise NotRefreshable(f"{table.name} has no stored query, so it cannot be refreshed.")
-        with self._refresh_guard(("table", table.name), table.name):
-            result = queries.run_query(
-                self.config.telemetry_db, self.config.results_db, table.sql, self.config.query_timeout_s,
-                table.max_rows, self.tables.readable(), table.title,
-            )
-            if not result["success"]:
-                raise RefreshFailed(self._refresh_error(table.name, result))
-            temp = result["result_table"]
-            before = None
-            try:
-                # Catalog first: it is the one step that can be undone, and it refuses a table a sweep has
-                # expired. Then the swap, which is atomic.
-                before = self.tables.record_refresh(table.name, result["columns"], result.get("truncated_to"))
-                queries.swap_table(self.config.results_db, temp, table.name)
-                return self.tables[table.name]
-            except BaseException:
-                if before is not None:
-                    self.tables.restore_refresh(before)
-                queries.drop_table(self.config.results_db, temp)
-                self.tables[table.name]  # a sweep dropped the table meanwhile: TableExpired, the plain answer
-                raise
+        try:
+            return self.replacement.replace(table.name, table.sql, table.max_rows)
+        except ReplacementFailed as e:
+            raise RefreshFailed(self._refresh_error(table.name, {"error": e.error, "raw_error": e.raw_error})) from e
 
     @contextmanager
     def _refresh_guard(self, key: tuple[str, str | int], label: str) -> Iterator[None]:

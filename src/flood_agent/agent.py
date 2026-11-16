@@ -338,7 +338,7 @@ class Agent:
         self._stopped_turns: set[asyncio.Task] = set()  # turns `stop_turn` cancelled
         self._running_cells: dict[str, str] = {}  # notebook id -> the cell running in it now
         self._sql_stops: dict[str, threading.Event] = {}  # SQL Cell id -> its running query's stop flag
-        self._refreshing: set[tuple[str, str | int]] = set()  # ("count", id) being refreshed now (tables: see TableReplacement)
+        self._refreshing: set[tuple[str, str | int]] = set()  # ("count", id) being refreshed now (tables: see table_replacement)
         self._refreshing_lock = threading.Lock()
         self.tables.sweep()
 
@@ -850,7 +850,7 @@ class Agent:
 
     def refresh_table(self, name: str) -> Table:
         """Refresh a live Result or Saved Table: run its stored query again, without the LLM, and replace
-        it under the same name (ADR 0006), through Table Replacement: any failure leaves the table, its rows and
+        it under the same name (ADR 0006), through table replacement: any failure leaves the table, its rows and
         its catalog row as they were.
 
         KeyError if unknown, `TableExpired` if no longer live, `NotRefreshable` if it has no stored query,

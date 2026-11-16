@@ -1,4 +1,4 @@
-"""Table Replacement: put a query's rows under a live table's name, all or nothing.
+"""Table replacement: put a query's rows under a live table's name, all or nothing.
 
 A Refresh (run the table's stored query again) and a SQL Cell re-run (run the Cell's current SQL) both end the
 same way: the table keeps its name, gets new rows, and its Table Catalog row says what those rows are. This
@@ -6,6 +6,7 @@ module owns those steps so the two callers cannot drift apart, and so a database
 statement only has one place to change.
 """
 
+import dataclasses
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -74,20 +75,21 @@ class TableReplacement:
             if not result["success"]:
                 raise ReplacementFailed(result["error"], result.get("raw_error") or result["error"],
                                         bool(result.get("stopped")))
-            temp, recorded = result["result_table"], None
+            temp, undo = result["result_table"], None
+            after = dataclasses.replace(before, columns=result["columns"], truncated_to=result.get("truncated_to"))
+            if rerun:
+                after = dataclasses.replace(after, cell_id=rerun.owner.cell_id, run_id=rerun.owner.run_id,
+                                            title=rerun.title, sql=sql, max_rows=max_rows)
             try:
                 # The one catalog write is the step that can be undone, and it refuses a table a sweep expired.
-                if rerun:
-                    recorded = self.tables.record_replacement(
-                        before.name, result["columns"], result.get("truncated_to"),
-                        owner=rerun.owner, title=rerun.title, sql=sql, max_rows=max_rows)
-                else:
-                    recorded = self.tables.record_replacement(before.name, result["columns"], result.get("truncated_to"))
+                undo = self.tables.record_replacement(after)
                 queries.swap_table(self.results_db, temp, before.name)
             except BaseException:
-                if recorded is not None:
-                    self.tables.restore_replacement(recorded)
-                queries.drop_table(self.results_db, temp)
+                try:
+                    if undo is not None:
+                        self.tables.restore_replacement(undo)
+                finally:
+                    queries.drop_table(self.results_db, temp)  # even if the restore fails
                 self.tables[before.name]  # a sweep dropped the table meanwhile: TableExpired, the plain answer
                 raise
             return Replaced(self.tables[before.name], result["row_count"])
@@ -97,7 +99,7 @@ class TableReplacement:
         key = canonical(name)
         with self._lock:
             if key in self._busy:
-                raise RefreshInProgress(f"{name} is already being refreshed.")
+                raise RefreshInProgress(f"{name} is already being replaced; try again when that finishes.")
             self._busy.add(key)
         try:
             yield

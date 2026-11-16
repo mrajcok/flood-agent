@@ -346,34 +346,25 @@ class Catalog(CatalogView):
                  truncated_to, self.default_retention_ms, sql, max_rows),
             )
 
-    def record_replacement(
-        self, name: str, columns: list[dict], truncated_to: int | None, *, owner: CellRun | None = None,
-        title: str | None = None, sql: str | None = None, max_rows: int | None = None,
-    ) -> Table:
-        """Record, in one write, that live table `name` is about to hold fresh rows: its "as of" time is now,
-        its columns and truncation are the new ones, and Retention restarts (its length is kept). For a SQL
-        Cell re-run, pass `owner`, `title`, `sql` and `max_rows` too: the table then belongs to the Cell's new
-        Run and is described by the SQL that made the rows. Returns the table as it was, for
-        `restore_replacement`. `TableExpired` if it is not live."""
-        before = self[name]
-        with closing(self._connect()) as con, con:
-            if owner is None:
-                con.execute("UPDATE result_tables SET refreshed_at=?, columns=?, truncated_to=? WHERE name=?",
-                            (self._now(), json.dumps(columns), truncated_to, before.name))
-            else:
-                con.execute("UPDATE result_tables SET refreshed_at=?, columns=?, truncated_to=?,"
-                            " cell_id=?, run_id=?, title=?, sql=?, max_rows=? WHERE name=?",
-                            (self._now(), json.dumps(columns), truncated_to, owner.cell_id, owner.run_id, title,
-                             sql, max_rows, before.name))
+    def record_replacement(self, after: Table) -> Table:
+        """Record, in one write, that live table `after.name` is about to hold fresh rows described by `after`:
+        its columns, truncation, owner, title, SQL and row cap. Its "as of" time is now, and Retention restarts
+        (its length is kept). Returns the table as it was, for `restore_replacement`. `TableExpired` if it is
+        not live."""
+        before = self[after.name]
+        self._describe(after, self._now())
         return before
 
     def restore_replacement(self, before: Table) -> None:
         """Put back everything `record_replacement` changed, given the table it returned. Needs no liveness check."""
+        self._describe(before, before.as_of_ms)
+
+    def _describe(self, table: Table, as_of_ms: int) -> None:
         with closing(self._connect()) as con, con:
             con.execute("UPDATE result_tables SET refreshed_at=?, columns=?, truncated_to=?,"
                         " cell_id=?, run_id=?, title=?, sql=?, max_rows=? WHERE name=?",
-                        (before.as_of_ms, json.dumps(before.columns), before.truncated_to, before.cell_id,
-                         before.run_id, before.title, before.sql, before.max_rows, before.name))
+                        (as_of_ms, json.dumps(table.columns), table.truncated_to, table.cell_id, table.run_id,
+                         table.title, table.sql, table.max_rows, table.name))
 
     def _drop_physical(self, names: Iterable[str]) -> None:
         names = list(names)

@@ -1,4 +1,4 @@
-"""Table Replacement: `replace` puts a query's rows under a live table's name, all or nothing. Tested at its
+"""Table replacement: `replace` puts a query's rows under a live table's name, all or nothing. Tested at its
 interface against a real results database and Table Catalog (no Agent turn, no web)."""
 
 import sqlite3
@@ -111,6 +111,9 @@ def test_a_table_that_is_not_live_is_refused_and_nothing_changes(setup):
         agent.replacement.replace(name, FIRST, 5)
 
     assert tables_in_results_db(agent) == []
+    with pytest.raises(TableExpired):  # it stays expired: the catalog was not written
+        agent.tables[name]
+    assert agent.tables.tables_of_run(OWNER.cell_id, OWNER.run_id) == []
 
 
 def test_a_sweep_dropping_the_table_mid_replacement_gives_the_plain_expired_answer(setup, monkeypatch):
@@ -172,7 +175,7 @@ def test_a_second_replacement_of_the_same_table_is_refused_while_one_runs(setup,
     t.start()
     assert started.wait(5)
     try:
-        with pytest.raises(RefreshInProgress, match="already being refreshed"):
+        with pytest.raises(RefreshInProgress, match="already being replaced"):
             agent.replacement.replace(name, FIRST, 2)
         with pytest.raises(RefreshInProgress):  # a SQL Cell re-run of the same table is refused too
             agent.replacement.replace(name, FIRST, 2, rerun=Rerun(CellRun("c", "r"), "T"))

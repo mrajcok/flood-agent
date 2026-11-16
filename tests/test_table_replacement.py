@@ -56,9 +56,10 @@ def test_replace_puts_new_rows_under_the_same_name_and_describes_them(setup):
     assert len(stored_rows(agent, name)) == 2 and old.truncated_to == 2
     clock.ms += HOUR
 
-    new = agent.replacement.replace(name, WIDER, 5)
+    done = agent.replacement.replace(name, WIDER, 5)
+    new = done.table
 
-    assert new.name == name and [c["name"] for c in new.columns] == ["sip", "dport"]
+    assert done.row_count == 3 and new.name == name and [c["name"] for c in new.columns] == ["sip", "dport"]
     assert len(stored_rows(agent, name)) == 3 and len(stored_rows(agent, name)[0]) == 2
     assert new.truncated_to is None  # the old table was cut to 2; these rows are all there are
     assert new.as_of_ms == clock.ms and new.expires_in_ms == old.retention_ms  # Retention restarted, same length
@@ -68,8 +69,8 @@ def test_replace_puts_new_rows_under_the_same_name_and_describes_them(setup):
 
 def test_truncation_is_reported_only_while_the_row_cap_cuts_the_rows(setup):
     agent, _, name = setup
-    assert agent.replacement.replace(name, FIRST, 2).truncated_to == 2
-    assert agent.replacement.replace(name, FIRST, 1000).truncated_to is None
+    assert agent.replacement.replace(name, FIRST, 2).table.truncated_to == 2
+    assert agent.replacement.replace(name, FIRST, 1000).table.truncated_to is None
 
 
 def test_a_failed_query_changes_nothing(setup):
@@ -148,7 +149,7 @@ def test_a_rerun_re_owns_the_table_in_the_same_replacement(setup):
     agent, _, name = setup
     new_owner = CellRun("cell-2", "run-2")
 
-    new = agent.replacement.replace(name, WIDER, 3, rerun=Rerun(new_owner, "Second"))
+    new = agent.replacement.replace(name, WIDER, 3, rerun=Rerun(new_owner, "Second")).table
 
     assert (new.owner, new.title, new.sql, new.max_rows) == (new_owner, "Second", WIDER, 3)
     assert agent.tables.tables_of_run("cell-2", "run-2") == [new]

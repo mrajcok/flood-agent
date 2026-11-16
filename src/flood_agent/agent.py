@@ -808,9 +808,9 @@ class Agent:
                 return failure({"error": str(e)})
             except TableExpired:
                 return failure({"error": f"The table {prior.name} expired during the run. Run the cell again."})
-            total = queries.fetch_rows(cfg.results_db, done.name, page_size=1)["total"]
-            return {"status": "ok", "table": done.name, "columns": done.columns, "row_count": total,
-                    "truncated_to": done.truncated_to}
+            t = done.table
+            return {"status": "ok", "table": t.name, "columns": t.columns, "row_count": done.row_count,
+                    "truncated_to": t.truncated_to}
         result = queries.run_query(cfg.telemetry_db, cfg.results_db, sql, cfg.query_timeout_s, max_rows, readable, title, stop)
         if not result["success"]:
             return failure(result)
@@ -860,7 +860,7 @@ class Agent:
         if table.sql is None or table.max_rows is None:
             raise NotRefreshable(f"{table.name} has no stored query, so it cannot be refreshed.")
         try:
-            return self.replacement.replace(table.name, table.sql, table.max_rows)
+            return self.replacement.replace(table.name, table.sql, table.max_rows).table
         except ReplacementFailed as e:
             raise RefreshFailed(self._refresh_error(table.name, {"error": e.error, "raw_error": e.raw_error})) from e
 

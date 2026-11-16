@@ -39,6 +39,14 @@ class Rerun:
     title: str
 
 
+@dataclass(frozen=True)
+class Replaced:
+    """A finished replacement: the table as the Table Catalog now describes it, and how many rows it holds."""
+
+    table: Table
+    row_count: int
+
+
 class TableReplacement:
     def __init__(self, tables: Catalog, telemetry_db: Path, results_db: Path, timeout_s: float):
         self.tables = tables
@@ -47,8 +55,9 @@ class TableReplacement:
         self._lock = threading.Lock()
 
     def replace(self, name: str, sql: str, max_rows: int, *, stop: threading.Event | None = None,
-                rerun: Rerun | None = None) -> Table:
-        """Run `sql` and put its rows (at most `max_rows`) under live table `name`; return the updated table.
+                rerun: Rerun | None = None) -> Replaced:
+        """Run `sql` and put its rows (at most `max_rows`) under live table `name`; return the updated table and
+        its row count.
 
         The rows are built under a temporary name first, then the Table Catalog is written in one step (the
         refresh fields, and for a `rerun` the new owner, title, SQL and row cap), and the swap comes last, so
@@ -81,7 +90,7 @@ class TableReplacement:
                 queries.drop_table(self.results_db, temp)
                 self.tables[before.name]  # a sweep dropped the table meanwhile: TableExpired, the plain answer
                 raise
-            return self.tables[before.name]
+            return Replaced(self.tables[before.name], result["row_count"])
 
     @contextmanager
     def _one_at_a_time(self, name: str) -> Iterator[None]:

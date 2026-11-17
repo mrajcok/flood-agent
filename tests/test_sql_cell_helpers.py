@@ -1,7 +1,5 @@
 """SQL Cell helpers: a table's columns for click-to-insert, and the hint for a keyword column (HTTP seam)."""
 
-import threading
-
 import pytest
 from conftest import ScriptedLLM
 
@@ -28,8 +26,9 @@ def test_a_result_tables_columns_are_listed_and_a_keyword_or_odd_name_is_quoted(
     agent = build_agent(ScriptedLLM())
     client = web_client(agent)
     sql = 'SELECT dport AS "analyze", dport AS "my col", dport AS "select", dport AS ok FROM flows'
-    outcome = agent._execute_sql(sql, 10, threading.Event(), None, CellRun("c", "r"))
-    cols = {c["name"]: c["insert"] for c in client.get(f"/api/tables/{outcome['table']}/columns").json()["columns"]}
+    made = queries.run_query(agent.config.telemetry_db, agent.config.results_db, sql, 10, 10, agent.tables.readable())
+    agent.tables.register_for(CellRun("c", "r"), made["result_table"], columns=made["columns"])
+    cols = {c["name"]: c["insert"] for c in client.get(f"/api/tables/{made['result_table']}/columns").json()["columns"]}
     assert cols == {"analyze": '"analyze"', "my col": '"my col"', "select": '"select"', "ok": "ok"}
 
 

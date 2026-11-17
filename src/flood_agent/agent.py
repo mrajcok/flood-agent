@@ -11,29 +11,41 @@ import sys
 import threading
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Iterator, Literal, Protocol
+from typing import AsyncIterator, Callable, Iterator, Literal, Protocol
 
 from mcp import StdioServerParameters
 from mcp.types import TextContent
 
 from flood_agent import flagging, queries, table_names
-from flood_agent.catalog import Catalog, CellRun, Owner, Table, TableExpired, canonical
+from flood_agent.catalog import Catalog, CellRun, Owner, Table, canonical
+from flood_agent.events import (  # re-exported: callers import the event types from here
+    CountEvent,
+    DisplayEvent,
+    Event,
+    FlagEvent,
+    LlmCallStarted,
+    TextDelta,
+    TraceEntry,
+    TraceLive,
+    TraceReady,
+    TurnEnd,
+    TurnError,
+)
 from flood_agent.llm import LLMClient, LLMError, ModelSpec, TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
 from flood_agent.mcp_protocol import QUERY_TOOLS
 from flood_agent.mcp_server import ServerSettings
 from flood_agent.notebooks import AI, COUNT_KIND, DEFAULT_MAX_ROWS, MARKDOWN, MARKDOWN_NOTE_LABEL, SQL, NotebookStore
 from flood_agent.semantic_layer import SemanticLayer
-from flood_agent.show_commands import SHOW_IN_TEXTBOX, ShowFailed, is_show_statement, run_show, statement_of
-from flood_agent.table_replacement import RefreshInProgress, ReplacementFailed, Rerun, TableReplacement
+from flood_agent.sql_cell_run import SqlCellRuns
+from flood_agent.table_replacement import RefreshInProgress, ReplacementFailed, TableReplacement
 from flood_agent.trace import TraceBuilder, context_tokens
 from flood_agent.upgrade import drop_pre_notebook_data
 
 log = logging.getLogger("uvicorn.error")  # the app's terminal log
 
-SHOW_ROWS_TO_AI = 100  # how many rows of a SHOW Cell's result an AI Cell below is sent
 
 
 class NotRefreshable(Exception):
@@ -127,11 +139,6 @@ class _CellSink:
 DAY_MS = 24 * 3600 * 1000
 
 
-@dataclass
-class TextDelta:
-    text: str
-
-
 class _TurnQueue(asyncio.Queue):
     """A turn's event queue that remembers whether the reply so far ends mid-paragraph: in
     text, not after a newline or a Display (which the page shows as its own block)."""
@@ -153,84 +160,6 @@ class _TurnQueue(asyncio.Queue):
         """Stream a notice from the app (not the LLM) as its own paragraph."""
         await self.put(TextDelta(self.paragraph_break() + message))
 
-
-@dataclass
-class DisplayEvent:
-    kind: str
-    result_table: str
-    columns: list[str] = field(default_factory=list)
-    spec: dict | None = None  # charts: Chart Spec after data-reference resolution
-    source_spec: dict | None = None  # charts: Chart Spec as the LLM wrote it (for the Trace)
-
-
-@dataclass
-class CountEvent:
-    """A Count Display: the number a successful run_count_query returned, shown as its own one-line item.
-    `sql` is kept (also in the saved definition) so a later Refresh can run it again."""
-
-    title: str
-    value: int
-    sql: str
-    computed_at_ms: int
-    display_id: int | None = None  # the saved Display, which a Refresh names
-
-
-@dataclass
-class TraceEntry:
-    """Trace data for ticket #10 to pick up. `query_error` carries the raw SQLite error,
-    which is never sent to the LLM, next to the sanitised error the LLM did see."""
-
-    kind: str
-    sql: str | None = None
-    raw_error: str | None = None
-    sanitized_error: str | None = None
-
-
-@dataclass
-class TraceReady:
-    """The finished Trace for the turn (already persisted); for the UI only, never for the LLM."""
-
-    trace: dict
-
-
-@dataclass
-class FlagEvent:
-    """Tokens in a completed reply that the LLM could not have known. For the analyst only
-    (reply note + Trace); never sent to the LLM."""
-
-    tokens: list[str]
-    items: list[dict] = field(default_factory=list)  # [{"type": "ip"|"number", "token": ...}]
-
-
-@dataclass
-class LlmCallStarted:
-    """The turn is about to make its `number`th LLM call (1-based); for the live view only."""
-
-    number: int
-
-
-@dataclass
-class TraceLive:
-    """A Trace entry, the moment it is added to the turn's Trace; for the live view only."""
-
-    entry: dict
-
-
-@dataclass
-class TurnError:
-    """The turn failed partway. `message` was already streamed to the user (and saved); `detail`
-    is the technical description (also in the Trace) for harnesses such as the eval runner."""
-
-    message: str
-    detail: str
-
-
-@dataclass
-class TurnEnd:
-    pass
-
-
-Event = TextDelta | DisplayEvent | CountEvent | TraceEntry | FlagEvent | TraceReady | LlmCallStarted | TraceLive | TurnError | TurnEnd
 
 GIVE_UP_MESSAGE = (
     "Sorry, I couldn't build a working query for that after several attempts. "
@@ -331,13 +260,14 @@ class Agent:
             results_db=config.results_db, on_rename=self._follow_rename,
         )
         self.replacement = TableReplacement(self.tables, config.telemetry_db, config.results_db, config.query_timeout_s)
+        self.sql_cells = SqlCellRuns(self.notebooks, self.tables, self.replacement, config.telemetry_db,
+                                     config.results_db, config.query_timeout_s, config.clock)
         self._connection: McpConnection | None = None
         self._restart_lock = asyncio.Lock()
         self._turn_tasks: set[asyncio.Task] = set()
         self._keyed_turns: dict[str, asyncio.Task] = {}  # running cell runs by cell id
         self._stopped_turns: set[asyncio.Task] = set()  # turns `stop_turn` cancelled
         self._running_cells: dict[str, str] = {}  # notebook id -> the cell running in it now
-        self._sql_stops: dict[str, threading.Event] = {}  # SQL Cell id -> its running query's stop flag
         self._refreshing: set[tuple[str, str | int]] = set()  # ("count", id) being refreshed now (tables: see table_replacement)
         self._refreshing_lock = threading.Lock()
         self.tables.sweep()
@@ -366,7 +296,8 @@ class Agent:
             return connection
 
     async def aclose(self) -> None:
-        """Stop the MCP server and reap its process."""
+        """Stop running Cells and the MCP server, and reap its process."""
+        await self.sql_cells.aclose()  # SQL Cell queries are stopped and waited for
         # In-flight turns first (this also cancels a restart in progress), so none is left
         # talking to a closing connection.
         tasks = list(self._turn_tasks)
@@ -556,24 +487,24 @@ class Agent:
         self.notebooks.delete_cell(cell_id)
 
     async def run_cell(self, notebook_id: str, cell_id: str) -> AsyncIterator[Event]:
-        """Run a cell, with what its Draft holds, and stream its events (`start()` first). A SQL Cell runs its
-        SQL without the LLM (see `_run_sql_cell`); an AI Cell as follows.
+        """Run a cell, with what its Draft holds, and stream its events. A SQL Cell runs without the LLM, through
+        the SQL Cell Run module, and needs no `start()`; an AI Cell needs `start()` first, and runs as follows.
 
         It is sent the system prompt, then the AI Cells above it in order (each as its latest Run stored it:
         prompt, answer, tool calls and results), then its own prompt; cells below are never sent. Its Run
         replaces the cell's earlier one. `NotebookBusy` if a cell of this notebook is already running,
         KeyError if the cell is not in the notebook."""
-        if self._connection is None:
-            raise RuntimeError("Agent not started: call `await agent.start()` or use `async with agent`")
         cell = self.notebooks.cell(cell_id)
         if cell["notebook_id"] != notebook_id:
             raise KeyError(cell_id)
+        if cell["kind"] != SQL and self._connection is None:
+            raise RuntimeError("Agent not started: call `await agent.start()` or use `async with agent`")
         if notebook_id in self._running_cells:
             raise NotebookBusy("A cell in this notebook is already running.")
         self._running_cells[notebook_id] = cell_id
         if cell["kind"] == SQL:
             try:
-                async for item in self._run_sql_cell(notebook_id, cell):
+                async for item in self.sql_cells.run(cell):
                     yield item
             finally:
                 if self._running_cells.get(notebook_id) == cell_id:
@@ -697,133 +628,6 @@ class Agent:
         except BaseException as e:  # surfaced to the consumer
             await queue.put(e)
 
-    # --- SQL Cells --------------------------------------------------------------------------------------
-
-    async def _run_sql_cell(self, notebook_id: str, cell: dict) -> AsyncIterator[Event]:
-        """Run a SQL Cell's statement without the LLM, through the query path Refresh uses. A bare count gives
-        a Count Display; anything else becomes a table (a re-run swaps the new rows in under the same name). The
-        Run keeps the labelled message an AI Cell below is sent, with its Query Metadata as it is now."""
-        cell_id, draft = cell["id"], cell["draft"]
-        sql, max_rows = draft.get("sql", ""), draft.get("max_rows") or DEFAULT_MAX_ROWS
-        command, table = draft.get("command") or "", draft.get("table") or ""
-        statement = statement_of(command, table) if command else sql
-        last = cell["run"]  # the table a re-run replaces: the latest Run's own Result Table, if still live; never a Saved Table
-        prior = next((t for t in (self.tables.tables_of_run(cell_id, last["id"]) if last else []) if t.kind == "result"), None)
-        run_id = self.notebooks.start_run(cell_id, statement, {"max_rows": max_rows, "command": command}, "")
-        stop = self._sql_stops[cell_id] = threading.Event()
-        started = time.monotonic()
-        try:
-            try:
-                outcome: dict[str, Any] = await asyncio.to_thread(self._execute_sql, sql, max_rows, stop, prior, CellRun(cell_id, run_id), command, table)
-            except asyncio.CancelledError:  # the client left: abandon the query
-                stop.set()
-                self.notebooks.finish_run(run_id, "stopped")
-                raise
-            except Exception:
-                log.exception("SQL Cell %s crashed", cell_id)
-                msg = "The query could not be run."
-                outcome = {"status": "failed", "error": msg, "raw_error": msg}
-        finally:
-            self._sql_stops.pop(cell_id, None)
-        outcome["elapsed_s"] = round(time.monotonic() - started, 3)
-        label = f"[SHOW Cell, run by the user] {statement}" if command else f"[SQL Cell, run by the user] {sql}"
-        displays: list[tuple] = []
-        event: Event | None = None
-        if outcome["status"] == "stopped":
-            detail = "(stopped by the user)"  # as an AI Cell's stopped Run reads below
-        elif outcome["status"] == "failed":
-            detail = f"Failed: {outcome['error']}"
-        elif "rows" in outcome:
-            detail = self._show_message(outcome["columns"], outcome["rows"])
-        elif "count" in outcome:
-            detail = f"Count: {outcome['count']}"
-            computed, title = self.config.clock(), queries.shorten_sql(sql)
-            displays.append((COUNT_KIND, None, {"title": title, "value": outcome["count"], "sql": sql, "computed_at_ms": computed}))
-            event = CountEvent(title, outcome["count"], sql, computed)
-        else:
-            meta = {"result_table": outcome["table"], "columns": outcome["columns"], "row_count": outcome["row_count"]}
-            if outcome.get("truncated_to"):
-                meta["truncated_to"] = outcome["truncated_to"]
-            detail = f"Query Metadata: {json.dumps(meta)}"
-            names = [c["name"] for c in outcome["columns"]]
-            displays.append(("table", outcome["table"], {"columns": names}))
-            event = DisplayEvent("table", outcome["table"], names)
-        # The message is stored once, so what AI Cells below are sent is frozen at this Run.
-        self.notebooks.add_step(run_id, [({"role": "user", "content": f"{label}\n{detail}"}, displays)])
-        self.notebooks.save_result(run_id, {k: v for k, v in outcome.items() if k != "columns" or "rows" in outcome})
-        self.notebooks.finish_run(run_id, outcome["status"])
-        if event is not None:
-            yield event
-        if outcome["status"] == "failed":
-            yield TurnError(outcome["raw_error"], "sql cell failed")
-        yield TurnEnd()
-
-    @staticmethod
-    def _show_message(columns: list[str], rows: list[list]) -> str:
-        """A SHOW Cell result as an AI Cell below is sent it: the columns and up to SHOW_ROWS_TO_AI rows, with a
-        note when rows were left out."""
-        lines = [" | ".join(columns)] + [" | ".join("" if v is None else str(v) for v in r) for r in rows[:SHOW_ROWS_TO_AI]]
-        if len(rows) > SHOW_ROWS_TO_AI:
-            lines.append(f"(first {SHOW_ROWS_TO_AI} of {len(rows)} rows; the other rows were left out)")
-        return "\n".join(lines)
-
-    def _execute_sql(self, sql: str, max_rows: int, stop: threading.Event, prior: Table | None, owner: CellRun,
-                     command: str = "", table: str = "") -> dict:
-        """The blocking part of a SQL Cell Run (it runs in a thread): the outcome as a dict with `status` ok, failed
-        or stopped, then `count`, or `table`, `columns`, `row_count` and `truncated_to`, or `error` (value-free) and
-        `raw_error` (for the user, and logged)."""
-        cfg, readable = self.config, self.tables.readable()
-        if command:  # SHOW / DESCRIBE: no table, no row cap; the rows are kept with the Run
-            try:
-                names, rows = run_show(command, table, cfg.telemetry_db, cfg.results_db, self.tables.listing())
-            except ShowFailed as e:
-                log.warning("SQL Cell %s failed: %s", owner.cell_id, e)
-                return {"status": "failed", "error": str(e), "raw_error": str(e)}
-            return {"status": "ok", "columns": names, "rows": rows, "row_count": len(rows), "command": command}
-        if is_show_statement(sql):
-            return {"status": "failed", "error": SHOW_IN_TEXTBOX, "raw_error": SHOW_IN_TEXTBOX}
-        if queries.ends_with_limit(sql):
-            return {"status": "failed", "error": queries.LIMIT_IN_SQL_CELL, "raw_error": queries.LIMIT_IN_SQL_CELL}
-
-        def failure(result: dict) -> dict:
-            if result.get("stopped"):
-                return {"status": "stopped"}
-            raw = result.get("raw_error") or result["error"]
-            log.warning("SQL Cell %s failed: %s", owner.cell_id, raw)
-            return {"status": "failed", "error": result["error"], "raw_error": raw}
-
-        if queries.looks_like_count(sql):
-            counted = queries.run_count_query(cfg.telemetry_db, cfg.results_db, sql, cfg.query_timeout_s, readable, stop)
-            if counted["success"]:
-                return {"status": "ok", "count": counted["count"]}
-            if counted.get("stopped") or counted["error"] != queries.COUNT_GUIDANCE:
-                return failure(counted)  # a real failure; only the wrong shape falls back to a table
-        title = queries.shorten_sql(sql)
-        if prior is not None:  # a re-run: new rows under the same name, all or nothing
-            try:
-                done = self.replacement.replace(prior.name, sql, max_rows, stop=stop, rerun=Rerun(owner, title))
-            except ReplacementFailed as e:
-                return failure({"error": e.error, "raw_error": e.raw_error, "stopped": e.stopped})
-            except RefreshInProgress as e:
-                return failure({"error": str(e)})
-            except TableExpired:
-                return failure({"error": f"The table {prior.name} expired during the run. Run the cell again."})
-            t = done.table
-            return {"status": "ok", "table": t.name, "columns": t.columns, "row_count": done.row_count,
-                    "truncated_to": t.truncated_to}
-        result = queries.run_query(cfg.telemetry_db, cfg.results_db, sql, cfg.query_timeout_s, max_rows, readable, title, stop)
-        if not result["success"]:
-            return failure(result)
-        name = result["result_table"]
-        try:
-            self.tables.register_for(owner, name, title, result["columns"], table_names.SQL_CELL_REQUEST,
-                                     result.get("truncated_to"), sql, max_rows)
-        except BaseException:
-            queries.drop_table(cfg.results_db, name)
-            raise
-        return {"status": "ok", "table": name, "columns": result["columns"], "row_count": result["row_count"],
-                "truncated_to": result.get("truncated_to")}
-
     def running_cell(self, notebook_id: str) -> str | None:
         """The id of the cell running in this notebook now, or None."""
         return self._running_cells.get(notebook_id)
@@ -831,11 +635,7 @@ class Agent:
     def stop_cell(self, cell_id: str) -> bool:
         """Stop a running cell now. What it had streamed is kept and its Run is recorded as stopped.
         False if the cell is not running."""
-        flag = self._sql_stops.get(cell_id)
-        if flag is not None:  # a SQL Cell: its query's progress handler sees the flag and aborts it
-            flag.set()
-            return True
-        return self.stop_turn(cell_id)
+        return self.sql_cells.stop(cell_id) or self.stop_turn(cell_id)
 
     def fetch_rows(self, result_table: str, columns: list[str] | None = None, **page_args) -> dict:
         """Internal data path used by the row-JSON endpoint. Not an LLM tool.

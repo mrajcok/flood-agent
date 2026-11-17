@@ -11,6 +11,7 @@ That message is frozen at this Run, and from a table it carries only Query Metad
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import threading
@@ -33,7 +34,11 @@ CRASHED = "The query could not be run."
 
 
 # What the blocking part of a Run ended with. Each knows how it is saved with the Run (a stored format the page
-# and saved Notebooks read: keep its keys) and how it reads to the AI Cells below.
+# and saved Notebooks read: keep its keys), how it reads to the AI Cells below, and what it shows: the Displays
+# saved with the Run and the events streamed before the end.
+
+_Shown = tuple[list[tuple], list[Event]]
+
 
 @dataclass
 class _ShowRows:
@@ -54,6 +59,9 @@ class _ShowRows:
             lines.append(f"(first {SHOW_ROWS_TO_AI} of {len(self.rows)} rows; the other rows were left out)")
         return "\n".join(lines)
 
+    def shown(self, sql: str, clock: Callable[[], int]) -> _Shown:  # the rows are in the saved result
+        return [], []
+
 
 @dataclass
 class _Count:
@@ -65,6 +73,11 @@ class _Count:
 
     def detail(self) -> str:
         return f"Count: {self.value}"
+
+    def shown(self, sql: str, clock: Callable[[], int]) -> _Shown:
+        computed, title = clock(), queries.shorten_sql(sql)
+        display = (COUNT_KIND, None, {"title": title, "value": self.value, "sql": sql, "computed_at_ms": computed})
+        return [display], [CountEvent(title, self.value, sql, computed)]
 
 
 @dataclass
@@ -84,6 +97,15 @@ class _TableMade:
             meta["truncated_to"] = self.truncated_to
         return f"Query Metadata: {json.dumps(meta)}"
 
+    def shown(self, sql: str, clock: Callable[[], int]) -> _Shown:
+        names = [c["name"] for c in self.columns]
+        return [("table", self.name, {"columns": names})], [DisplayEvent("table", self.name, names)]
+
+
+def _refused(text: str) -> "_Failed":
+    """A failure whose one message is both what the user sees and what the AI Cells below are sent."""
+    return _Failed(text, text)
+
 
 @dataclass
 class _Failed:
@@ -97,6 +119,9 @@ class _Failed:
     def detail(self) -> str:
         return f"Failed: {self.error}"
 
+    def shown(self, sql: str, clock: Callable[[], int]) -> _Shown:
+        return [], [TurnError(self.raw_error, "sql cell failed")]
+
 
 @dataclass
 class _Stopped:
@@ -107,6 +132,9 @@ class _Stopped:
 
     def detail(self) -> str:
         return "(stopped by the user)"  # as an AI Cell's stopped Run reads below
+
+    def shown(self, sql: str, clock: Callable[[], int]) -> _Shown:
+        return [], []
 
 
 _Outcome = _ShowRows | _Count | _TableMade | _Failed | _Stopped
@@ -120,12 +148,12 @@ class SqlCellRuns:
                  telemetry_db: Path, results_db: Path, timeout_s: float, clock: Callable[[], int]):
         self.notebooks, self.tables, self.replacement = notebooks, tables, replacement
         self.telemetry_db, self.results_db, self.timeout_s, self.clock = telemetry_db, results_db, timeout_s, clock
-        self._stops: dict[str, threading.Event] = {}  # SQL Cell id -> its running query's stop flag
+        self._running: dict[str, tuple[threading.Event, asyncio.Future]] = {}  # SQL Cell id -> its query's stop flag and thread
 
-    async def run(self, notebook_id: str, cell: dict) -> AsyncIterator[Event]:
+    async def run(self, cell: dict) -> AsyncIterator[Event]:
         """Run a SQL Cell with what its Draft holds and stream its events: a table or Count Display, an error,
-        then the end. Its Run replaces the Cell's earlier one. If the stream is abandoned (the client left), the
-        query is abandoned and the Run recorded as stopped."""
+        then the end. Its Run replaces the Cell's earlier one. If the stream is abandoned (the client left, or
+        the app is closing), the query is stopped and waited for, and the Run is recorded as stopped."""
         cell_id, draft = cell["id"], cell["draft"]
         sql, max_rows = draft.get("sql", ""), draft.get("max_rows") or DEFAULT_MAX_ROWS
         command, table = draft.get("command") or "", draft.get("table") or ""
@@ -133,52 +161,52 @@ class SqlCellRuns:
         last = cell["run"]  # the table a re-run replaces: the latest Run's own Result Table, if still live; never a Saved Table
         prior = next((t for t in (self.tables.tables_of_run(cell_id, last["id"]) if last else []) if t.kind == "result"), None)
         run_id = self.notebooks.start_run(cell_id, statement, {"max_rows": max_rows, "command": command}, "")
-        stop = self._stops[cell_id] = threading.Event()
+        stop = threading.Event()
+        work = asyncio.ensure_future(asyncio.to_thread(
+            self._execute, sql, max_rows, stop, prior, CellRun(cell_id, run_id), command, table))
+        self._running[cell_id] = (stop, work)
         started = time.monotonic()
         try:
             try:
-                outcome = await asyncio.to_thread(
-                    self._execute, sql, max_rows, stop, prior, CellRun(cell_id, run_id), command, table)
-            except asyncio.CancelledError:  # the client left: abandon the query
-                stop.set()
-                self.notebooks.finish_run(run_id, "stopped")
-                raise
+                outcome: _Outcome = await asyncio.shield(work)  # a cancel reaches us, not the query's thread
             except Exception:
                 log.exception("SQL Cell %s crashed", cell_id)
-                outcome = _Failed(CRASHED, CRASHED)
+                outcome = _refused(CRASHED)
+            except BaseException:  # abandoned: stop the query, wait for its thread, then let the cancel through
+                stop.set()
+                with contextlib.suppress(BaseException):
+                    await work
+                self.notebooks.finish_run(run_id, "stopped")
+                raise
         finally:
-            self._stops.pop(cell_id, None)
+            self._running.pop(cell_id, None)
         elapsed_s = round(time.monotonic() - started, 3)
 
         label = f"[SHOW Cell, run by the user] {statement}" if command else f"[SQL Cell, run by the user] {sql}"
-        displays: list[tuple] = []
-        event: Event | None = None
-        if isinstance(outcome, _Count):
-            computed, title = self.clock(), queries.shorten_sql(sql)
-            displays.append((COUNT_KIND, None, {"title": title, "value": outcome.value, "sql": sql, "computed_at_ms": computed}))
-            event = CountEvent(title, outcome.value, sql, computed)
-        elif isinstance(outcome, _TableMade):
-            names = [c["name"] for c in outcome.columns]
-            displays.append(("table", outcome.name, {"columns": names}))
-            event = DisplayEvent("table", outcome.name, names)
+        displays, events = outcome.shown(sql, self.clock)
         # The message is stored once, so what AI Cells below are sent is frozen at this Run.
         self.notebooks.add_step(run_id, [({"role": "user", "content": f"{label}\n{outcome.detail()}"}, displays)])
         self.notebooks.save_result(run_id, outcome.saved() | {"elapsed_s": elapsed_s})
         self.notebooks.finish_run(run_id, outcome.status)
-        if event is not None:
+        for event in events:
             yield event
-        if isinstance(outcome, _Failed):
-            yield TurnError(outcome.raw_error, "sql cell failed")
         yield TurnEnd()
 
     def stop(self, cell_id: str) -> bool:
         """Stop a running SQL Cell now: its query's progress handler sees the flag and aborts it, and the Run is
         recorded as stopped. False if the Cell is not running here."""
-        flag = self._stops.get(cell_id)
-        if flag is None:
+        running = self._running.get(cell_id)
+        if running is None:
             return False
-        flag.set()
+        running[0].set()
         return True
+
+    async def aclose(self) -> None:
+        """Stop every running SQL Cell's query and wait for its thread, so none is left using the databases."""
+        running = list(self._running.values())
+        for stop, _ in running:
+            stop.set()
+        await asyncio.gather(*(work for _, work in running), return_exceptions=True)
 
     def _execute(self, sql: str, max_rows: int, stop: threading.Event, prior: Table | None, owner: CellRun,
                  command: str, table: str) -> _Outcome:
@@ -188,12 +216,12 @@ class SqlCellRuns:
                 names, rows = run_show(command, table, self.telemetry_db, self.results_db, self.tables.listing())
             except ShowFailed as e:
                 log.warning("SQL Cell %s failed: %s", owner.cell_id, e)
-                return _Failed(str(e), str(e))
+                return _refused(str(e))
             return _ShowRows(names, rows, command)
         if is_show_statement(sql):
-            return _Failed(SHOW_IN_TEXTBOX, SHOW_IN_TEXTBOX)
+            return _refused(SHOW_IN_TEXTBOX)
         if queries.ends_with_limit(sql):
-            return _Failed(queries.LIMIT_IN_SQL_CELL, queries.LIMIT_IN_SQL_CELL)
+            return _refused(queries.LIMIT_IN_SQL_CELL)
 
         def failure(error: str, raw_error: str | None = None, stopped: bool = False) -> _Outcome:
             if stopped:

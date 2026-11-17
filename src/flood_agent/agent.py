@@ -296,7 +296,8 @@ class Agent:
             return connection
 
     async def aclose(self) -> None:
-        """Stop the MCP server and reap its process."""
+        """Stop running Cells and the MCP server, and reap its process."""
+        await self.sql_cells.aclose()  # SQL Cell queries are stopped and waited for
         # In-flight turns first (this also cancels a restart in progress), so none is left
         # talking to a closing connection.
         tasks = list(self._turn_tasks)
@@ -503,7 +504,7 @@ class Agent:
         self._running_cells[notebook_id] = cell_id
         if cell["kind"] == SQL:
             try:
-                async for item in self.sql_cells.run(notebook_id, cell):
+                async for item in self.sql_cells.run(cell):
                     yield item
             finally:
                 if self._running_cells.get(notebook_id) == cell_id:

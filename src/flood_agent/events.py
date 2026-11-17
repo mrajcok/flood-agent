@@ -43,7 +43,7 @@ class TraceEntry:
 
 @dataclass
 class TraceReady:
-    """The finished Trace for the turn (already persisted); for the UI only, never for the LLM."""
+    """The finished Trace for the Run (already persisted); for the UI only, never for the LLM."""
 
     trace: dict
 
@@ -59,21 +59,21 @@ class FlagEvent:
 
 @dataclass
 class LlmCallStarted:
-    """The turn is about to make its `number`th LLM call (1-based); for the live view only."""
+    """The Run is about to make its `number`th LLM call (1-based); for the live view only."""
 
     number: int
 
 
 @dataclass
 class TraceLive:
-    """A Trace entry, the moment it is added to the turn's Trace; for the live view only."""
+    """A Trace entry, the moment it is added to the Run's Trace; for the live view only."""
 
     entry: dict
 
 
 @dataclass
 class TurnError:
-    """The turn failed partway. `message` was already streamed to the user (and saved); `detail`
+    """The Run failed partway. `message` was already streamed to the user (and saved); `detail`
     is the technical description (also in the Trace) for harnesses such as the eval runner."""
 
     message: str

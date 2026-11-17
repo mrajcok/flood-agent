@@ -8,6 +8,7 @@ import asyncio
 import contextlib
 import logging
 import sqlite3
+import threading
 
 from conftest import DAY, Clock, ScriptedLLM
 
@@ -28,7 +29,7 @@ async def run(agent, notebook_id, cell_id):
 
 async def run_sql(agent, notebook_id, cell_id):
     """Run a SQL Cell through the SQL Cell Run module."""
-    return [ev async for ev in agent.sql_cells.run(notebook_id, agent.notebooks.cell(cell_id))]
+    return [ev async for ev in agent.sql_cells.run(agent.notebooks.cell(cell_id))]
 
 
 def run_of(agent, notebook_id, index):
@@ -413,3 +414,84 @@ async def test_the_agent_runs_a_sql_cell_without_being_started_but_not_an_ai_cel
     with pytest.raises(RuntimeError, match="not started"):
         await run(agent, nb, ai)
     assert agent.running_cell(nb) is None  # the refused AI Cell did not leave the Notebook busy
+
+
+async def test_a_re_run_after_the_table_expired_creates_a_fresh_table(build_agent):
+    clock = Clock()
+    agent = build_agent(ScriptedLLM(), clock=clock, result_ttl_ms=DAY)
+    nb = agent.create_notebook()
+    cell = agent.add_sql_cell(nb, sql="SELECT dport FROM flows", max_rows=2)
+    await run_sql(agent, nb, cell)
+    old = table_of(agent, nb, 0).name
+    clock.ms += 2 * DAY
+    agent.tables.sweep()  # its Retention is over before the re-run
+    await asyncio.sleep(1.1)  # table names come from the wall-clock second: the fake clock moved, the real one did not
+
+    await run_sql(agent, nb, cell)
+
+    assert run_of(agent, nb, 0)["status"] == "ok"
+    new = table_of(agent, nb, 0)
+    assert new.name != old and agent.tables.names() == [new.name]
+
+
+async def test_a_re_run_while_its_table_is_being_refreshed_fails_saying_so(build_agent, monkeypatch):
+    agent = build_agent(ScriptedLLM())
+    nb = agent.create_notebook()
+    cell = agent.add_sql_cell(nb, sql="SELECT dport FROM flows", max_rows=2)
+    await run_sql(agent, nb, cell)
+    name = table_of(agent, nb, 0).name
+    real, entered, release = queries.run_query, threading.Event(), threading.Event()
+
+    def held(*args, **kwargs):  # the Refresh's query, held open until the re-run has tried
+        entered.set()
+        release.wait(5)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(queries, "run_query", held)
+    refresh = threading.Thread(target=agent.refresh_table, args=(name,))
+    refresh.start()
+    assert entered.wait(5)
+    try:
+        await run_sql(agent, nb, cell)
+    finally:
+        release.set()
+        refresh.join(5)
+
+    run_ = run_of(agent, nb, 0)
+    assert run_["status"] == "failed" and "already being replaced" in run_["result"]["raw_error"]
+    assert agent.tables.names() == [name]
+
+
+async def test_the_frozen_message_for_a_count_a_failure_and_a_stop(build_agent):
+    agent = build_agent(ScriptedLLM(), query_timeout_s=60)
+    nb = agent.create_notebook()
+    count = agent.add_sql_cell(nb, sql="SELECT COUNT(*) FROM flows")
+    limited = agent.add_sql_cell(nb, sql="SELECT dport FROM flows LIMIT 5")
+    slow = agent.add_sql_cell(nb, sql=SLOW)
+    await run_sql(agent, nb, count)
+    await run_sql(agent, nb, limited)
+    task = asyncio.create_task(run_sql(agent, nb, slow))
+    await until_running(agent, nb, 2)
+    agent.sql_cells.stop(slow)
+    await asyncio.wait_for(task, 10)
+
+    def message(index):
+        return run_of(agent, nb, index)["messages"][-1]["content"]
+
+    value = run_of(agent, nb, 0)["result"]["count"]
+    assert message(0) == f"[SQL Cell, run by the user] SELECT COUNT(*) FROM flows\nCount: {value}"
+    assert message(1) == f"[SQL Cell, run by the user] SELECT dport FROM flows LIMIT 5\nFailed: {queries.LIMIT_IN_SQL_CELL}"
+    assert message(2) == f"[SQL Cell, run by the user] {SLOW}\n(stopped by the user)"
+
+
+async def test_closing_the_agent_stops_a_running_sql_cell_and_waits_for_its_query(build_agent):
+    agent = build_agent(ScriptedLLM(), query_timeout_s=60)
+    nb = agent.create_notebook()
+    cell = agent.add_sql_cell(nb, sql=SLOW)
+    task = asyncio.create_task(run_sql(agent, nb, cell))
+    await until_running(agent, nb, 0)
+
+    await asyncio.wait_for(agent.aclose(), 10)  # the query is aborted, not left running
+
+    await asyncio.wait_for(task, 10)
+    assert run_of(agent, nb, 0)["status"] == "stopped"

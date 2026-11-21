@@ -31,8 +31,11 @@ def rows(db, sql, *args):
         con.close()
 
 
-def fingerprint(db):
-    return hashlib.sha256(repr(rows(db, "SELECT * FROM flows ORDER BY rowid")).encode()).hexdigest()
+def fingerprint(db, where="1"):
+    return hashlib.sha256(repr(rows(db, f"SELECT * FROM flows WHERE {where} ORDER BY rowid")).encode()).hexdigest()
+
+
+NOT_TUNNEL = "NOT (sip='10.0.0.53' AND dip='10.2.200.17' AND sport=53)"
 
 
 def test_same_seed_gives_identical_database_and_attacks(built, tmp_path):
@@ -76,9 +79,9 @@ def test_ips_are_ipv4_dotted_decimal_and_circuits_opaque(built):
         assert re.fullmatch(r"[A-Z0-9]{12}", c)
 
 
-def test_three_attacks_recorded_with_parameters(built):
+def test_four_attacks_recorded_with_parameters(built):
     db, attacks = built
-    assert {a["type"] for a in attacks} == {"syn_flood", "amplification", "port_scan"}
+    assert {a["type"] for a in attacks} == {"syn_flood", "amplification", "port_scan", "dns_tunnel"}
     lo, hi = rows(db, "SELECT MIN(etime), MAX(etime) FROM flows")[0]
     for a in attacks:
         assert lo <= a["start"] < a["end"] <= hi + 1
@@ -127,7 +130,7 @@ def dns_columns():
 
 def test_flows_are_unchanged_by_the_dns_pass(built):
     db, _ = built
-    assert fingerprint(db) == FLOWS_FINGERPRINT_SEED7_SCALE001
+    assert fingerprint(db, NOT_TUNNEL) == FLOWS_FINGERPRINT_SEED7_SCALE001
 
 
 def test_dns_metadata_is_reproducible_ordered_and_indexed(built, tmp_path):
@@ -162,8 +165,8 @@ def test_dns_columns_and_values_follow_the_semantic_layer(built):
 
 def test_about_half_of_dns_rows_join_to_a_flow_and_ipv6_rows_do_not(built):
     db, _ = built
-    total = rows(db, "SELECT COUNT(*) FROM dns_metadata WHERE question <> 'amp.example.net'")[0][0]
-    joined = rows(db, f"SELECT COUNT(DISTINCT d.rowid) {JOIN} WHERE d.question <> 'amp.example.net'")[0][0]
+    total = rows(db, "SELECT COUNT(*) FROM dns_metadata WHERE question <> 'amp.example.net' AND question NOT LIKE '%.c2.example.org'")[0][0]
+    joined = rows(db, f"SELECT COUNT(DISTINCT d.rowid) {JOIN} WHERE d.question <> 'amp.example.net' AND d.question NOT LIKE '%.c2.example.org'")[0][0]
     assert 0.35 < joined / total < 0.65
     assert rows(db, "SELECT COUNT(*) FROM dns_metadata WHERE sip LIKE '%:%' OR dip LIKE '%:%'")[0][0] > 0
     assert rows(db, f"SELECT COUNT(*) {JOIN} WHERE d.sip LIKE '%:%' OR d.dip LIKE '%:%'")[0][0] == 0
@@ -214,7 +217,8 @@ def test_attacks_json_dns_fields_are_only_on_amplification(built):
     for a in attacks:
         has = "dns_question" in a
         assert has == (a["type"] == "amplification")
-        assert has == ("dns_qtype" in a) == ("dns_response_count" in a)
+        assert has == ("dns_qtype" in a)
+        assert ("dns_response_count" in a) == (a["type"] in ("amplification", "dns_tunnel"))
 
 
 def flows_dns_join_sql(start, end):
@@ -228,3 +232,50 @@ def test_flows_dns_join_metric_finds_the_abused_name_over_the_attack_window(buil
     amp = next(a for a in attacks if a["type"] == "amplification")
     result = rows(db, flows_dns_join_sql(amp["start"], amp["end"] + 1))
     assert any("amp.example.net" in r and 255 in r for r in result)
+
+
+def tunnel(attacks):
+    return next(a for a in attacks if a["type"] == "dns_tunnel")
+
+
+def test_dns_tunnel_entry_matches_the_data(built):
+    db, attacks = built
+    t = tunnel(attacks)
+    assert t["start"] == 1767225600000 + (6 * 1440 + 9 * 60) * 60_000
+    assert t["end"] == t["start"] + 3_600_000 - 1
+    assert (t["client"], t["resolver"], t["domain"]) == ("10.2.200.17", "10.0.0.53", "c2.example.org")
+    responses = rows(db, "SELECT sip, dip, tid, etime FROM dns_metadata WHERE question LIKE '%.' || ?",
+                     t["domain"])
+    assert t["dns_response_count"] == len({tuple(r) for r in responses}) == len(responses)
+    assert 1700 <= len(responses) <= 1900
+    assert all(r[0] == t["resolver"] and r[1] == t["client"] and t["start"] <= r[3] <= t["end"]
+               for r in responses)
+    per_minute = [c for (c,) in rows(db, "SELECT COUNT(*) FROM dns_metadata WHERE question LIKE '%.' || ? "
+                                         "GROUP BY etime / 60000", t["domain"])]
+    assert len(per_minute) == 60 and all(15 <= c <= 45 for c in per_minute)
+
+
+def test_dns_tunnel_questions_are_base32_labels_and_answers_long_txt(built):
+    db, attacks = built
+    t = tunnel(attacks)
+    got = rows(db, "SELECT question, qtype, rtype, rdata, rsection FROM dns_metadata "
+                   "WHERE question LIKE '%.' || ?", t["domain"])
+    assert got
+    for question, qtype, rtype, rdata, rsection in got:
+        label, _, domain = question.partition(".")
+        assert domain == "c2.example.org" and re.fullmatch(r"[a-z2-7]{38,42}", label)
+        assert (qtype, rtype, rsection) == (16, 16, "N") and len(rdata) >= 100
+
+
+def test_every_dns_tunnel_response_joins_to_a_small_udp_53_flow(built):
+    db, attacks = built
+    t = tunnel(attacks)
+    flows = rows(db, "SELECT proto, bytes, pkts FROM flows WHERE sip=? AND dip=? AND sport=53",
+                 t["resolver"], t["client"])
+    assert len(flows) == t["flow_count"] == t["dns_response_count"]
+    assert all(proto == 17 and b < 1000 for proto, b, _ in flows)
+    unjoined, = rows(db, "SELECT COUNT(*) FROM dns_metadata d WHERE d.question LIKE '%.' || ? AND NOT EXISTS "
+                         "(SELECT 1 FROM flows f WHERE d.sip=f.sip AND d.dip=f.dip AND d.sport=f.sport "
+                         "AND d.dport=f.dport AND d.proto=f.proto AND d.etime BETWEEN f.stime AND f.etime)",
+                     t["domain"])[0]
+    assert unjoined == 0

@@ -164,3 +164,16 @@ metrics:
   per_minute_series:
     description: Time series bucketed per minute on the Time Key.
     sql: SELECT (etime / 60000) * 60000 AS minute, SUM(bytes) AS bytes FROM flows WHERE etime >= <start> AND etime < <end> GROUP BY minute ORDER BY minute
+  flows_dns_join:
+    description: >-
+      Join Flow Records to DNS Response Records (each DNS response that belongs to a flow). Equal
+      sip, dip, sport, dport and proto, each side's etime bounded separately, and the response's
+      etime within the flow's stime..etime. Use it to find the name behind a flow, e.g. the name
+      reflectors were abusing in an amplification attack. IPv6 DNS rows never join.
+    sql: >-
+      SELECT d.question, d.qtype, COUNT(*) AS responses, SUM(f.bytes) AS total_bytes
+      FROM flows f JOIN dns_metadata d ON d.sip = f.sip AND d.dip = f.dip AND d.sport = f.sport
+      AND d.dport = f.dport AND d.proto = f.proto
+      WHERE f.etime >= <start> AND f.etime < <end> AND d.etime >= <start> AND d.etime < <end>
+      AND d.etime BETWEEN f.stime AND f.etime
+      GROUP BY d.question, d.qtype ORDER BY total_bytes DESC LIMIT 10

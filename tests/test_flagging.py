@@ -172,3 +172,29 @@ def test_a_run_shows_its_flag_note_after_the_reply_and_its_trace_after_that(buil
     nb, _, _ = ask(client, "hello")
     page = client.get(f"/n/{nb}").text
     assert page.index("hello") < page.index("203.0.113.99 was busy") < page.index('class="flag-note"') < page.index('class="trace cell-trace"')
+
+
+CTX6 = ["User asked about 2001:db8::1 and ::ffff:192.0.2.5 and 198.51.100.7 on a link"]
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        ("see 2001:db8::99", ["2001:db8::99"]),  # invented, compressed
+        ("see 2001:0db8:0000:0000:0000:0000:0000:0099", ["2001:0db8:0000:0000:0000:0000:0000:0099"]),
+        ("see 2001:db8::1", []),  # from context
+        ("see 2001:0DB8:0:0:0:0:0:1", []),  # expanded, upper case
+        ("see 2001:db8:0:0:0:0:0:1.", []),  # sentence-final dot
+        ("see 2001:db8::1/64", []),  # prefix length ignored
+        ("see 2001:db8::99/64", ["2001:db8::99"]),
+        ("see 192.0.2.5", []),  # context had it mapped
+        ("see ::ffff:198.51.100.7", []),  # context had it as IPv4
+        ("see ::ffff:c633:6407", []),  # hex-form mapped address
+        ("see ::ffff:203.0.113.9", ["::ffff:203.0.113.9"]),  # mapped, never sent: one flag, not two
+        ("see 64:ff9b::192.0.2.33", ["64:ff9b::192.0.2.33"]),  # IPv4-embedded
+        ("at 12:30:45 and 9:15, ratio 3:1", []),  # times and ratios
+        ("see 2001:db8::99, 2001:DB8:0::99", ["2001:db8::99"]),  # deduplicated by normal form
+    ],
+)
+def test_ipv6_table(reply, expected):
+    assert find_unseen_values(reply, CTX6) == expected

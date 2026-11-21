@@ -53,7 +53,7 @@ def built(tmp_path_factory, request):
 
 def test_golden_set_is_about_thirty_unique_questions():
     ids = [q.id for q in QUESTIONS]
-    assert 28 <= len(ids) <= 36
+    assert 28 <= len(ids) <= 43
     assert len(set(ids)) == len(ids)
     assert sum(1 for q in QUESTIONS if q.crosscheck) >= 8  # many target the attacks
 
@@ -71,6 +71,10 @@ def test_attack_answers_agree_with_attacks_json(q, built):
     cc = q.crosscheck
     attack = next(a for a in attacks if a["type"] == cc["attack"])
     columns, rows = run_reference(db, d / "scratch.db", q.sql)
+    if "equals" in cc:  # {result column: attacks.json field}, exact match on the first row
+        for column, field in cc["equals"].items():
+            assert rows[0][columns.index(column)] == attack[field]
+        return
     value = rows[0][columns.index(cc["column"])]
     if "field" in cc:
         low = attack[cc["field"]]
@@ -82,3 +86,20 @@ def test_attack_answers_agree_with_attacks_json(q, built):
             "sources": attack["sources"],
         }[cc["in"]]
         assert value in allowed
+
+
+DNS_IDS = {"dns-total-records", "dns-top-names", "dns-records-by-rtype", "dns-tunnel",
+           "amp-dns-name", "dns-ipv6-cidr", "dns-suffix"}
+
+
+def test_dns_questions_are_in_the_set_and_the_two_joins_are_crosschecked():
+    by_id = {q.id: q for q in QUESTIONS}
+    assert DNS_IDS <= by_id.keys()
+    assert by_id["dns-top-names"].ordered
+    assert by_id["dns-tunnel"].crosscheck["attack"] == "dns_tunnel"
+    assert by_id["amp-dns-name"].crosscheck["attack"] == "amplification"
+
+
+def test_header_lists_the_tunnelling_window():
+    from flood_agent.evalset import golden
+    assert "tunnelling 2026-01-07 09:00-10:00" in golden.GOLDEN_PATH.read_text()

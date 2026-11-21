@@ -35,8 +35,11 @@ functions:
   in_cidr:
     signature: in_cidr(ip, cidr)
     description: >-
-      1 if the IPv4 address is inside the CIDR block, else 0. Use for network-range filters
-      such as WHERE in_cidr(sip, '10.1.0.0/16'). It is a SQLite UDF; it needs an Ocient mapping.
+      1 if the IPv4 or IPv6 address is inside the CIDR block, else 0. Use for network-range
+      filters such as WHERE in_cidr(sip, '10.1.0.0/16') or in_cidr(addr, '2001:db8::/32').
+      Mixed families give 0, except an IPv4-mapped IPv6 address (::ffff:a.b.c.d) matches an IPv4
+      block. Invalid or NULL input gives NULL. It is a SQLite UDF; it needs an Ocient mapping:
+      SUBNET(IP(x), len[+96 for IPv4]) = IP('net') (still to be checked on a real Ocient system).
     example: "in_cidr(sip, '192.0.2.0/24')"
 metrics:
   bits_per_second:

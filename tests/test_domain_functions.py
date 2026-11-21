@@ -54,6 +54,19 @@ def test_a_null_argument_returns_null(telemetry_db, tmp_path, expr):
     assert value(telemetry_db, tmp_path, expr) is None
 
 
+@pytest.mark.parametrize(
+    "expr",
+    [
+        "ENDSWITH(5, 'a')", "ENDSWITH('a', 5)", "STARTSWITH(5, 'a')", "STARTSWITH('a', 5)",
+        "SPLIT_PART(5, '.', 1)", "SPLIT_PART('a', 5, 1)", "SPLIT_PART('a.b', '.', 'x')",
+        "REGEXP_SUBSTR(5, 'a')", "REGEXP_SUBSTR('a', 5)",
+        "REGEXP_COUNT(5, 'a')", "REGEXP_COUNT('a', 5)", "REVERSE(5)", "REVERSE(X'ab')",
+    ],
+)
+def test_a_non_text_argument_returns_null(telemetry_db, tmp_path, expr):
+    assert value(telemetry_db, tmp_path, expr) is None
+
+
 def test_the_functions_work_on_any_text_column(telemetry_db, tmp_path):
     result = queries.run_count_query(
         telemetry_db, tmp_path / "results.db", "SELECT COUNT(*) FROM flows WHERE STARTSWITH(sip, '1')", 5.0

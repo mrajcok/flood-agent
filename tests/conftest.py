@@ -115,10 +115,19 @@ def generated_db(tmp_path_factory) -> Path:
 
 @pytest.fixture
 def telemetry_db(request, tmp_path: Path, telemetry_db_template: Path) -> Path:
-    """A per-test copy of the session's test Telemetry Database. A test whose name mentions "dns"
-    (the DNS Canned Prompts) gets the generated one instead, since only it has dns_metadata."""
-    source = request.getfixturevalue("generated_db") if "dns" in request.node.name else telemetry_db_template
+    """A per-test copy of the session's test Telemetry Database. A test marked `generated_data`
+    gets the generated one instead, since only it has dns_metadata."""
+    generated = request.node.get_closest_marker("generated_data") is not None
+    source = request.getfixturevalue("generated_db") if generated else telemetry_db_template
     return Path(shutil.copy(source, tmp_path / "telemetry.db"))
+
+
+def canned_params(canned_prompts):
+    """Parametrize arguments for Canned Prompts: the DNS ones are marked `generated_data`."""
+    return [
+        pytest.param(c, id=c.id, marks=[pytest.mark.generated_data] if "dns" in c.id else [])
+        for c in canned_prompts
+    ]
 
 
 def all_telemetry_values(path: Path) -> set[str]:
@@ -130,11 +139,15 @@ def all_telemetry_values(path: Path) -> set[str]:
 
 def leakable_values(path: Path, canned) -> set[str]:
     """Telemetry values that must never reach the LLM. Values the Canned Prompt's own script names
-    (e.g. the victim IP) are not leaks; the generated data also has many plain numbers that the
-    SQL text contains, so the DNS prompts (which run on it) check only non-numeric values."""
+    (e.g. the victim IP) are not leaks. The generated data the DNS prompts run on also has many short
+    plain numbers that the SQL text contains by coincidence (1000, 3600, 15000), so for them a
+    number is only checked from 6 digits up; large counts, byte totals and IPs as integers still are."""
     script = repr(canned)
-    values = {v for v in all_telemetry_values(path) if len(v) >= 4 and v not in script}
-    return {v for v in values if not v.isdigit()} if canned.id.startswith("dns-") else values
+    min_digits = 6 if canned.id.startswith("dns-") else 4
+    return {
+        v for v in all_telemetry_values(path)
+        if len(v) >= (min_digits if v.isdigit() else 4) and v not in script
+    }
 
 
 class ScriptedLLM:

@@ -89,11 +89,16 @@ def _ipv6(rng):
 
 def _dns_names(rng) -> list[str]:
     names = {f"{rng.choice(HOST_WORDS)}{rng.randrange(1, 40)}.{rng.choice(ZONES)}" for _ in range(700)}
-    return sorted(names)[:500]
+    return rng.sample(sorted(names), 500)  # shuffled, so popularity (rank) is not alphabetical
 
 
 def _randomise_case(rng, name):
     return "".join(c.upper() if rng.random() < 0.5 else c for c in name)
+
+
+def _response_head(sip, dip, proto, sport, dport, tid, flags, question, qtype):
+    """The 13 fields every DNS Response Record row of one response repeats."""
+    return (sip, dip, proto, sport, dport, tid, "R", 0, 0, flags, question, qtype, 1)
 
 
 def _dns_response_rows(rng, name, qtype, sip, dip, proto, sport, dport, etime):
@@ -103,7 +108,7 @@ def _dns_response_rows(rng, name, qtype, sip, dip, proto, sport, dport, etime):
     question = case(rng, name)
     tid = rng.randrange(65536)
     authoritative = rng.random() < 0.3
-    head = (sip, dip, proto, sport, dport, tid, "R", 0, 0, 3 + (8 if authoritative else 0), question, qtype, 1)
+    head = _response_head(sip, dip, proto, sport, dport, tid, 3 + (8 if authoritative else 0), question, qtype)
     out = []
 
     def rec(section, rname, rtype, rdata):
@@ -146,7 +151,7 @@ AMP_RECORD_TYPES = [(16, "TXT"), (1, "A"), (28, "AAAA"), (2, "NS"), (46, "RRSIG"
 
 def _amp_response_rows(rng, sip, dip, proto, sport, dport, etime):
     """One ANY response of 10-30 records, as a reflector sends to the spoofed victim."""
-    head = (sip, dip, proto, sport, dport, rng.randrange(65536), "R", 0, 0, 3, AMP_QUESTION, AMP_QTYPE, 1)
+    head = _response_head(sip, dip, proto, sport, dport, rng.randrange(65536), 3, AMP_QUESTION, AMP_QTYPE)
     out = []
     for _ in range(rng.randint(10, 30)):
         rtype, kind = rng.choice(AMP_RECORD_TYPES)
@@ -175,8 +180,8 @@ def _tunnel_response_rows(rng, sip, dip, proto, sport, dport, etime):
     """A base32 label under the C2 domain, answered with a long encoded TXT record."""
     question = "".join(rng.choices("abcdefghijklmnopqrstuvwxyz234567", k=40)) + "." + TUNNEL_DOMAIN
     rdata = "".join(rng.choices("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", k=rng.randrange(180, 240)))
-    return [(sip, dip, proto, sport, dport, rng.randrange(65536), "R", 0, 0, 3, question, 16, 1,
-             "N", question, 16, 1, rng.randrange(30, 301), rdata, etime)]
+    head = _response_head(sip, dip, proto, sport, dport, rng.randrange(65536), 3, question, 16)
+    return [(*head, "N", question, 16, 1, rng.randrange(30, 301), rdata, etime)]
 
 
 def _generate_dns(con, seed, dns_flows, amp_flows=(), tunnel_flows=()):

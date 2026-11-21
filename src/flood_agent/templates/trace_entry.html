@@ -28,7 +28,7 @@
     {% elif e.kind == "stopped" %}
       <h4>Stopped by the user</h4>
     {% elif e.kind == "flag" %}
-      <h4>Flagged {% if e.type == "ip" %}IP address{% else %}number{% endif %} <code>{{ e.token }}</code></h4>
+      <h4>Flagged {% if e.type == "ip" %}IP address{% elif e.type == "domain" %}domain name{% else %}number{% endif %} <code>{{ e.token }}</code></h4>
       <p>Not found in the user's messages, the Semantic Layer, Query Metadata or the LLM's own SQL. Shown to the analyst only; not sent to the LLM.</p>
     {% else %}
       <h4>{{ e.kind }}</h4><pre>{{ e|tojson(indent=2) }}</pre>

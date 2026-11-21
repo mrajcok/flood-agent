@@ -15,6 +15,12 @@ Tokens
   or spaced from it only when a unit follows; or the words thousand/million/billion/trillion). Its value (suffix applied) must be >= LARGE_NUMBER. Numbers
   are compared by value, so `1,000,000`, `1000000` and `1M` are the same number.
 
+- Domain: two or more dot-separated labels whose last label is in the bundled IANA TLD list
+  (`tlds.txt`). A two-label token ending in a common file extension (`agent.py`) is skipped; three
+  or more labels are always checked. Compared ignoring case and a trailing dot. A domain passes if
+  it, or a name beneath it (so it is a parent of a seen name), appears in the allowed context; an
+  unseen subdomain of a seen name is flagged. There is no allowlist of well-known domains.
+
 Allowed context: every number and IP found anywhere in the texts passed in (no minimum size, no
 word-boundary rules, so digits inside identifiers such as `rt_1700000000111` count too). Bare
 numbers followed by a suffix are allowed both as written (`3`) and with the suffix applied (`3e9`).
@@ -30,6 +36,7 @@ it was legitimately sent are never flagged (that is the point).
 import ipaddress
 import re
 from decimal import Decimal
+from pathlib import Path
 
 LARGE_NUMBER = Decimal(10_000)
 
@@ -37,6 +44,15 @@ _IP = re.compile(r"(?<![\w.])((?:\d{1,3}\.){3}\d{1,3})(?!\w|\.\d)")
 # IPv6 candidates: runs of hex digits, colons and dots; only what ipaddress parses counts, so
 # times (12:30:45) and ratios (3:1) fall out.
 _IP6 = re.compile(r"(?<![\w:.])(?=[0-9A-Fa-f]*:)[0-9A-Fa-f:.]{2,}(?!\w)")
+_TLDS = frozenset(
+    line.strip().lower() for line in (Path(__file__).parent / "tlds.txt").read_text().splitlines()
+    if line.strip() and not line.startswith("#")
+)
+_FILE_EXTS = frozenset(
+    "py md sh rs js ts csv json sql txt html htm yaml yml toml xml png jpg jpeg gif svg pdf log zip gz tar "
+    "c h cc cpp go rb pl php java css ini cfg conf lock pyc so exe bat ps1 tsv parquet".split()
+)
+_DOMAIN = re.compile(r"(?<![\w.-])((?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z0-9-]+)\.?(?![\w-])")
 _MAG = {"k": 10**3, "m": 10**6, "g": 10**9, "t": 10**12,
         "thousand": 10**3, "million": 10**6, "billion": 10**9, "trillion": 10**12}
 _UNIT = r"(?:i?[Bb](?:ps|/s)?|pps)"
@@ -92,21 +108,34 @@ def _mask_ipv6(text: str) -> str:
     return text
 
 
-def _allowed(texts: list[str]) -> tuple[set[str], set[Decimal]]:
+def _domains(text: str, skip_files: bool):
+    """Yield (start, token, lower-case name) for each domain name in text."""
+    for m in _DOMAIN.finditer(text):
+        labels = m[1].lower().split(".")
+        if labels[-1] not in _TLDS or (skip_files and len(labels) == 2 and labels[-1] in _FILE_EXTS):
+            continue
+        yield m.start(), m[1], ".".join(labels)
+
+
+def _allowed(texts: list[str]) -> tuple[set[str], set[Decimal], set[str]]:
     ips: set[str] = set()
     nums: set[Decimal] = set()
+    domains: set[str] = set()  # every seen name and each of its parents
     for t in texts:
+        for _, _, name in _domains(t, skip_files=False):
+            labels = name.split(".")
+            domains.update(".".join(labels[i:]) for i in range(len(labels) - 1))
         ips.update(norm for _, _, _, norm in _ipv6s(t))
         t = _mask_ipv6(t)
         ips.update(m[1] for m in _IP.finditer(t) if _valid_ip(m[1]))
         for _, _, bare, value in _numbers(t, strict=False):
             nums.update((bare, value))
-    return ips, nums
+    return ips, nums, domains
 
 
 def find_unseen(text: str, allowed_texts: list[str]) -> list[tuple[str, str]]:
-    """Return [(type, token)] ("ip" or "number") in order of first appearance, deduplicated."""
-    allowed_ips, allowed_nums = _allowed(allowed_texts)
+    """Return [(type, token)] ("ip", "number" or "domain") in order of first appearance, deduplicated."""
+    allowed_ips, allowed_nums, allowed_domains = _allowed(allowed_texts)
     found: list[tuple[int, str, str]] = []
     forms: dict[str, str] = {}  # normal form -> token as first written
     for start, _, token, norm in _ipv6s(text):
@@ -121,6 +150,9 @@ def find_unseen(text: str, allowed_texts: list[str]) -> list[tuple[str, str]]:
     for start, token, _, value in _numbers(masked, strict=True):
         if value >= LARGE_NUMBER and value not in allowed_nums:
             found.append((start, "number", token))
+    for start, token, name in _domains(text, skip_files=True):
+        if name not in allowed_domains:
+            found.append((start, "domain", token))
     seen, out = set(), []
     for _, kind, token in sorted(found):
         if token not in seen:

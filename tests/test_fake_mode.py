@@ -6,7 +6,7 @@ import sqlite3
 from html import unescape
 
 import pytest
-from conftest import collect, leakable_values, post_run, text_of
+from conftest import canned_params, collect, leakable_values, post_run, text_of
 from fastapi.testclient import TestClient
 
 from flood_agent.__main__ import build_app, picker_entries
@@ -48,7 +48,7 @@ async def test_the_too_many_rows_prompt_shows_a_table_truncated_to_the_row_cap(m
     assert "truncated" in text_of(events).lower()
 
 
-@pytest.mark.parametrize("canned", CANNED, ids=lambda c: c.id)
+@pytest.mark.parametrize("canned", canned_params(CANNED))
 async def test_every_canned_prompt_produces_its_declared_outcome(canned, make_agent, telemetry_db):
     llm = Recorder(fake_client())
     agent = await make_agent(llm, model="fake")
@@ -416,6 +416,7 @@ async def test_a_canned_prompt_matches_despite_a_trailing_period_and_spaces(make
     assert "couldn't get a complete answer" in text_of(events)
 
 
+@pytest.mark.generated_data
 async def test_the_dns_amplification_prompt_puts_the_abused_name_first(make_agent):
     agent = await make_agent(fake_client(), model="fake")
     canned = next(c for c in CANNED if c.id == "dns-amplification-names")

@@ -14,7 +14,6 @@ Tokens
   magnitude suffix (K/M/G/T glued to the number, with an optional unit such as B, bps, pps, MiB,
   or spaced from it only when a unit follows; or the words thousand/million/billion/trillion). Its value (suffix applied) must be >= LARGE_NUMBER. Numbers
   are compared by value, so `1,000,000`, `1000000` and `1M` are the same number.
-
 - Domain: two or more dot-separated labels whose last label is in the bundled IANA TLD list
   (`tlds.txt`). A two-label token ending in a common file extension (`agent.py`) is skipped; three
   or more labels are always checked. Compared ignoring case and a trailing dot. A domain passes if

@@ -218,11 +218,16 @@ def in_cidr(ip, cidr):
     return int(addr.version == net.version and addr in net)
 
 
-def _null_safe(fn):
-    """Wrap a stand-in so any NULL argument gives NULL, as in Ocient."""
+def _null_safe(fn, types=None):
+    """Wrap a stand-in so a NULL argument gives NULL, as in Ocient. With `types` (one per argument),
+    an argument of another type (a number or blob where text is expected) gives NULL too."""
 
     def wrapper(*args):
-        return None if any(a is None for a in args) else fn(*args)
+        if any(a is None for a in args):
+            return None
+        if types and not all(isinstance(a, t) for a, t in zip(args, types)):
+            return None
+        return fn(*args)
 
     return wrapper
 
@@ -243,12 +248,12 @@ def _regexp_substr(s, pattern):
 # SQLite stand-ins for Ocient's string functions, registered under the Ocient names so the
 # SQL the LLM writes runs unchanged in production. The regex functions use Python's re.
 _STRING_FUNCTIONS = {
-    "ENDSWITH": (2, lambda s, suffix: int(s.endswith(suffix))),
-    "STARTSWITH": (2, lambda s, prefix: int(s.startswith(prefix))),
-    "SPLIT_PART": (3, _split_part),
-    "REGEXP_SUBSTR": (2, _regexp_substr),
-    "REGEXP_COUNT": (2, lambda s, pattern: len(re.findall(pattern, s))),
-    "REVERSE": (1, lambda s: s[::-1]),
+    "ENDSWITH": (2, lambda s, suffix: int(s.endswith(suffix)), (str, str)),
+    "STARTSWITH": (2, lambda s, prefix: int(s.startswith(prefix)), (str, str)),
+    "SPLIT_PART": (3, _split_part, (str, str, int)),
+    "REGEXP_SUBSTR": (2, _regexp_substr, (str, str)),
+    "REGEXP_COUNT": (2, lambda s, pattern: len(re.findall(pattern, s)), (str, str)),
+    "REVERSE": (1, lambda s: s[::-1], (str,)),
 }
 
 
@@ -311,8 +316,8 @@ def open_connection(
     con.execute("ATTACH DATABASE ? AS results", (f"file:{results_db}?mode=rwc",))
     con.create_function("in_cidr", 2, in_cidr, deterministic=True)
     con.create_function("now", 0, now_ms)
-    for name, (nargs, fn) in _STRING_FUNCTIONS.items():
-        con.create_function(name, nargs, _null_safe(fn), deterministic=True)
+    for name, (nargs, fn, types) in _STRING_FUNCTIONS.items():
+        con.create_function(name, nargs, _null_safe(fn, types), deterministic=True)
     con.set_authorizer(_authorizer(allowed_tables))
     return con
 

@@ -41,6 +41,40 @@ functions:
       block. Invalid or NULL input gives NULL. It is a SQLite UDF; it needs an Ocient mapping:
       SUBNET(IP(x), len[+96 for IPv4]) = IP('net') (still to be checked on a real Ocient system).
     example: "in_cidr(sip, '192.0.2.0/24')"
+  ENDSWITH:
+    signature: ENDSWITH(s, suffix)
+    description: >-
+      1 if text s ends with suffix, else 0. Use for domain suffixes, e.g.
+      WHERE ENDSWITH(LOWER(question), '.example.com'). Any NULL argument gives NULL.
+    example: "ENDSWITH(LOWER(question), '.example.com')"
+  STARTSWITH:
+    signature: STARTSWITH(s, prefix)
+    description: >-
+      1 if text s starts with prefix, else 0. Any NULL argument gives NULL.
+    example: "STARTSWITH(LOWER(question), 'www.')"
+  SPLIT_PART:
+    signature: SPLIT_PART(s, delim, n)
+    description: >-
+      The n-th piece of s split on delim; n is 1-based and positive. Gives '' when n is
+      beyond the last piece. Use for domain labels. Any NULL argument gives NULL.
+    example: "SPLIT_PART(LOWER(question), '.', 1)"
+  REGEXP_SUBSTR:
+    signature: REGEXP_SUBSTR(s, pattern)
+    description: >-
+      The first substring of s matching the regular expression, or NULL when nothing
+      matches. Any NULL argument gives NULL.
+    example: "REGEXP_SUBSTR(question, '[a-z0-9]+[.]example[.]org$')"
+  REGEXP_COUNT:
+    signature: REGEXP_COUNT(s, pattern)
+    description: >-
+      The number of non-overlapping matches of the regular expression in s (0 for none).
+      Any NULL argument gives NULL.
+    example: "REGEXP_COUNT(question, '[.]')"
+  REVERSE:
+    signature: REVERSE(s)
+    description: >-
+      The text s reversed. Useful for grouping by domain suffix. NULL gives NULL.
+    example: "REVERSE(LOWER(question))"
 metrics:
   bits_per_second:
     description: Throughput in bits/sec over a window; bytes are totals per flow.

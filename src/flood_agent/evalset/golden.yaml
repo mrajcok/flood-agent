@@ -8,7 +8,7 @@
 # Questions name the columns to return; the comparison ignores column names and order
 # and allows extra columns (see evalset/compare.py).
 # Windows (UTC): SYN flood 2026-01-02 14:00-14:30, amplification 2026-01-04 03:00-03:20,
-# port scan 2026-01-06 20:00-20:15. Dataset window is 2026-01-01 .. 2026-01-08.
+# port scan 2026-01-06 20:00-20:15, DNS tunnelling 2026-01-07 09:00-10:00. Dataset window is 2026-01-01 .. 2026-01-08.
 
 # ---- common metrics and basics -------------------------------------------------
 - id: total-flow-count
@@ -233,3 +233,51 @@
       command: DESCRIBE TABLE
       table: flows
   sql: SELECT MAX(pkts) AS max_pkts FROM flows
+
+# ---- DNS ---------------------------------------------------------------------------
+- id: dns-total-records
+  question: How many DNS Response Records are there in total? Return a single number.
+  sql: SELECT COUNT(*) AS records FROM dns_metadata
+
+- id: dns-top-names
+  question: What are the 5 most queried DNS names (question names, ignoring letter case)? Return the lower-cased name and the number of records, most queried first.
+  ordered: true
+  sql: SELECT LOWER(question) AS name, COUNT(*) AS n FROM dns_metadata GROUP BY LOWER(question) ORDER BY n DESC, name LIMIT 5
+
+- id: dns-records-by-rtype
+  question: How many DNS Response Records are there for each record type (rtype)? Return rtype and the count.
+  sql: SELECT rtype, COUNT(*) AS records FROM dns_metadata GROUP BY rtype
+
+- id: dns-tunnel
+  question: >-
+    Between 2026-01-07 09:00 and 10:00 UTC, one client received DNS responses whose question names
+    start with an unusually long label (over 30 characters). Which client IP received them, and under
+    which parent domain (the question name without its first label, lower case)? Return dip and domain.
+  sql: >-
+    SELECT dip, SUBSTR(LOWER(question), INSTR(question, '.') + 1) AS domain FROM dns_metadata
+    WHERE etime >= 1767776400000 AND etime < 1767780000000 AND INSTR(question, '.') > 31
+    GROUP BY dip, domain ORDER BY COUNT(*) DESC LIMIT 1
+  crosscheck: {attack: dns_tunnel, equals: {dip: client, domain: domain}}
+
+- id: amp-dns-name
+  question: >-
+    Between 2026-01-04 03:00 and 03:20 UTC, UDP traffic from source port 53 hit 198.51.100.77. Which DNS
+    name (question) and question type (qtype) were in the DNS responses carried by those Flow Records?
+    Return the question and qtype of the most common pair.
+  sql: >-
+    SELECT d.question, d.qtype FROM flows f JOIN dns_metadata d
+      ON d.sip = f.sip AND d.dip = f.dip AND d.sport = f.sport AND d.dport = f.dport AND d.proto = f.proto
+    WHERE f.dip = '198.51.100.77' AND f.sport = 53
+      AND f.etime >= 1767495600000 AND f.etime < 1767496800000
+      AND d.etime >= 1767495600000 AND d.etime < 1767496800000
+      AND d.etime BETWEEN f.stime AND f.etime
+    GROUP BY d.question, d.qtype ORDER BY COUNT(*) DESC LIMIT 1
+  crosscheck: {attack: amplification, equals: {question: dns_question, qtype: dns_qtype}}
+
+- id: dns-ipv6-cidr
+  question: How many DNS Response Records have a source IP or destination IP inside 2001:db8::/32? Return a single number.
+  sql: SELECT COUNT(*) AS records FROM dns_metadata WHERE in_cidr(sip, '2001:db8::/32') OR in_cidr(dip, '2001:db8::/32')
+
+- id: dns-suffix
+  question: How many DNS Response Records have a question name under example.org (ignoring letter case)? Return a single number.
+  sql: SELECT COUNT(*) AS records FROM dns_metadata WHERE ENDSWITH(LOWER(question), '.example.org')

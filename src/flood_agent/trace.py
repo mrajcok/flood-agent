@@ -5,7 +5,7 @@ A Trace is a plain JSON-able dict: turn-level `model` and `system_prompt`, an or
 It is never part of any message sent to the LLM.
 
 Entry kinds: llm_step, tool_call, query_error, result_table, chart_spec, flag, stopped (the user stopped the turn)
-(`flag`: {"type": "ip"|"number", "token": str}, one per unseen value in a completed reply).
+(`flag`: {"type": "ip"|"number"|"domain", "token": str}, one per unseen value in a completed reply).
 """
 
 import time

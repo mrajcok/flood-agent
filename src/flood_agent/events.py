@@ -54,7 +54,7 @@ class FlagEvent:
     (reply note + Trace); never sent to the LLM."""
 
     tokens: list[str]
-    items: list[dict] = field(default_factory=list)  # [{"type": "ip"|"number", "token": ...}]
+    items: list[dict] = field(default_factory=list)  # [{"type": "ip"|"number"|"domain", "token": ...}]
 
 
 @dataclass

@@ -198,3 +198,36 @@ CTX6 = ["User asked about 2001:db8::1 and ::ffff:192.0.2.5 and 198.51.100.7 on a
 )
 def test_ipv6_table(reply, expected):
     assert find_unseen_values(reply, CTX6) == expected
+
+
+CTXD = ["User asked about Seen.Example.com. and api.corp.net; schema shows SELECT * FROM t WHERE host = 'db.lab.io'"]
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        ("traffic to evil-cdn.com spiked", ["evil-cdn.com"]),  # invented
+        ("see seen.example.com", []),  # from context, any case, no trailing dot
+        ("see SEEN.EXAMPLE.COM.", []),
+        ("see example.com", []),  # parent of a seen name
+        ("see corp.net and lab.io", []),
+        ("see net", []),  # a bare TLD is not a domain
+        ("see new.seen.example.com", ["new.seen.example.com"]),  # unseen subdomain
+        ("see db.lab.io", []),  # from the LLM's SQL
+        ("see agent.py and notes.md and run.sh", []),  # two labels ending in a file extension
+        ("see evil.example.md", ["evil.example.md"]),  # three labels are always checked
+        ("see foo.invalidtld", []),  # unknown TLD
+        ("see xn--bcher-kva.de", ["xn--bcher-kva.de"]),
+        ("visit https://evil-cdn.com/x, then evil-cdn.com.", ["evil-cdn.com"]),  # deduplicated
+        ("mail bob@phish.org", ["phish.org"]),
+    ],
+)
+def test_domain_table(reply, expected):
+    assert find_unseen_values(reply, CTXD) == expected
+
+
+async def test_an_invented_domain_is_flagged_as_type_domain(make_agent):
+    llm = ScriptedLLM([TextChunk("The top talker resolves to evil-cdn.com, not seen.example.com.")])
+    events = await collect(await make_agent(llm), "who is the top talker? check seen.example.com")
+    assert flags_of(events) == ["evil-cdn.com"]
+    assert {(e["type"], e["token"]) for e in trace_flags(events)} == {("domain", "evil-cdn.com")}

@@ -201,14 +201,21 @@ def now_ms() -> int:
 
 
 def in_cidr(ip, cidr):
-    """SQLite UDF: 1 if IPv4 `ip` is inside `cidr`, else 0 (NULL/invalid input -> NULL).
-    Needs an Ocient mapping when the Telemetry Database moves there."""
+    """SQLite UDF: 1 if `ip` is inside `cidr`, else 0 (NULL/invalid input -> NULL).
+
+    Handles IPv4 and IPv6. Mixed families give 0, except an IPv4-mapped IPv6 address
+    (::ffff:a.b.c.d), which matches an IPv4 block. Needs an Ocient mapping when the Telemetry
+    Database moves there."""
     if ip is None or cidr is None:
         return None
     try:
-        return int(ipaddress.IPv4Address(ip) in ipaddress.IPv4Network(cidr, strict=False))
+        addr = ipaddress.ip_address(ip)
+        net = ipaddress.ip_network(cidr, strict=False)
     except ValueError:
         return None
+    if addr.version == 6 and net.version == 4 and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    return int(addr.version == net.version and addr in net)
 
 
 def _null_safe(fn):

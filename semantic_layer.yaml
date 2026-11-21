@@ -16,7 +16,7 @@ tables:
         enum: {6: TCP, 17: UDP, 1: ICMP}
       tcp_flags:
         type: INTEGER
-        description: TCP flags bitmask OR'd over the flow
+        description: TCP flags bitmask OR'd over the flow; test a flag with e.g. `tcp_flags & 2 != 0` (SYN)
         example: 18
         enum_bits: {1: FIN, 2: SYN, 4: RST, 8: PSH, 16: ACK, 32: URG}
       circuit: {type: TEXT, description: Opaque 12-character Circuit identifier, example: "AB12CD34EF56"}

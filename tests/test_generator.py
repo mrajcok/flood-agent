@@ -162,11 +162,69 @@ def test_dns_columns_and_values_follow_the_semantic_layer(built):
 
 def test_about_half_of_dns_rows_join_to_a_flow_and_ipv6_rows_do_not(built):
     db, _ = built
-    total = rows(db, "SELECT COUNT(*) FROM dns_metadata")[0][0]
-    joined = rows(db, f"SELECT COUNT(DISTINCT d.rowid) {JOIN}")[0][0]
+    total = rows(db, "SELECT COUNT(*) FROM dns_metadata WHERE question <> 'amp.example.net'")[0][0]
+    joined = rows(db, f"SELECT COUNT(DISTINCT d.rowid) {JOIN} WHERE d.question <> 'amp.example.net'")[0][0]
     assert 0.35 < joined / total < 0.65
     assert rows(db, "SELECT COUNT(*) FROM dns_metadata WHERE sip LIKE '%:%' OR dip LIKE '%:%'")[0][0] > 0
     assert rows(db, f"SELECT COUNT(*) {JOIN} WHERE d.sip LIKE '%:%' OR d.dip LIKE '%:%'")[0][0] == 0
     net = ipaddress.ip_network("2001:db8::/32")
     for (ip,) in rows(db, "SELECT DISTINCT sip FROM dns_metadata WHERE sip LIKE '%:%'"):
         assert ipaddress.IPv6Address(ip) in net
+
+
+def amp_dns_rows(db, amp):
+    return rows(db, "SELECT sip, dip, sport, dport, proto, tid, etime, question, qtype FROM dns_metadata "
+                    "WHERE question LIKE ? AND etime BETWEEN ? AND ?", amp["dns_question"], amp["start"], amp["end"])
+
+
+def test_every_amplification_dns_response_joins_to_an_attack_flow(built):
+    db, attacks = built
+    amp = next(a for a in attacks if a["type"] == "amplification")
+    assert amp["dns_question"] == "amp.example.net" and amp["dns_qtype"] == 255
+    victim = amp["targets"][0]["dip"]
+    n_flows, = rows(db, "SELECT COUNT(*) FROM flows WHERE sport=53 AND dip=? AND etime BETWEEN ? AND ?",
+                    victim, amp["start"], amp["end"])[0]
+    responses, = rows(db, "SELECT COUNT(*) FROM (SELECT 1 FROM dns_metadata WHERE question=? "
+                          "GROUP BY sip, dip, dport, tid, etime)", amp["dns_question"])[0]
+    assert n_flows > 0 and responses == n_flows
+    unjoined, = rows(db, "SELECT COUNT(*) FROM dns_metadata d WHERE d.question=? AND NOT EXISTS "
+                         "(SELECT 1 FROM flows f WHERE d.sip=f.sip AND d.dip=f.dip AND d.sport=f.sport "
+                         "AND d.dport=f.dport AND d.proto=f.proto AND d.etime BETWEEN f.stime AND f.etime "
+                         "AND f.dip=?)", amp["dns_question"], victim)[0]
+    assert unjoined == 0
+
+
+def test_amplification_responses_have_10_to_30_records_of_mixed_types(built):
+    db, attacks = built
+    amp = next(a for a in attacks if a["type"] == "amplification")
+    counts = [c for (c,) in rows(db, "SELECT COUNT(*) FROM dns_metadata WHERE question=? "
+                                     "GROUP BY sip, dip, dport, tid, etime", amp["dns_question"])]
+    assert counts and all(10 <= c <= 30 for c in counts)
+    assert amp["dns_response_count"] == len(counts)
+    assert {r[0] for r in rows(db, "SELECT DISTINCT qtype FROM dns_metadata WHERE question=?",
+                               amp["dns_question"])} == {255}
+    assert {r[0] for r in rows(db, "SELECT DISTINCT rtype FROM dns_metadata WHERE question=?",
+                               amp["dns_question"])} <= {16, 1, 28, 2, 46}
+
+
+def test_attacks_json_dns_fields_are_only_on_amplification(built):
+    db, attacks = built
+    on_disk = json.loads(Path(str(db) + ".attacks.json").read_text())
+    assert on_disk == attacks
+    for a in attacks:
+        has = "dns_question" in a
+        assert has == (a["type"] == "amplification")
+        assert has == ("dns_qtype" in a) == ("dns_response_count" in a)
+
+
+def flows_dns_join_sql(start, end):
+    import yaml
+    layer = yaml.safe_load((Path(__file__).parent.parent / "semantic_layer.yaml").read_text())
+    return layer["metrics"]["flows_dns_join"]["sql"].replace("<start>", str(start)).replace("<end>", str(end))
+
+
+def test_flows_dns_join_metric_finds_the_abused_name_over_the_attack_window(built):
+    db, attacks = built
+    amp = next(a for a in attacks if a["type"] == "amplification")
+    result = rows(db, flows_dns_join_sql(amp["start"], amp["end"] + 1))
+    assert any("amp.example.net" in r and 255 in r for r in result)

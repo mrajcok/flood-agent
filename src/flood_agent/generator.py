@@ -140,7 +140,27 @@ def _dns_response_rows(rng, name, qtype, sip, dip, proto, sport, dport, etime):
     return out
 
 
-def _generate_dns(con, seed, dns_flows):
+AMP_QUESTION, AMP_QTYPE = "amp.example.net", 255
+AMP_RECORD_TYPES = [(16, "TXT"), (1, "A"), (28, "AAAA"), (2, "NS"), (46, "RRSIG")]
+
+
+def _amp_response_rows(rng, sip, dip, proto, sport, dport, etime):
+    """One ANY response of 10-30 records, as a reflector sends to the spoofed victim."""
+    head = (sip, dip, proto, sport, dport, rng.randrange(65536), "R", 0, 0, 3, AMP_QUESTION, AMP_QTYPE, 1)
+    out = []
+    for _ in range(rng.randint(10, 30)):
+        rtype, kind = rng.choice(AMP_RECORD_TYPES)
+        rdata = {"TXT": lambda: "v=spf1 " + "x" * rng.randrange(40, 200) + " ~all",
+                 "A": lambda: f"192.0.2.{rng.randrange(1, 255)}",
+                 "AAAA": lambda: _ipv6(rng),
+                 "NS": lambda: f"ns{rng.randrange(1, 9)}.example.net",
+                 "RRSIG": lambda: "placeholder-signature-" + "A" * rng.randrange(60, 160)}[kind]()
+        section = rng.choices("NTD", [6, 2, 2])[0]
+        out.append((*head, section, AMP_QUESTION, rtype, 1, rng.randrange(30, 86401), rdata, etime))
+    return out
+
+
+def _generate_dns(con, seed, dns_flows, amp_flows=()):
     """Baseline DNS Response Records; own RNG so the flows are unaffected.
 
     Half derive from the baseline flows with source port 53 (they join to their flow); the other half
@@ -168,9 +188,13 @@ def _generate_dns(con, seed, dns_flows):
             sip, dip = f"192.0.2.{rng.randrange(1, 60)}", f"10.{rng.randrange(4, 9)}.{rng.randrange(256)}.{rng.randrange(1, 255)}"
         batch.append(_dns_response_rows(rng, question_for(qtype), qtype, sip, dip, 17, 53,
                                         rng.randrange(1024, 65535), START_MS + rng.randrange(DAYS * 86_400_000)))
+    amp_rng = random.Random(seed + 2)  # own RNG so the baseline rows are unaffected
+    for sip, dip, sport, dport, proto, _f, _c, stime, etime, *_ in amp_flows:
+        batch.append(_amp_response_rows(amp_rng, sip, dip, proto, sport, dport, amp_rng.randint(stime, etime)))
     batch.sort(key=lambda rows: rows[0][-1])  # etime order (Time Key stand-in)
     con.executemany("INSERT INTO dns_metadata VALUES (" + ",".join("?" * 20) + ")",
                     (row for response in batch for row in response))
+    return len(amp_flows)
 
 
 def generate(db_path, seed: int = 1, scale: float = 1.0) -> list[dict]:
@@ -241,6 +265,7 @@ def generate(db_path, seed: int = 1, scale: float = 1.0) -> list[dict]:
     con = sqlite3.connect(db_path)
     con.executescript(SCHEMA)
     insert = "INSERT INTO flows VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+    amp_dns_flows = []  # amplification flows from source port 53: each carries one ANY response
     dns_flows = []  # baseline UDP flows with source port 53: each carries DNS responses
     for minute in range(TOTAL_MINUTES):
         t0 = START_MS + minute * MIN_MS
@@ -253,8 +278,10 @@ def generate(db_path, seed: int = 1, scale: float = 1.0) -> list[dict]:
         batch.sort(key=lambda b: b[0])  # inserted in etime order (Time Key stand-in)
         made = [attack_flow(k, t) if k else baseline(t) for t, k in batch]
         dns_flows += [f for (_, k), f in zip(batch, made, strict=True) if not k and f[2] == 53 and f[4] == 17]
+        amp_dns_flows += [f for (_, k), f in zip(batch, made, strict=True) if k == "amplification" and f[2] == 53]
         con.executemany(insert, made)
-    _generate_dns(con, seed, dns_flows)
+    attacks["amplification"].update(dns_question=AMP_QUESTION, dns_qtype=AMP_QTYPE,
+                                    dns_response_count=_generate_dns(con, seed, dns_flows, amp_dns_flows))
     con.executescript(INDEXES)
     con.commit()
     con.close()

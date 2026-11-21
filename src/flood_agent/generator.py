@@ -160,7 +160,26 @@ def _amp_response_rows(rng, sip, dip, proto, sport, dport, etime):
     return out
 
 
-def _generate_dns(con, seed, dns_flows, amp_flows=()):
+TUNNEL_START_MIN, TUNNEL_MINUTES, TUNNEL_PER_MIN = 6 * 1440 + 9 * 60, 60, 30
+TUNNEL_CLIENT, TUNNEL_RESOLVER, TUNNEL_DOMAIN = "10.2.200.17", "10.0.0.53", "c2.example.org"
+
+
+def _tunnel_flow(rng, circuit, minute_start):
+    """One small UDP-53 flow from the resolver to the client: it carries one tunnelling response."""
+    etime = minute_start + rng.randrange(MIN_MS)
+    return _flow(TUNNEL_RESOLVER, TUNNEL_CLIENT, 53, rng.randrange(1024, 65535), 17, 0, circuit, etime,
+                 rng.randrange(1, 50), rng.randrange(150, 400), rng.randrange(1, 3))
+
+
+def _tunnel_response_rows(rng, sip, dip, proto, sport, dport, etime):
+    """A base32 label under the C2 domain, answered with a long encoded TXT record."""
+    question = "".join(rng.choices("abcdefghijklmnopqrstuvwxyz234567", k=40)) + "." + TUNNEL_DOMAIN
+    rdata = "".join(rng.choices("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", k=rng.randrange(180, 240)))
+    return [(sip, dip, proto, sport, dport, rng.randrange(65536), "R", 0, 0, 3, question, 16, 1,
+             "N", question, 16, 1, rng.randrange(30, 301), rdata, etime)]
+
+
+def _generate_dns(con, seed, dns_flows, amp_flows=(), tunnel_flows=()):
     """Baseline DNS Response Records; own RNG so the flows are unaffected.
 
     Half derive from the baseline flows with source port 53 (they join to their flow); the other half
@@ -191,10 +210,13 @@ def _generate_dns(con, seed, dns_flows, amp_flows=()):
     amp_rng = random.Random(seed + 2)  # own RNG so the baseline rows are unaffected
     for sip, dip, sport, dport, proto, _f, _c, stime, etime, *_ in amp_flows:
         batch.append(_amp_response_rows(amp_rng, sip, dip, proto, sport, dport, amp_rng.randint(stime, etime)))
+    tun_rng = random.Random(seed + 3)
+    for sip, dip, sport, dport, proto, _f, _c, stime, etime, *_ in tunnel_flows:
+        batch.append(_tunnel_response_rows(tun_rng, sip, dip, proto, sport, dport, tun_rng.randint(stime, etime)))
     batch.sort(key=lambda rows: rows[0][-1])  # etime order (Time Key stand-in)
     con.executemany("INSERT INTO dns_metadata VALUES (" + ",".join("?" * 20) + ")",
                     (row for response in batch for row in response))
-    return len(amp_flows)
+    return len(amp_flows), len(tunnel_flows)
 
 
 def generate(db_path, seed: int = 1, scale: float = 1.0) -> list[dict]:
@@ -226,6 +248,16 @@ def generate(db_path, seed: int = 1, scale: float = 1.0) -> list[dict]:
         description="DNS/NTP reflection/amplification: large UDP replies from reflectors to a victim",
         targets=[{"dip": amp_victim, "dports": ["ephemeral"]}], circuits=[amp_c],
         sources=reflectors[:5] + ["..."], reflector_count=len(reflectors), reflector_ports=[53, 123])
+    attacks["dns_tunnel"] = {
+        "type": "dns_tunnel", "start": START_MS + TUNNEL_START_MIN * MIN_MS,
+        "end": START_MS + (TUNNEL_START_MIN + TUNNEL_MINUTES) * MIN_MS - 1, "flow_count": 0,
+        "description": "DNS tunnelling: one client sends base32-encoded labels under a C2 domain via a resolver",
+        "targets": [{"dip": TUNNEL_CLIENT, "dports": ["ephemeral"]}], "circuits": [],
+        "sources": [TUNNEL_RESOLVER], "client": TUNNEL_CLIENT, "resolver": TUNNEL_RESOLVER,
+        "domain": TUNNEL_DOMAIN, "dns_response_count": 0}
+    tunnel_rng = random.Random(seed + 4)  # own RNG so the other flows are unaffected
+    tunnel_circuit = tunnel_rng.choice(circuits)
+    attacks["dns_tunnel"]["circuits"] = [tunnel_circuit]
     attacks["port_scan"].update(
         description="Single-source TCP SYN scan sweeping many ports across a /24",
         targets=[{"dip": f"{scan_net}0/24", "dports": ["1-1024"]}], circuits=[scan_c], sources=[scanner])
@@ -266,6 +298,7 @@ def generate(db_path, seed: int = 1, scale: float = 1.0) -> list[dict]:
     con.executescript(SCHEMA)
     insert = "INSERT INTO flows VALUES (?,?,?,?,?,?,?,?,?,?,?)"
     amp_dns_flows = []  # amplification flows from source port 53: each carries one ANY response
+    tunnel_flows = []  # DNS tunnelling flows: each carries one response
     dns_flows = []  # baseline UDP flows with source port 53: each carries DNS responses
     for minute in range(TOTAL_MINUTES):
         t0 = START_MS + minute * MIN_MS
@@ -279,9 +312,14 @@ def generate(db_path, seed: int = 1, scale: float = 1.0) -> list[dict]:
         made = [attack_flow(k, t) if k else baseline(t) for t, k in batch]
         dns_flows += [f for (_, k), f in zip(batch, made, strict=True) if not k and f[2] == 53 and f[4] == 17]
         amp_dns_flows += [f for (_, k), f in zip(batch, made, strict=True) if k == "amplification" and f[2] == 53]
+        if TUNNEL_START_MIN <= minute < TUNNEL_START_MIN + TUNNEL_MINUTES:
+            tun = [_tunnel_flow(tunnel_rng, tunnel_circuit, t0) for _ in range(TUNNEL_PER_MIN)]
+            tunnel_flows += tun
+            made = sorted(made + tun, key=lambda f: f[8])  # keep etime order
         con.executemany(insert, made)
-    attacks["amplification"].update(dns_question=AMP_QUESTION, dns_qtype=AMP_QTYPE,
-                                    dns_response_count=_generate_dns(con, seed, dns_flows, amp_dns_flows))
+    amp_count, tunnel_count = _generate_dns(con, seed, dns_flows, amp_dns_flows, tunnel_flows)
+    attacks["amplification"].update(dns_question=AMP_QUESTION, dns_qtype=AMP_QTYPE, dns_response_count=amp_count)
+    attacks["dns_tunnel"].update(flow_count=len(tunnel_flows), dns_response_count=tunnel_count)
     con.executescript(INDEXES)
     con.commit()
     con.close()

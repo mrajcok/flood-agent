@@ -15,12 +15,16 @@ _Avoid_: Agent (for the model)
 ## Data
 
 **Telemetry Database**:
-The read-only store of flow records (SQLite here, Ocient in production).
+The read-only store of network telemetry (Flow Records and DNS Response Records); SQLite here, Ocient in production.
 _Avoid_: Source DB, flow DB
 
 **Flow Record**:
 One NetFlow/IPFIX record summarising traffic between two endpoints over an interval.
 _Avoid_: Flow (ambiguous), packet, event
+
+**DNS Response Record**:
+One resource record of a DNS response, with its response's header and question. Responses with no records are not recorded.
+_Avoid_: DNS query, DNS packet, DNS event
 
 **Circuit**:
 An opaque 12-character identifier for the monitored link a Flow Record was observed on.

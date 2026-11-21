@@ -112,3 +112,61 @@ def test_attack_traffic_is_visible_in_the_data(built):
 def test_attacks_are_written_as_machine_readable_json_beside_the_db(built):
     db, attacks = built
     assert json.loads(Path(str(db) + ".attacks.json").read_text()) == attacks
+
+
+JOIN = ("FROM dns_metadata d JOIN flows f ON d.sip=f.sip AND d.dip=f.dip AND d.sport=f.sport "
+        "AND d.dport=f.dport AND d.proto=f.proto AND d.etime BETWEEN f.stime AND f.etime")
+FLOWS_FINGERPRINT_SEED7_SCALE001 = "a654672131d374929b2e4645ebe3ba3e6e79837a36a9e988c6cb7034f61e4ea4"
+
+
+def dns_columns():
+    import yaml
+    layer = yaml.safe_load((Path(__file__).parent.parent / "semantic_layer.yaml").read_text())
+    return layer["tables"]["dns_metadata"]["columns"]
+
+
+def test_flows_are_unchanged_by_the_dns_pass(built):
+    db, _ = built
+    assert fingerprint(db) == FLOWS_FINGERPRINT_SEED7_SCALE001
+
+
+def test_dns_metadata_is_reproducible_ordered_and_indexed(built, tmp_path):
+    db, _ = built
+    again = tmp_path / "t.db"
+    generate(again, seed=7, scale=SCALE)
+    dump = "SELECT * FROM dns_metadata ORDER BY rowid"
+    assert rows(db, dump) == rows(again, dump)
+    etimes = [r[0] for r in rows(db, "SELECT etime FROM dns_metadata ORDER BY rowid")]
+    assert etimes and etimes == sorted(etimes)
+    idx = {re.search(r"\((\w+)\)", s).group(1)
+           for (s,) in rows(db, "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='dns_metadata'")}
+    assert idx == {"etime", "sip", "dip"}
+
+
+def test_dns_columns_and_values_follow_the_semantic_layer(built):
+    db, _ = built
+    layer = dns_columns()
+    assert [r[1] for r in rows(db, "PRAGMA table_info(dns_metadata)")] == list(layer)
+    assert {r[0] for r in rows(db, "SELECT DISTINCT qr FROM dns_metadata")} == {"R"}
+    assert {r[0] for r in rows(db, "SELECT DISTINCT rcode FROM dns_metadata")} == {0}
+    assert {r[0] for r in rows(db, "SELECT DISTINCT qtype FROM dns_metadata")} <= set(layer["qtype"]["enum"])
+    assert {r[0] for r in rows(db, "SELECT DISTINCT rtype FROM dns_metadata")} <= set(layer["rtype"]["enum"])
+    (ttl_lo, ttl_hi), = rows(db, "SELECT MIN(rttl), MAX(rttl) FROM dns_metadata")
+    assert 30 <= ttl_lo and ttl_hi <= 86400
+    suffixes = (".example.com", ".example.net", ".example.org", ".test", ".arpa")
+    names = [r[0].lower() for r in rows(db, "SELECT DISTINCT question FROM dns_metadata")]
+    assert len(names) > 20 and all(n.endswith(suffixes) for n in names)
+    qtypes = dict(rows(db, "SELECT qtype, COUNT(*) FROM dns_metadata GROUP BY qtype"))
+    assert qtypes[1] > qtypes[28] > 0
+
+
+def test_about_half_of_dns_rows_join_to_a_flow_and_ipv6_rows_do_not(built):
+    db, _ = built
+    total = rows(db, "SELECT COUNT(*) FROM dns_metadata")[0][0]
+    joined = rows(db, f"SELECT COUNT(DISTINCT d.rowid) {JOIN}")[0][0]
+    assert 0.35 < joined / total < 0.65
+    assert rows(db, "SELECT COUNT(*) FROM dns_metadata WHERE sip LIKE '%:%' OR dip LIKE '%:%'")[0][0] > 0
+    assert rows(db, f"SELECT COUNT(*) {JOIN} WHERE d.sip LIKE '%:%' OR d.dip LIKE '%:%'")[0][0] == 0
+    net = ipaddress.ip_network("2001:db8::/32")
+    for (ip,) in rows(db, "SELECT DISTINCT sip FROM dns_metadata WHERE sip LIKE '%:%'"):
+        assert ipaddress.IPv6Address(ip) in net

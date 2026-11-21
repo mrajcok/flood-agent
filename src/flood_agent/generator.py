@@ -27,11 +27,19 @@ CREATE TABLE flows (
   tcp_flags INTEGER, circuit TEXT, stime INTEGER, etime INTEGER,
   bytes INTEGER, pkts INTEGER
 );
+CREATE TABLE dns_metadata (
+  sip TEXT, dip TEXT, proto INTEGER, sport INTEGER, dport INTEGER, tid INTEGER, qr TEXT,
+  opcode INTEGER, rcode INTEGER, flags INTEGER, question TEXT, qtype INTEGER, qclass INTEGER,
+  rsection TEXT, rname TEXT, rtype INTEGER, rclass INTEGER, rttl INTEGER, rdata TEXT, etime INTEGER
+);
 """
 INDEXES = """
 CREATE INDEX flows_etime ON flows(etime);
 CREATE INDEX flows_sip ON flows(sip);
 CREATE INDEX flows_dip ON flows(dip);
+CREATE INDEX dns_metadata_etime ON dns_metadata(etime);
+CREATE INDEX dns_metadata_sip ON dns_metadata(sip);
+CREATE INDEX dns_metadata_dip ON dns_metadata(dip);
 """
 
 # type -> (start minute offset, duration minutes, flows per minute at scale 1.0)
@@ -63,6 +71,106 @@ def _circuit(rng):
 
 def _flow(sip, dip, sport, dport, proto, flags, circuit, etime, dur, nbytes, pkts):
     return (sip, dip, sport, dport, proto, flags, circuit, etime - dur, etime, nbytes, pkts)
+
+
+# DNS Response Records. Provisional codes until production confirms them: flags 3 (+8 authoritative),
+# rsection N (answer) / T (authority) / D (additional).
+ZONES = ["example.com", "example.net", "example.org", "test"]
+HOST_WORDS = ["www", "mail", "api", "cdn", "app", "static", "img", "login", "shop", "news", "blog", "dev",
+              "git", "vpn", "files", "docs", "chat", "m", "ns", "smtp"]
+QTYPE_MIX = [(1, 60), (28, 25), (65, 5), (16, 3), (12, 3), (15, 2), (2, 1), (6, 0.5), (33, 0.5)]
+QTYPES, QTYPE_WEIGHTS = zip(*QTYPE_MIX, strict=True)
+DNS_FLOW_RESOLVER_RESPONSES = (1, 3)
+
+
+def _ipv6(rng):
+    return "2001:db8:" + ":".join(f"{rng.randrange(1, 65536):x}" for _ in range(3)) + f"::{rng.randrange(1, 65536):x}"
+
+
+def _dns_names(rng) -> list[str]:
+    names = {f"{rng.choice(HOST_WORDS)}{rng.randrange(1, 40)}.{rng.choice(ZONES)}" for _ in range(700)}
+    return sorted(names)[:500]
+
+
+def _randomise_case(rng, name):
+    return "".join(c.upper() if rng.random() < 0.5 else c for c in name)
+
+
+def _dns_response_rows(rng, name, qtype, sip, dip, proto, sport, dport, etime):
+    """The DNS Response Record rows of one response."""
+    zone = name.split(".", 1)[1]
+    case = _randomise_case if rng.random() < 0.1 else (lambda _r, n: n)
+    question = case(rng, name)
+    tid = rng.randrange(65536)
+    authoritative = rng.random() < 0.3
+    head = (sip, dip, proto, sport, dport, tid, "R", 0, 0, 3 + (8 if authoritative else 0), question, qtype, 1)
+    out = []
+
+    def rec(section, rname, rtype, rdata):
+        out.append((*head, section, rname, rtype, 1, rng.randrange(30, 86401), rdata, etime))
+
+    target = name
+    if qtype in (1, 28, 65) and rng.random() < 0.2:
+        target = f"edge{rng.randrange(1, 9)}.{zone}"
+        rec("N", question, 5, target)
+    rname = question if target == name else target
+    for _ in range(rng.choice([1, 1, 1, 2])):
+        if qtype == 1:
+            rec("N", rname, 1, f"192.0.2.{rng.randrange(1, 255)}")
+        elif qtype == 28:
+            rec("N", rname, 28, _ipv6(rng))
+        elif qtype == 65:
+            rec("N", rname, 65, target)
+        elif qtype == 16:
+            rec("N", rname, 16, f"v=spf1 include:{zone} ~all")
+        elif qtype == 12:
+            rec("N", question, 12, name)
+        elif qtype == 15:
+            rec("N", question, 15, f"mx{rng.randrange(1, 4)}.{zone}")
+        elif qtype == 2:
+            rec("N", question, 2, f"ns{rng.randrange(1, 4)}.{zone}")
+        elif qtype == 6:
+            rec("N", question, 6, f"ns1.{zone}")
+        else:
+            rec("N", question, 33, f"srv{rng.randrange(1, 4)}.{zone}")
+    if rng.random() < 0.2:
+        ns = f"ns1.{zone}"
+        rec("T", zone, 2, ns)
+        rec("D", ns, 1, f"192.0.2.{rng.randrange(1, 255)}")
+    return out
+
+
+def _generate_dns(con, seed, dns_flows):
+    """Baseline DNS Response Records; own RNG so the flows are unaffected.
+
+    Half derive from the baseline flows with source port 53 (they join to their flow); the other half
+    use their own endpoints and times, including ~5% IPv6 transport, and join to nothing."""
+    rng = random.Random(seed + 1)
+    names = _dns_names(rng)
+    weights = [1 / (i + 1) for i in range(len(names))]
+    ptr_names = [f"{rng.randrange(1, 255)}.{rng.randrange(1, 255)}.0.192.in-addr.arpa" for _ in range(40)]
+
+    def question_for(qtype):
+        return rng.choice(ptr_names) if qtype == 12 else rng.choices(names, weights)[0]
+
+    batch = []
+    lo, hi = DNS_FLOW_RESOLVER_RESPONSES
+    for sip, dip, sport, dport, proto, _f, _c, stime, etime, *_ in dns_flows:
+        for _ in range(rng.randint(lo, hi)):
+            qtype = rng.choices(QTYPES, QTYPE_WEIGHTS)[0]
+            batch.append(_dns_response_rows(rng, question_for(qtype), qtype, sip, dip, proto, sport, dport,
+                                            rng.randint(stime, etime)))
+    for _ in range(len(batch)):
+        qtype = rng.choices(QTYPES, QTYPE_WEIGHTS)[0]
+        if rng.random() < 0.05:
+            sip, dip = _ipv6(rng), _ipv6(rng)
+        else:
+            sip, dip = f"192.0.2.{rng.randrange(1, 60)}", f"10.{rng.randrange(4, 9)}.{rng.randrange(256)}.{rng.randrange(1, 255)}"
+        batch.append(_dns_response_rows(rng, question_for(qtype), qtype, sip, dip, 17, 53,
+                                        rng.randrange(1024, 65535), START_MS + rng.randrange(DAYS * 86_400_000)))
+    batch.sort(key=lambda rows: rows[0][-1])  # etime order (Time Key stand-in)
+    con.executemany("INSERT INTO dns_metadata VALUES (" + ",".join("?" * 20) + ")",
+                    (row for response in batch for row in response))
 
 
 def generate(db_path, seed: int = 1, scale: float = 1.0) -> list[dict]:
@@ -133,6 +241,7 @@ def generate(db_path, seed: int = 1, scale: float = 1.0) -> list[dict]:
     con = sqlite3.connect(db_path)
     con.executescript(SCHEMA)
     insert = "INSERT INTO flows VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+    dns_flows = []  # baseline UDP flows with source port 53: each carries DNS responses
     for minute in range(TOTAL_MINUTES):
         t0 = START_MS + minute * MIN_MS
         batch = [(t0 + rng.randrange(MIN_MS), None) for _ in range(_base_count(minute, scale))]
@@ -142,7 +251,10 @@ def generate(db_path, seed: int = 1, scale: float = 1.0) -> list[dict]:
                 batch += [(t0 + rng.randrange(MIN_MS), kind) for _ in range(n)]
                 attacks[kind]["flow_count"] += n
         batch.sort(key=lambda b: b[0])  # inserted in etime order (Time Key stand-in)
-        con.executemany(insert, [attack_flow(k, t) if k else baseline(t) for t, k in batch])
+        made = [attack_flow(k, t) if k else baseline(t) for t, k in batch]
+        dns_flows += [f for (_, k), f in zip(batch, made, strict=True) if not k and f[2] == 53 and f[4] == 17]
+        con.executemany(insert, made)
+    _generate_dns(con, seed, dns_flows)
     con.executescript(INDEXES)
     con.commit()
     con.close()

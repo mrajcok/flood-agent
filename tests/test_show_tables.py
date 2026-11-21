@@ -21,7 +21,7 @@ def two_notebooks_with_tables(build_agent, web_client, **overrides):
 
 
 def test_telemetry_tables_are_those_described_in_the_semantic_layer(build_agent, web_client, semantic_layer_path):
-    semantic_layer_path.write_text(semantic_layer_path.read_text() + "  dns:\n    description: DNS logs.\n")
+    semantic_layer_path.write_text(semantic_layer_path.read_text() + "  dns:\n    description: DNS logs.\n    columns:\n      etime: {type: INTEGER}\n")
     client = web_client(build_agent(ScriptedLLM()))
     r = client.get("/api/tables")
     assert r.status_code == 200

@@ -71,3 +71,16 @@ def test_shipped_layer_shape_is_stable_for_table_formatting_and_generator():
     assert cols["tcp_flags"]["enum_bits"][2] == "SYN"
     assert cols["bytes"]["unit"] == "bytes" and cols["etime"]["unit"] == "epoch ms UTC"
     assert "window_start" not in data and "window_end" not in data
+
+
+def test_dns_metadata_is_a_telemetry_table_with_named_codes():
+    layer = SemanticLayer(REAL)
+    assert layer.table_names() == ["flows", "dns_metadata"]
+    fmt = layer.column_formats(["rtype", "qtype", "rcode", "opcode", "proto", "etime"])
+    assert fmt["rtype"]["kind"] == "enum" and fmt["rtype"]["map"]["28"] == "AAAA"
+    assert fmt["qtype"]["map"]["1"] == "A" and fmt["rcode"]["map"]["3"] == "NXDOMAIN"
+    assert fmt["opcode"]["map"]["4"] == "NOTIFY" and fmt["proto"]["map"]["17"] == "UDP"
+    assert fmt["etime"]["kind"] == "time"
+    cols = layer.data["tables"]["dns_metadata"]["columns"]
+    assert "enum" not in cols["flags"] and "enum" not in cols["rsection"]
+    assert "top_names" in layer.data["metrics"]

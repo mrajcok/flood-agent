@@ -31,8 +31,11 @@ def rows(db, sql, *args):
         con.close()
 
 
-def fingerprint(db):
-    return hashlib.sha256(repr(rows(db, "SELECT * FROM flows ORDER BY rowid")).encode()).hexdigest()
+def fingerprint(db, where="1"):
+    return hashlib.sha256(repr(rows(db, f"SELECT * FROM flows WHERE {where} ORDER BY rowid")).encode()).hexdigest()
+
+
+NOT_TUNNEL = "NOT (sip='10.0.0.53' AND dip='10.2.200.17' AND sport=53)"
 
 
 def test_same_seed_gives_identical_database_and_attacks(built, tmp_path):
@@ -76,9 +79,9 @@ def test_ips_are_ipv4_dotted_decimal_and_circuits_opaque(built):
         assert re.fullmatch(r"[A-Z0-9]{12}", c)
 
 
-def test_three_attacks_recorded_with_parameters(built):
+def test_four_attacks_recorded_with_parameters(built):
     db, attacks = built
-    assert {a["type"] for a in attacks} == {"syn_flood", "amplification", "port_scan"}
+    assert {a["type"] for a in attacks} == {"syn_flood", "amplification", "port_scan", "dns_tunnel"}
     lo, hi = rows(db, "SELECT MIN(etime), MAX(etime) FROM flows")[0]
     for a in attacks:
         assert lo <= a["start"] < a["end"] <= hi + 1
@@ -112,3 +115,167 @@ def test_attack_traffic_is_visible_in_the_data(built):
 def test_attacks_are_written_as_machine_readable_json_beside_the_db(built):
     db, attacks = built
     assert json.loads(Path(str(db) + ".attacks.json").read_text()) == attacks
+
+
+JOIN = ("FROM dns_metadata d JOIN flows f ON d.sip=f.sip AND d.dip=f.dip AND d.sport=f.sport "
+        "AND d.dport=f.dport AND d.proto=f.proto AND d.etime BETWEEN f.stime AND f.etime")
+FLOWS_FINGERPRINT_SEED7_SCALE001 = "a654672131d374929b2e4645ebe3ba3e6e79837a36a9e988c6cb7034f61e4ea4"
+
+
+def dns_columns():
+    import yaml
+    layer = yaml.safe_load((Path(__file__).parent.parent / "semantic_layer.yaml").read_text())
+    return layer["tables"]["dns_metadata"]["columns"]
+
+
+def test_flows_are_unchanged_by_the_dns_pass(built):
+    db, _ = built
+    assert fingerprint(db, NOT_TUNNEL) == FLOWS_FINGERPRINT_SEED7_SCALE001
+
+
+def test_dns_metadata_is_reproducible_ordered_and_indexed(built, tmp_path):
+    db, _ = built
+    again = tmp_path / "t.db"
+    generate(again, seed=7, scale=SCALE)
+    dump = "SELECT * FROM dns_metadata ORDER BY rowid"
+    assert rows(db, dump) == rows(again, dump)
+    etimes = [r[0] for r in rows(db, "SELECT etime FROM dns_metadata ORDER BY rowid")]
+    assert etimes and etimes == sorted(etimes)
+    idx = {re.search(r"\((\w+)\)", s).group(1)
+           for (s,) in rows(db, "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='dns_metadata'")}
+    assert idx == {"etime", "sip", "dip"}
+
+
+def test_dns_columns_and_values_follow_the_semantic_layer(built):
+    db, _ = built
+    layer = dns_columns()
+    assert [r[1] for r in rows(db, "PRAGMA table_info(dns_metadata)")] == list(layer)
+    assert {r[0] for r in rows(db, "SELECT DISTINCT qr FROM dns_metadata")} == {"R"}
+    assert {r[0] for r in rows(db, "SELECT DISTINCT rcode FROM dns_metadata")} == {0}
+    assert {r[0] for r in rows(db, "SELECT DISTINCT qtype FROM dns_metadata")} <= set(layer["qtype"]["enum"])
+    assert {r[0] for r in rows(db, "SELECT DISTINCT rtype FROM dns_metadata")} <= set(layer["rtype"]["enum"])
+    (ttl_lo, ttl_hi), = rows(db, "SELECT MIN(rttl), MAX(rttl) FROM dns_metadata")
+    assert 30 <= ttl_lo and ttl_hi <= 86400
+    suffixes = (".example.com", ".example.net", ".example.org", ".test", ".arpa")
+    names = [r[0].lower() for r in rows(db, "SELECT DISTINCT question FROM dns_metadata")]
+    assert len(names) > 20 and all(n.endswith(suffixes) for n in names)
+    qtypes = dict(rows(db, "SELECT qtype, COUNT(*) FROM dns_metadata GROUP BY qtype"))
+    assert qtypes[1] > qtypes[28] > 0
+
+
+def test_about_half_of_dns_rows_join_to_a_flow_and_ipv6_rows_do_not(built):
+    db, _ = built
+    total = rows(db, "SELECT COUNT(*) FROM dns_metadata WHERE question <> 'amp.example.net' AND question NOT LIKE '%.c2.example.org'")[0][0]
+    joined = rows(db, f"SELECT COUNT(DISTINCT d.rowid) {JOIN} WHERE d.question <> 'amp.example.net' AND d.question NOT LIKE '%.c2.example.org'")[0][0]
+    assert 0.35 < joined / total < 0.65
+    assert rows(db, "SELECT COUNT(*) FROM dns_metadata WHERE sip LIKE '%:%' OR dip LIKE '%:%'")[0][0] > 0
+    assert rows(db, f"SELECT COUNT(*) {JOIN} WHERE d.sip LIKE '%:%' OR d.dip LIKE '%:%'")[0][0] == 0
+    net = ipaddress.ip_network("2001:db8::/32")
+    for (ip,) in rows(db, "SELECT DISTINCT sip FROM dns_metadata WHERE sip LIKE '%:%'"):
+        assert ipaddress.IPv6Address(ip) in net
+
+
+def amp_dns_rows(db, amp):
+    return rows(db, "SELECT sip, dip, sport, dport, proto, tid, etime, question, qtype FROM dns_metadata "
+                    "WHERE question LIKE ? AND etime BETWEEN ? AND ?", amp["dns_question"], amp["start"], amp["end"])
+
+
+def test_every_amplification_dns_response_joins_to_an_attack_flow(built):
+    db, attacks = built
+    amp = next(a for a in attacks if a["type"] == "amplification")
+    assert amp["dns_question"] == "amp.example.net" and amp["dns_qtype"] == 255
+    victim = amp["targets"][0]["dip"]
+    n_flows, = rows(db, "SELECT COUNT(*) FROM flows WHERE sport=53 AND dip=? AND etime BETWEEN ? AND ?",
+                    victim, amp["start"], amp["end"])[0]
+    responses, = rows(db, "SELECT COUNT(*) FROM (SELECT 1 FROM dns_metadata WHERE question=? "
+                          "GROUP BY sip, dip, dport, tid, etime)", amp["dns_question"])[0]
+    assert n_flows > 0 and responses == n_flows
+    unjoined, = rows(db, "SELECT COUNT(*) FROM dns_metadata d WHERE d.question=? AND NOT EXISTS "
+                         "(SELECT 1 FROM flows f WHERE d.sip=f.sip AND d.dip=f.dip AND d.sport=f.sport "
+                         "AND d.dport=f.dport AND d.proto=f.proto AND d.etime BETWEEN f.stime AND f.etime "
+                         "AND f.dip=?)", amp["dns_question"], victim)[0]
+    assert unjoined == 0
+
+
+def test_amplification_responses_have_10_to_30_records_of_mixed_types(built):
+    db, attacks = built
+    amp = next(a for a in attacks if a["type"] == "amplification")
+    counts = [c for (c,) in rows(db, "SELECT COUNT(*) FROM dns_metadata WHERE question=? "
+                                     "GROUP BY sip, dip, dport, tid, etime", amp["dns_question"])]
+    assert counts and all(10 <= c <= 30 for c in counts)
+    assert amp["dns_response_count"] == len(counts)
+    assert {r[0] for r in rows(db, "SELECT DISTINCT qtype FROM dns_metadata WHERE question=?",
+                               amp["dns_question"])} == {255}
+    assert {r[0] for r in rows(db, "SELECT DISTINCT rtype FROM dns_metadata WHERE question=?",
+                               amp["dns_question"])} <= {16, 1, 28, 2, 46}
+
+
+def test_attacks_json_dns_fields_are_only_on_amplification(built):
+    db, attacks = built
+    on_disk = json.loads(Path(str(db) + ".attacks.json").read_text())
+    assert on_disk == attacks
+    for a in attacks:
+        has = "dns_question" in a
+        assert has == (a["type"] == "amplification")
+        assert has == ("dns_qtype" in a)
+        assert ("dns_response_count" in a) == (a["type"] in ("amplification", "dns_tunnel"))
+
+
+def flows_dns_join_sql(start, end):
+    import yaml
+    layer = yaml.safe_load((Path(__file__).parent.parent / "semantic_layer.yaml").read_text())
+    return layer["metrics"]["flows_dns_join"]["sql"].replace("<start>", str(start)).replace("<end>", str(end))
+
+
+def test_flows_dns_join_metric_finds_the_abused_name_over_the_attack_window(built):
+    db, attacks = built
+    amp = next(a for a in attacks if a["type"] == "amplification")
+    result = rows(db, flows_dns_join_sql(amp["start"], amp["end"] + 1))
+    assert any("amp.example.net" in r and 255 in r for r in result)
+
+
+def tunnel(attacks):
+    return next(a for a in attacks if a["type"] == "dns_tunnel")
+
+
+def test_dns_tunnel_entry_matches_the_data(built):
+    db, attacks = built
+    t = tunnel(attacks)
+    assert t["start"] == 1767225600000 + (6 * 1440 + 9 * 60) * 60_000
+    assert t["end"] == t["start"] + 3_600_000 - 1
+    assert (t["client"], t["resolver"], t["domain"]) == ("10.2.200.17", "10.0.0.53", "c2.example.org")
+    responses = rows(db, "SELECT sip, dip, tid, etime FROM dns_metadata WHERE question LIKE '%.' || ?",
+                     t["domain"])
+    assert t["dns_response_count"] == len({tuple(r) for r in responses}) == len(responses)
+    assert 1700 <= len(responses) <= 1900
+    assert all(r[0] == t["resolver"] and r[1] == t["client"] and t["start"] <= r[3] <= t["end"]
+               for r in responses)
+    per_minute = [c for (c,) in rows(db, "SELECT COUNT(*) FROM dns_metadata WHERE question LIKE '%.' || ? "
+                                         "GROUP BY etime / 60000", t["domain"])]
+    assert len(per_minute) == 60 and all(15 <= c <= 45 for c in per_minute)
+
+
+def test_dns_tunnel_questions_are_base32_labels_and_answers_long_txt(built):
+    db, attacks = built
+    t = tunnel(attacks)
+    got = rows(db, "SELECT question, qtype, rtype, rdata, rsection FROM dns_metadata "
+                   "WHERE question LIKE '%.' || ?", t["domain"])
+    assert got
+    for question, qtype, rtype, rdata, rsection in got:
+        label, _, domain = question.partition(".")
+        assert domain == "c2.example.org" and re.fullmatch(r"[a-z2-7]{38,42}", label)
+        assert (qtype, rtype, rsection) == (16, 16, "N") and len(rdata) >= 100
+
+
+def test_every_dns_tunnel_response_joins_to_a_small_udp_53_flow(built):
+    db, attacks = built
+    t = tunnel(attacks)
+    flows = rows(db, "SELECT proto, bytes, pkts FROM flows WHERE sip=? AND dip=? AND sport=53",
+                 t["resolver"], t["client"])
+    assert len(flows) == t["flow_count"] == t["dns_response_count"]
+    assert all(proto == 17 and b < 1000 for proto, b, _ in flows)
+    unjoined, = rows(db, "SELECT COUNT(*) FROM dns_metadata d WHERE d.question LIKE '%.' || ? AND NOT EXISTS "
+                         "(SELECT 1 FROM flows f WHERE d.sip=f.sip AND d.dip=f.dip AND d.sport=f.sport "
+                         "AND d.dport=f.dport AND d.proto=f.proto AND d.etime BETWEEN f.stime AND f.etime)",
+                     t["domain"])[0]
+    assert unjoined == 0

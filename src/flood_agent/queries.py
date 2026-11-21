@@ -201,14 +201,60 @@ def now_ms() -> int:
 
 
 def in_cidr(ip, cidr):
-    """SQLite UDF: 1 if IPv4 `ip` is inside `cidr`, else 0 (NULL/invalid input -> NULL).
-    Needs an Ocient mapping when the Telemetry Database moves there."""
+    """SQLite UDF: 1 if `ip` is inside `cidr`, else 0 (NULL/invalid input -> NULL).
+
+    Handles IPv4 and IPv6. Mixed families give 0, except an IPv4-mapped IPv6 address
+    (::ffff:a.b.c.d), which matches an IPv4 block. Needs an Ocient mapping when the Telemetry
+    Database moves there."""
     if ip is None or cidr is None:
         return None
     try:
-        return int(ipaddress.IPv4Address(ip) in ipaddress.IPv4Network(cidr, strict=False))
+        addr = ipaddress.ip_address(ip)
+        net = ipaddress.ip_network(cidr, strict=False)
     except ValueError:
         return None
+    if addr.version == 6 and net.version == 4 and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    return int(addr.version == net.version and addr in net)
+
+
+def _null_safe(fn, types=None):
+    """Wrap a stand-in so a NULL argument gives NULL, as in Ocient. With `types` (one per argument),
+    an argument of another type (a number or blob where text is expected) gives NULL too."""
+
+    def wrapper(*args):
+        if any(a is None for a in args):
+            return None
+        if types and not all(isinstance(a, t) for a, t in zip(args, types)):
+            return None
+        return fn(*args)
+
+    return wrapper
+
+
+def _split_part(s, delim, n):
+    """1-based; '' when n is out of range (PostgreSQL convention). Negative n isn't offered."""
+    if n < 1:
+        return ""
+    parts = s.split(delim) if delim else [s]
+    return parts[n - 1] if n <= len(parts) else ""
+
+
+def _regexp_substr(s, pattern):
+    m = re.search(pattern, s)
+    return m.group(0) if m else None
+
+
+# SQLite stand-ins for Ocient's string functions, registered under the Ocient names so the
+# SQL the LLM writes runs unchanged in production. The regex functions use Python's re.
+_STRING_FUNCTIONS = {
+    "ENDSWITH": (2, lambda s, suffix: int(s.endswith(suffix)), (str, str)),
+    "STARTSWITH": (2, lambda s, prefix: int(s.startswith(prefix)), (str, str)),
+    "SPLIT_PART": (3, _split_part, (str, str, int)),
+    "REGEXP_SUBSTR": (2, _regexp_substr, (str, str)),
+    "REGEXP_COUNT": (2, lambda s, pattern: len(re.findall(pattern, s)), (str, str)),
+    "REVERSE": (1, lambda s: s[::-1], (str,)),
+}
 
 
 _DENIAL_RE = re.compile(r"is prohibited|not authorized", re.I)
@@ -270,6 +316,8 @@ def open_connection(
     con.execute("ATTACH DATABASE ? AS results", (f"file:{results_db}?mode=rwc",))
     con.create_function("in_cidr", 2, in_cidr, deterministic=True)
     con.create_function("now", 0, now_ms)
+    for name, (nargs, fn, types) in _STRING_FUNCTIONS.items():
+        con.create_function(name, nargs, _null_safe(fn, types), deterministic=True)
     con.set_authorizer(_authorizer(allowed_tables))
     return con
 

@@ -172,3 +172,62 @@ def test_a_run_shows_its_flag_note_after_the_reply_and_its_trace_after_that(buil
     nb, _, _ = ask(client, "hello")
     page = client.get(f"/n/{nb}").text
     assert page.index("hello") < page.index("203.0.113.99 was busy") < page.index('class="flag-note"') < page.index('class="trace cell-trace"')
+
+
+CTX6 = ["User asked about 2001:db8::1 and ::ffff:192.0.2.5 and 198.51.100.7 on a link"]
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        ("see 2001:db8::99", ["2001:db8::99"]),  # invented, compressed
+        ("see 2001:0db8:0000:0000:0000:0000:0000:0099", ["2001:0db8:0000:0000:0000:0000:0000:0099"]),
+        ("see 2001:db8::1", []),  # from context
+        ("see 2001:0DB8:0:0:0:0:0:1", []),  # expanded, upper case
+        ("see 2001:db8:0:0:0:0:0:1.", []),  # sentence-final dot
+        ("see 2001:db8::1/64", []),  # prefix length ignored
+        ("see 2001:db8::99/64", ["2001:db8::99"]),
+        ("see 192.0.2.5", []),  # context had it mapped
+        ("see ::ffff:198.51.100.7", []),  # context had it as IPv4
+        ("see ::ffff:c633:6407", []),  # hex-form mapped address
+        ("see ::ffff:203.0.113.9", ["::ffff:203.0.113.9"]),  # mapped, never sent: one flag, not two
+        ("see 64:ff9b::192.0.2.33", ["64:ff9b::192.0.2.33"]),  # IPv4-embedded
+        ("at 12:30:45 and 9:15, ratio 3:1", []),  # times and ratios
+        ("see 2001:db8::99, 2001:DB8:0::99", ["2001:db8::99"]),  # deduplicated by normal form
+    ],
+)
+def test_ipv6_table(reply, expected):
+    assert find_unseen_values(reply, CTX6) == expected
+
+
+CTXD = ["User asked about Seen.Example.com. and api.corp.net; schema shows SELECT * FROM t WHERE host = 'db.lab.io'"]
+
+
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        ("traffic to evil-cdn.com spiked", ["evil-cdn.com"]),  # invented
+        ("see seen.example.com", []),  # from context, any case, no trailing dot
+        ("see SEEN.EXAMPLE.COM.", []),
+        ("see example.com", []),  # parent of a seen name
+        ("see corp.net and lab.io", []),
+        ("see net", []),  # a bare TLD is not a domain
+        ("see new.seen.example.com", ["new.seen.example.com"]),  # unseen subdomain
+        ("see db.lab.io", []),  # from the LLM's SQL
+        ("see agent.py and notes.md and run.sh", []),  # two labels ending in a file extension
+        ("see evil.example.md", ["evil.example.md"]),  # three labels are always checked
+        ("see foo.invalidtld", []),  # unknown TLD
+        ("see xn--bcher-kva.de", ["xn--bcher-kva.de"]),
+        ("visit https://evil-cdn.com/x, then evil-cdn.com.", ["evil-cdn.com"]),  # deduplicated
+        ("mail bob@phish.org", ["phish.org"]),
+    ],
+)
+def test_domain_table(reply, expected):
+    assert find_unseen_values(reply, CTXD) == expected
+
+
+async def test_an_invented_domain_is_flagged_as_type_domain(make_agent):
+    llm = ScriptedLLM([TextChunk("The top talker resolves to evil-cdn.com, not seen.example.com.")])
+    events = await collect(await make_agent(llm), "who is the top talker? check seen.example.com")
+    assert flags_of(events) == ["evil-cdn.com"]
+    assert {(e["type"], e["token"]) for e in trace_flags(events)} == {("domain", "evil-cdn.com")}

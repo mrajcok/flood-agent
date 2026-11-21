@@ -3,7 +3,9 @@ time_key: etime
 time_key_rule: Always filter time ranges on etime (the Time Key); it is indexed and, in Ocient, the partition key.
 tables:
   flows:
-    description: One row per Flow Record (NetFlow/IPFIX summary of traffic between two endpoints).
+    description: >-
+      One row per Flow Record (NetFlow/IPFIX summary of traffic between two endpoints).
+      flows is IPv4-only: sip and dip are never IPv6 (dns_metadata can hold IPv6).
     columns:
       sip: {type: TEXT, description: Source IPv4 address, dotted decimal, example: "192.0.2.10"}
       dip: {type: TEXT, description: Destination IPv4 address, dotted decimal, example: "198.51.100.20"}
@@ -16,7 +18,7 @@ tables:
         enum: {6: TCP, 17: UDP, 1: ICMP}
       tcp_flags:
         type: INTEGER
-        description: TCP flags bitmask OR'd over the flow
+        description: TCP flags bitmask OR'd over the flow; test a flag with e.g. `tcp_flags & 2 != 0` (SYN)
         example: 18
         enum_bits: {1: FIN, 2: SYN, 4: RST, 8: PSH, 16: ACK, 32: URG}
       circuit: {type: TEXT, description: Opaque 12-character Circuit identifier, example: "AB12CD34EF56"}
@@ -24,6 +26,77 @@ tables:
       etime: {type: INTEGER, unit: epoch ms UTC, description: Flow end time (the Time Key), example: 1767225601000}
       bytes: {type: INTEGER, unit: bytes, description: Total bytes in the flow, example: 1500}
       pkts: {type: INTEGER, unit: packets, description: Total packets in the flow, example: 3}
+  dns_metadata:
+    description: >-
+      One row per DNS Response Record: one resource record of a DNS response, repeating that
+      response's header and question on every row. Responses only (no queries). A response with
+      no records (e.g. NXDOMAIN) has no rows. Rows are records, not responses, so a response with
+      several records has several rows (the rows of one response share sip, dip, sport, dport,
+      tid and etime). The table is very large: always bound etime tightly.
+    columns:
+      sip: {type: TEXT, description: "Source IP of the response (the DNS server), IPv4 or IPv6 text", example: "203.0.113.5"}
+      dip: {type: TEXT, description: "Destination IP of the response (the client), IPv4 or IPv6 text", example: "10.1.2.3"}
+      proto:
+        type: INTEGER
+        description: IANA protocol number of the transport
+        example: 17
+        enum: {6: TCP, 17: UDP, 1: ICMP}
+      sport: {type: INTEGER, description: Source port (usually 53), example: 53}
+      dport: {type: INTEGER, description: Destination port, example: 51000}
+      tid: {type: INTEGER, description: DNS transaction ID, shared by the rows of one response, example: 4711}
+      qr: {type: TEXT, description: "Query/response flag; always 'R' (responses only)", example: "R"}
+      opcode:
+        type: INTEGER
+        description: DNS opcode
+        example: 0
+        enum: {0: QUERY, 2: STATUS, 4: NOTIFY, 5: UPDATE}
+      rcode:
+        type: INTEGER
+        description: DNS response code
+        example: 0
+        enum: {0: NOERROR, 1: FORMERR, 2: SERVFAIL, 3: NXDOMAIN, 4: NOTIMP, 5: REFUSED}
+      flags: {type: INTEGER, description: DNS header flag bits of the response (meaning not yet confirmed; do not decode), example: 3}
+      question:
+        type: TEXT
+        description: >-
+          The question name. Case is preserved and resolvers randomise it, so compare and group on
+          LOWER(question). No trailing dot. Bytes outside printable ASCII appear as \HH; IDNs are
+          punycode (xn--).
+        example: "www.example.com"
+      qtype:
+        type: INTEGER
+        description: Question type
+        example: 1
+        enum: {1: A, 2: NS, 5: CNAME, 6: SOA, 12: PTR, 15: MX, 16: TXT, 28: AAAA, 33: SRV, 41: OPT, 43: DS, 46: RRSIG, 47: NSEC, 48: DNSKEY, 64: SVCB, 65: HTTPS, 255: ANY, 257: CAA}
+      qclass:
+        type: INTEGER
+        description: Question class
+        example: 1
+        enum: {1: IN, 3: CH, 255: ANY}
+      rsection: {type: TEXT, description: "Section of the record within the response (answer, authority or additional; codes not yet confirmed, do not decode)", example: "N"}
+      rname:
+        type: TEXT
+        description: Owner name of the record. Same case, trailing dot and escaping rules as question; compare on LOWER(rname).
+        example: "www.example.com"
+      rtype:
+        type: INTEGER
+        description: Record type
+        example: 1
+        enum: {1: A, 2: NS, 5: CNAME, 6: SOA, 12: PTR, 15: MX, 16: TXT, 28: AAAA, 33: SRV, 41: OPT, 43: DS, 46: RRSIG, 47: NSEC, 48: DNSKEY, 64: SVCB, 65: HTTPS, 255: ANY, 257: CAA}
+      rclass:
+        type: INTEGER
+        description: Record class
+        example: 1
+        enum: {1: IN, 3: CH, 255: ANY}
+      rttl: {type: INTEGER, unit: seconds, description: Record time to live, example: 300}
+      rdata:
+        type: TEXT
+        description: >-
+          Record data as text. A: dotted IPv4. AAAA: compressed lower-case IPv6. NS, CNAME and PTR:
+          the name. MX and SRV: the target name only. SOA: the primary nameserver only. TXT: the
+          first string only. Several values are separated by ^, escaped as \5E inside a value.
+        example: "192.0.2.1"
+      etime: {type: INTEGER, unit: epoch ms UTC, description: Response capture time (the Time Key), example: 1767225601000}
 functions:
   now:
     signature: now()
@@ -35,9 +108,46 @@ functions:
   in_cidr:
     signature: in_cidr(ip, cidr)
     description: >-
-      1 if the IPv4 address is inside the CIDR block, else 0. Use for network-range filters
-      such as WHERE in_cidr(sip, '10.1.0.0/16'). It is a SQLite UDF; it needs an Ocient mapping.
+      1 if the IPv4 or IPv6 address is inside the CIDR block, else 0. Use for network-range
+      filters such as WHERE in_cidr(sip, '10.1.0.0/16') or in_cidr(addr, '2001:db8::/32').
+      Mixed families give 0, except an IPv4-mapped IPv6 address (::ffff:a.b.c.d) matches an IPv4
+      block. Invalid or NULL input gives NULL. It is a SQLite UDF; it needs an Ocient mapping:
+      SUBNET(IP(x), len[+96 for IPv4]) = IP('net') (still to be checked on a real Ocient system).
     example: "in_cidr(sip, '192.0.2.0/24')"
+  ENDSWITH:
+    signature: ENDSWITH(s, suffix)
+    description: >-
+      1 if text s ends with suffix, else 0. Use for domain suffixes, e.g.
+      WHERE ENDSWITH(LOWER(question), '.example.com'). Any NULL argument gives NULL.
+    example: "ENDSWITH(LOWER(question), '.example.com')"
+  STARTSWITH:
+    signature: STARTSWITH(s, prefix)
+    description: >-
+      1 if text s starts with prefix, else 0. Any NULL argument gives NULL.
+    example: "STARTSWITH(LOWER(question), 'www.')"
+  SPLIT_PART:
+    signature: SPLIT_PART(s, delim, n)
+    description: >-
+      The n-th piece of s split on delim; n is 1-based and positive. Gives '' when n is
+      beyond the last piece. Use for domain labels. Any NULL argument gives NULL.
+    example: "SPLIT_PART(LOWER(question), '.', 1)"
+  REGEXP_SUBSTR:
+    signature: REGEXP_SUBSTR(s, pattern)
+    description: >-
+      The first substring of s matching the regular expression, or NULL when nothing
+      matches. Any NULL argument gives NULL.
+    example: "REGEXP_SUBSTR(question, '[a-z0-9]+[.]example[.]org$')"
+  REGEXP_COUNT:
+    signature: REGEXP_COUNT(s, pattern)
+    description: >-
+      The number of non-overlapping matches of the regular expression in s (0 for none).
+      Any NULL argument gives NULL.
+    example: "REGEXP_COUNT(question, '[.]')"
+  REVERSE:
+    signature: REVERSE(s)
+    description: >-
+      The text s reversed. Useful for grouping by domain suffix. NULL gives NULL.
+    example: "REVERSE(LOWER(question))"
 metrics:
   bits_per_second:
     description: Throughput in bits/sec over a window; bytes are totals per flow.
@@ -48,6 +158,22 @@ metrics:
   top_talkers:
     description: Top talkers - sources (or destinations) ranked by total bytes.
     sql: SELECT sip, SUM(bytes) AS total_bytes FROM flows WHERE etime >= <start> AND etime < <end> GROUP BY sip ORDER BY total_bytes DESC LIMIT 10
+  top_names:
+    description: The DNS names queried most, grouped case-insensitively.
+    sql: SELECT LOWER(question) AS name, COUNT(*) AS n FROM dns_metadata WHERE etime >= <start> AND etime < <end> GROUP BY LOWER(question) ORDER BY n DESC LIMIT 10
   per_minute_series:
     description: Time series bucketed per minute on the Time Key.
     sql: SELECT (etime / 60000) * 60000 AS minute, SUM(bytes) AS bytes FROM flows WHERE etime >= <start> AND etime < <end> GROUP BY minute ORDER BY minute
+  flows_dns_join:
+    description: >-
+      Join Flow Records to DNS Response Records (each DNS response that belongs to a flow). Equal
+      sip, dip, sport, dport and proto, each side's etime bounded separately, and the response's
+      etime within the flow's stime..etime. Use it to find the name behind a flow, e.g. the name
+      reflectors were abusing in an amplification attack. IPv6 DNS rows never join.
+    sql: >-
+      SELECT d.question, d.qtype, COUNT(*) AS responses, SUM(f.bytes) AS total_bytes
+      FROM flows f JOIN dns_metadata d ON d.sip = f.sip AND d.dip = f.dip AND d.sport = f.sport
+      AND d.dport = f.dport AND d.proto = f.proto
+      WHERE f.etime >= <start> AND f.etime < <end> AND d.etime >= <start> AND d.etime < <end>
+      AND d.etime BETWEEN f.stime AND f.etime
+      GROUP BY d.question, d.qtype ORDER BY total_bytes DESC LIMIT 10

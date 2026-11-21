@@ -28,6 +28,7 @@ from playwright.sync_api import sync_playwright
 from flood_agent.agent import Agent, AgentConfig, TextDelta
 from flood_agent.catalog import CellRun
 from flood_agent.config import Settings
+from flood_agent.generator import generate
 from flood_agent.llm import TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_server import ServerSettings, create_server
 from flood_agent.web import create_app
@@ -104,10 +105,29 @@ def telemetry_db_template(tmp_path_factory) -> Path:
     return path
 
 
+@pytest.fixture(scope="session")
+def generated_db(tmp_path_factory) -> Path:
+    """A small generated Telemetry Database: flows plus dns_metadata, with the amplification attack."""
+    path = tmp_path_factory.mktemp("generated") / "telemetry.db"
+    generate(path, seed=1, scale=0.01)
+    return path
+
+
 @pytest.fixture
-def telemetry_db(tmp_path: Path, telemetry_db_template: Path) -> Path:
-    """A per-test copy of the session's test Telemetry Database."""
-    return Path(shutil.copy(telemetry_db_template, tmp_path / "telemetry.db"))
+def telemetry_db(request, tmp_path: Path, telemetry_db_template: Path) -> Path:
+    """A per-test copy of the session's test Telemetry Database. A test marked `generated_data`
+    gets the generated one instead, since only it has dns_metadata."""
+    generated = request.node.get_closest_marker("generated_data") is not None
+    source = request.getfixturevalue("generated_db") if generated else telemetry_db_template
+    return Path(shutil.copy(source, tmp_path / "telemetry.db"))
+
+
+def canned_params(canned_prompts):
+    """Parametrize arguments for Canned Prompts: the DNS ones are marked `generated_data`."""
+    return [
+        pytest.param(c, id=c.id, marks=[pytest.mark.generated_data] if "dns" in c.id else [])
+        for c in canned_prompts
+    ]
 
 
 def all_telemetry_values(path: Path) -> set[str]:
@@ -115,6 +135,19 @@ def all_telemetry_values(path: Path) -> set[str]:
     vals = {str(v) for row in con.execute("SELECT * FROM flows") for v in row}
     con.close()
     return vals
+
+
+def leakable_values(path: Path, canned) -> set[str]:
+    """Telemetry values that must never reach the LLM. Values the Canned Prompt's own script names
+    (e.g. the victim IP) are not leaks. The generated data the DNS prompts run on also has many short
+    plain numbers that the SQL text contains by coincidence (1000, 3600, 15000), so for them a
+    number is only checked from 6 digits up; large counts, byte totals and IPs as integers still are."""
+    script = repr(canned)
+    min_digits = 6 if canned.id.startswith("dns-") else 4
+    return {
+        v for v in all_telemetry_values(path)
+        if len(v) >= (min_digits if v.isdigit() else 4) and v not in script
+    }
 
 
 class ScriptedLLM:

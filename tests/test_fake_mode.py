@@ -6,7 +6,7 @@ import sqlite3
 from html import unescape
 
 import pytest
-from conftest import all_telemetry_values, collect, post_run, text_of
+from conftest import canned_params, collect, leakable_values, post_run, text_of
 from fastapi.testclient import TestClient
 
 from flood_agent.__main__ import build_app, picker_entries
@@ -48,7 +48,7 @@ async def test_the_too_many_rows_prompt_shows_a_table_truncated_to_the_row_cap(m
     assert "truncated" in text_of(events).lower()
 
 
-@pytest.mark.parametrize("canned", CANNED, ids=lambda c: c.id)
+@pytest.mark.parametrize("canned", canned_params(CANNED))
 async def test_every_canned_prompt_produces_its_declared_outcome(canned, make_agent, telemetry_db):
     llm = Recorder(fake_client())
     agent = await make_agent(llm, model="fake")
@@ -73,9 +73,10 @@ async def test_every_canned_prompt_produces_its_declared_outcome(canned, make_ag
     text = text_of(events)
     assert canned.expect.notice in text
     assert any(isinstance(e, TurnError) for e in events) == canned.expect.turn_error
-    values = {v for v in all_telemetry_values(telemetry_db) if len(v) >= 4}
+    values = leakable_values(telemetry_db, canned)
     sent = [re.sub(r"rt_\w+", "", call) for call in llm.calls]  # Result Table names are random, not telemetry
-    assert not any(v in call for call in sent for v in values)
+    leaked = {v for v in values for call in sent if v in call}
+    assert not leaked
 
 
 async def test_an_unmatched_message_gets_a_reply_naming_fake_mode_without_relisting_the_prompts(make_agent):
@@ -413,3 +414,20 @@ async def test_a_canned_prompt_matches_despite_a_trailing_period_and_spaces(make
     events = await collect(agent, f"  {canned.prompt}. ")
 
     assert "couldn't get a complete answer" in text_of(events)
+
+
+@pytest.mark.generated_data
+async def test_the_dns_amplification_prompt_puts_the_abused_name_first(make_agent):
+    agent = await make_agent(fake_client(), model="fake")
+    canned = next(c for c in CANNED if c.id == "dns-amplification-names")
+
+    events = await collect(agent, canned.prompt)
+
+    shown = [e for e in events if isinstance(e, DisplayEvent)]
+    assert "amp.example.net" in agent.fetch_rows(shown[0].result_table)["rows"][0]
+
+
+def test_the_dns_prompts_are_in_the_picker():
+    prompts = {c.prompt for c in CANNED}
+    assert {"Which DNS names were queried most?", "Chart DNS records per hour by record type",
+            "Which DNS names drove the traffic to 198.51.100.77?"} <= prompts

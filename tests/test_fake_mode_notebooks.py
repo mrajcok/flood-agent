@@ -4,7 +4,7 @@ import json
 import re
 
 import pytest
-from conftest import all_telemetry_values
+from conftest import canned_params, leakable_values
 
 from flood_agent.agent import NO_MODEL, DisplayEvent, TextDelta, TraceReady, TurnError
 from flood_agent.fake_llm import FakeClient, load_canned_prompts, parent_of
@@ -67,7 +67,7 @@ async def test_a_follow_up_below_its_parents_cell_resolves_the_parents_tables(ma
     assert "first in an AI Cell above" not in text(events)
 
 
-@pytest.mark.parametrize("canned", CANNED, ids=lambda c: c.id)
+@pytest.mark.parametrize("canned", canned_params(CANNED))
 async def test_every_canned_prompt_run_in_a_notebook_meets_its_declared_expectations(canned, make_agent, telemetry_db):
     agent, nb = await fake_agent(make_agent)
     parent = parent_of(canned, CANNED)
@@ -85,6 +85,6 @@ async def test_every_canned_prompt_run_in_a_notebook_meets_its_declared_expectat
     assert len(failed) == canned.expect.failed_tool_calls
     assert canned.expect.notice in text(events)
     assert any(isinstance(e, TurnError) for e in events) == canned.expect.turn_error
-    values = {v for v in all_telemetry_values(telemetry_db) if len(v) >= 4}
+    values = leakable_values(telemetry_db, canned)
     stored = re.sub(r"rt_\w+", "", json.dumps(agent.notebooks.transcript(agent.notebooks.cell(cell)["run"]["id"])))
     assert not any(v in stored for v in values)

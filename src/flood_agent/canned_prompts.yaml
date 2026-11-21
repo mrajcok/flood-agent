@@ -140,6 +140,74 @@
   expect:
     displays: [chart]
 
+- id: dns-top-names
+  prompt: Which DNS names were queried most?
+  steps:
+    - tool_calls:
+        - name: run_query
+          args:
+            sql: >-
+              SELECT LOWER(question) AS name, COUNT(*) AS records FROM dns_metadata
+              WHERE etime >= 1767225600000 AND etime < 1767830400000
+              GROUP BY LOWER(question) ORDER BY records DESC LIMIT 10
+            title: Top DNS names by record count
+    - text: "Here are the 10 DNS names with the most records."
+      tool_calls:
+        - name: show_table
+          args:
+            result_table: "{result_table}"
+  expect:
+    displays: [table]
+
+- id: dns-records-per-hour
+  prompt: Chart DNS records per hour by record type
+  steps:
+    - tool_calls:
+        - name: run_query
+          args:
+            sql: >-
+              SELECT (etime / 3600000) * 3600000 AS bucket_ms, rtype, COUNT(*) AS records FROM dns_metadata
+              WHERE etime >= 1767225600000 AND etime < 1767830400000
+              GROUP BY bucket_ms, rtype ORDER BY bucket_ms, rtype
+            title: DNS records per hour by record type
+    - text: "Here are the hourly DNS records, one line per record type."
+      tool_calls:
+        - name: show_chart
+          args:
+            vega_lite_spec:
+              data: {name: "{result_table}"}
+              mark: line
+              encoding:
+                x: {field: bucket_ms, type: temporal, scale: {type: utc}, title: Time (UTC)}
+                y: {field: records, type: quantitative, title: Records}
+                color: {field: rtype, type: nominal, title: Record type}
+  expect:
+    displays: [chart]
+
+- id: dns-amplification-names
+  prompt: Which DNS names drove the traffic to 198.51.100.77?
+  steps:
+    - tool_calls:
+        - name: run_query
+          args:
+            sql: >-
+              SELECT LOWER(d.question) AS name, COUNT(*) AS responses, SUM(f.bytes) AS total_bytes
+              FROM flows f JOIN dns_metadata d ON d.sip = f.sip AND d.dip = f.dip AND d.sport = f.sport
+              AND d.dport = f.dport AND d.proto = f.proto
+              WHERE f.sport = 53 AND f.dip = '198.51.100.77'
+              AND f.etime >= 1767495600000 AND f.etime < 1767496800000
+              AND d.etime >= 1767495600000 AND d.etime < 1767496800000
+              AND d.etime BETWEEN f.stime AND f.etime
+              GROUP BY LOWER(d.question) ORDER BY total_bytes DESC LIMIT 10
+            title: DNS names behind the traffic to 198.51.100.77
+    - text: "Here are the DNS names behind the traffic to 198.51.100.77, by bytes."
+      tool_calls:
+        - name: show_table
+          args:
+            result_table: "{result_table}"
+  expect:
+    displays: [table]
+
 - id: chained-query
   prompt: Total bytes by port, then show the top 3 ports from that result
   steps:

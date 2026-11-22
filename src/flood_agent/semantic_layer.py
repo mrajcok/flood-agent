@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 import yaml
 
-from flood_agent import table_names
+from flood_agent.ai_cell_context import SystemPrompt
 
 if TYPE_CHECKING:  # annotations only: no import-time coupling to the Catalog
     from flood_agent.catalog import Table
@@ -135,35 +135,5 @@ class SemanticLayer:
         return yaml.safe_dump(self.data, sort_keys=False)
 
     def system_prompt(self, result_tables: "list[Table] | None" = None) -> str:
-        """Everything before the Result Tables section is the same on every turn, so the LLM can cache it."""
-        return (
-            f"{SYSTEM_INSTRUCTIONS}\n"
-            "\n"
-            f"# Semantic Layer\n{self.render()}"
-            f"{self.render_result_tables(result_tables or [])}"
-        )
-
-    @staticmethod
-    def render_result_tables(tables: "list[Table]") -> str:
-        """The live Result Tables of the cells above, and the cell's own earlier Runs: names, schemas and originating requests only."""
-        if not tables:
-            return (
-                "\n# Result Tables\nNone are available in the cells above. Result Tables named in "
-                "earlier messages have expired and cannot be queried. If the user names another table, "
-                "call describe_table(name) to see its columns, then query it by name; a live Result Table "
-                "from another notebook can also be shown directly with show_table or show_chart.\n"
-            )
-        lines = [
-            "\n# Result Tables",
-            "Earlier results in this notebook. Query them by name in run_query like any table "
-            "(e.g. to break down or filter an earlier result). Others have expired. If the user names a "
-            "table not listed here, call describe_table(name) to see its columns, then query it by name; a live "
-            "Result Table from another notebook can also be shown directly with show_table or show_chart.",
-        ]
-        for t in tables:
-            cols = ", ".join(f"{c['name']} {c['type']}" for c in t.columns)
-            if t.request == table_names.SQL_CELL_REQUEST:
-                lines.append(f"- {t.name} (SQL Cell) {t.title}: columns {cols}")
-            else:
-                lines.append(f"- {t.name} ({t.title}): columns {cols}; from request: {t.request!r}")
-        return "\n".join(lines) + "\n"
+        """The system prompt, assembled by the AI Cell context module from these instructions, this layer and the tables."""
+        return SystemPrompt.build(SYSTEM_INSTRUCTIONS, self.render(), result_tables or []).render()

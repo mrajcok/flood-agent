@@ -10,11 +10,12 @@ between steps. `parse_system_prompt` is the inverse, for the Trace, which stores
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
 from flood_agent import table_names
-from flood_agent.notebooks import AI, MARKDOWN
+from flood_agent.cell_kinds import AI, MARKDOWN
 
 if TYPE_CHECKING:  # annotations only: no import-time coupling to the Catalog
     from flood_agent.catalog import Table
@@ -134,6 +135,7 @@ def repair_history(messages: list[dict]) -> list[dict]:
 
 SEMANTIC_LAYER_HEADING = "# Semantic Layer\n"
 RESULT_TABLES_HEADING = "# Result Tables"
+_SEMANTIC_LAYER_LINE = re.compile(f"^{re.escape(SEMANTIC_LAYER_HEADING)}", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -170,9 +172,10 @@ class SystemPrompt:
 def parse_system_prompt(prompt: str | None) -> SystemPrompt:
     """A stored prompt string back into its sections; one without the expected headings lands wholly in the instructions."""
     prompt = prompt or ""
-    head, sep, tail = prompt.partition(SEMANTIC_LAYER_HEADING)
-    if not sep:
+    heading = _SEMANTIC_LAYER_LINE.search(prompt)  # a heading line only, not the same text mid-line
+    if not heading:
         return SystemPrompt(prompt, "", "")
+    head, tail = prompt[: heading.start()], prompt[heading.end() :]
     layer, rt_sep, rest = tail.partition(f"\n{RESULT_TABLES_HEADING}")
     return SystemPrompt(head, SEMANTIC_LAYER_HEADING + layer, (rt_sep + rest).lstrip("\n"))
 

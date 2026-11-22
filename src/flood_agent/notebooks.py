@@ -14,6 +14,8 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any, Callable
 
+from flood_agent.cell_kinds import AI, MARKDOWN
+
 COUNT_KIND = "count"  # the kind of a Count Display, among table and chart Displays
 
 
@@ -73,9 +75,6 @@ CREATE TABLE IF NOT EXISTS run_displays (
 );
 """
 
-AI = "ai"
-SQL = "sql"
-MARKDOWN = "markdown"
 DEFAULT_MAX_ROWS = 1000
 
 

@@ -23,7 +23,6 @@ from fastapi.templating import Jinja2Templates
 from flood_agent import dev_tools, lookup_tables, queries
 from flood_agent.agent import (
     NO_MODEL,
-    STOPPED_NOTE,
     Agent,
     CountEvent,
     DisplayEvent,
@@ -39,10 +38,12 @@ from flood_agent.agent import (
     TurnEnd,
     resolve_chart_data,
 )
+from flood_agent.ai_cell_context import STOPPED_NOTE
 from flood_agent.catalog import TableExpired
+from flood_agent.cell_kinds import MARKDOWN
 from flood_agent.context_usage import context_usage
 from flood_agent.lookup_tables import InvalidLookupTable
-from flood_agent.notebooks import COUNT_KIND, DEFAULT_MAX_ROWS, MARKDOWN
+from flood_agent.notebooks import COUNT_KIND, DEFAULT_MAX_ROWS
 from flood_agent.queries import InvalidSort
 from flood_agent.show_commands import DESCRIBE_TABLE, SHOW_COMMANDS, SHOW_IN_TEXTBOX, is_show_statement, statement_of
 from flood_agent.trace import short_model, split_system_prompt

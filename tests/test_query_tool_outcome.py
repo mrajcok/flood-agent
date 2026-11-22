@@ -88,3 +88,19 @@ async def test_unreadable_query_content_reaches_the_llm_only_as_a_generic_failur
     assert "10.1.2.3" not in llm.all_sent_text()
     assert "10.1.2.3" in json.dumps(trace)  # kept for diagnosis
     assert agent.tables.names() == []
+
+
+async def test_unreadable_query_content_counts_toward_the_retry_limit(make_agent, monkeypatch):
+    from flood_agent import agent as agent_mod
+
+    async def garbage(self, name, args, max_rows):
+        return SimpleNamespace(content=[TextContent(type="text", text="oops 10.1.2.3")], isError=False)
+
+    monkeypatch.setattr(McpConnection, "call_tool", garbage)
+    call_ = tool_call("run_query", title="T", sql="SELECT dport FROM flows")
+    llm = ScriptedLLM([call_], [call_], [call_])
+    events = await collect(await make_agent(llm), "go")
+    assert agent_mod.GIVE_UP_MESSAGE in "".join(getattr(e, "text", "") for e in events)
+    (trace,) = [e.trace for e in events if isinstance(e, TraceReady)]
+    assert len(entries(trace, "query_error")) == 3
+    assert all(e["raw_error"] == "oops 10.1.2.3" for e in entries(trace, "query_error"))

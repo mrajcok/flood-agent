@@ -41,7 +41,7 @@ from flood_agent.notebooks import AI, COUNT_KIND, DEFAULT_MAX_ROWS, MARKDOWN, MA
 from flood_agent.semantic_layer import SemanticLayer
 from flood_agent.sql_cell_run import SqlCellRuns
 from flood_agent.table_replacement import RefreshInProgress, ReplacementFailed, TableReplacement
-from flood_agent.tool_outcome import Counted, Failed, Outcome, ResultTableMade, Stopped, decode, project
+from flood_agent.tool_outcome import Counted, DisplayMade, Failed, Outcome, ResultTableMade, Stopped, decode, project
 from flood_agent.trace import TraceBuilder, context_tokens
 from flood_agent.upgrade import drop_pre_notebook_data
 
@@ -856,8 +856,8 @@ class Agent:
                 displays, events = [], []
                 if isinstance(outcome, ResultTableMade):
                     trace.result_table(outcome.result_table, outcome.row_count, outcome.columns)
-                elif outcome is None:  # the tools not yet on the codec
-                    displays, events = self._prepare_displays(content, args, trace)
+                elif isinstance(outcome, DisplayMade):
+                    displays, events = self._prepare_displays(outcome, trace)
                 step_displays += [(e, len(items)) for e in events]
                 count = self._count_display(outcome, args) if isinstance(outcome, Counted) and c.name == "run_count_query" else None
                 if count:
@@ -891,14 +891,12 @@ class Agent:
     ) -> tuple[str, dict, str | None, int, Outcome | None]:
         """Execute one LLM tool call. Returns (content for the LLM, args, executed_sql, failed 0/1, outcome).
 
-        A query tool's result is decoded once into an `Outcome` (None for the other tools, which still return
-        Query Metadata JSON): `content` is its projection, and everything else the Agent needs comes from the
-        outcome. Never raises for problems the LLM caused (bad JSON, missing `sql`) or tool failures: it
+        A tool's result is decoded once into an `Outcome` (None only when the call itself broke): `content` is
+        its projection, and everything else the Agent needs comes from the outcome. Never raises for problems the LLM caused (bad JSON, missing `sql`) or tool failures: it
         returns an error result the LLM can act on, and a failed query tool call counts toward the limit."""
         is_query = c.name in QUERY_TOOLS
         args: dict = {}
         outcome: Outcome | None = None
-        content = ""
         try:
             parsed = json.loads(c.arguments or "{}")
         except ValueError:
@@ -920,10 +918,8 @@ class Agent:
                 text = "".join(b.text for b in result.content if isinstance(b, TextContent))
                 if result.isError:
                     outcome = Failed(text[:500] or "The tool call was rejected.")
-                elif is_query:
-                    outcome = decode(text)
                 else:
-                    content = text
+                    outcome = decode(text)
                 if isinstance(outcome, ResultTableMade) and c.name == "run_query":
                     try:
                         # Straight after the call returns, before any other await, so a turn stopped here
@@ -932,11 +928,10 @@ class Agent:
                     except Exception as e:  # the tool ran; only recording its table failed
                         trace.add("registration_error", name=c.name, detail=f"{type(e).__name__}: {e}")
                         return _fail("The query ran but its Result Table could not be recorded. Try again."), args, None, 1, None
-        if outcome is None:
-            return content, args, None, 0, None
+        assert outcome is not None
         content = project(outcome)
         if not is_query:
-            return content, args, None, 0, None
+            return content, args, None, 0, outcome
         executed_sql = getattr(outcome, "executed_sql", None)
         if not isinstance(outcome, Failed | Stopped):
             return content, args, executed_sql, 0, outcome
@@ -984,19 +979,11 @@ class Agent:
         )
 
     def _prepare_displays(
-        self, tool_content: str, args: dict, trace: TraceBuilder,
+        self, made: DisplayMade, trace: TraceBuilder,
     ) -> tuple[list[tuple], list[DisplayEvent]]:
         """The Display a tool call made: the definitions [(kind, result_table, definition)] to persist with
         the tool message, and the events to send the user once the step is saved."""
-        try:
-            payload = json.loads(tool_content)
-        except ValueError:
-            return [], []
-        if not isinstance(payload, dict):
-            return [], []
-        display = payload.get("display")
-        if not display:
-            return [], []
+        display = made.display
         table = display["result_table"]
         # Any live Result Table may be shown (ADR 0003); the Display is saved with this
         # Cell, but the table stays owned by the one that created it.

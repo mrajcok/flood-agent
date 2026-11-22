@@ -76,7 +76,6 @@ CREATE TABLE IF NOT EXISTS run_displays (
 AI = "ai"
 SQL = "sql"
 MARKDOWN = "markdown"
-MARKDOWN_NOTE_LABEL = "[Markdown note]"  # prefixes a ticked Markdown Cell's text in an AI Cell's context
 DEFAULT_MAX_ROWS = 1000
 
 

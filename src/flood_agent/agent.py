@@ -855,7 +855,7 @@ class Agent:
                 elif isinstance(outcome, DisplayMade):
                     displays, events = self._prepare_displays(outcome, trace)
                 step_displays += [(e, len(items)) for e in events]
-                count = self._count_display(outcome, args) if isinstance(outcome, Counted) and c.name == "run_count_query" else None
+                count = self._count_display(c.name, outcome, args)
                 if count:
                     displays.append((COUNT_KIND, None, {"title": count.title, "value": count.value, "sql": count.sql,
                                                      "computed_at_ms": count.computed_at_ms}))
@@ -995,8 +995,11 @@ class Agent:
         return ([(display["kind"], table, {"columns": display["columns"]})],
                 [DisplayEvent(display["kind"], table, display["columns"])])
 
-    def _count_display(self, counted: Counted, args: dict) -> CountEvent:
-        """A successful run_count_query makes a Count Display (shown once it is saved). It has no result
-        table (so no Retention) and lives and dies with its Run."""
+    def _count_display(self, tool: str, outcome: Outcome | None, args: dict) -> CountEvent | None:
+        """A successful run_count_query makes a Count Display (shown once it is saved); any other call
+        makes none. It has no result table (so no Retention) and lives and dies with its Run."""
+        if tool != "run_count_query" or not isinstance(outcome, Counted):
+            return None
+        counted = outcome
         title = args.get("title")
         return CountEvent(title if isinstance(title, str) else "", counted.count, args["sql"], self.config.clock())

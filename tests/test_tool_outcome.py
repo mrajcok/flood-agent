@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from flood_agent import queries
 from flood_agent.tool_outcome import (
     UNREADABLE,
     Counted,
@@ -14,6 +15,7 @@ from flood_agent.tool_outcome import (
     TableDescribed,
     decode,
     encode,
+    from_query_result,
     project,
 )
 
@@ -77,3 +79,22 @@ def test_content_that_will_not_decode_is_a_generic_failure_that_keeps_the_raw_te
     outcome = decode(text)
     assert outcome == Failed(UNREADABLE, raw_content=text)
     assert project(outcome) == json.dumps({"success": False, "error": "The tool returned an unreadable result."})
+
+
+@pytest.mark.parametrize("sql, max_rows", [
+    ("SELECT 1 AS a, 'x' AS b, 2.5 AS c, NULL AS d", 100),  # computed columns, every type incl. all-NULL
+    ("SELECT 1 AS a UNION ALL SELECT 2 UNION ALL SELECT 3", 2),  # truncated: truncated_to and note
+    ("SELECT 1 AS a WHERE 0", 1),  # no rows
+])
+def test_real_run_query_output_decodes_to_the_same_outcome(telemetry_db, tmp_path, sql, max_rows):
+    result = queries.run_query(telemetry_db, tmp_path / "results.db", sql, 5.0, max_rows)
+    assert result["success"]
+    outcome = from_query_result(result)
+    assert decode(encode(outcome)) == outcome
+
+
+def test_real_run_query_failures_decode_to_the_same_outcome(telemetry_db, tmp_path):
+    for sql in ("SELECT * FROM no_such_table", "DROP TABLE flows"):
+        outcome = from_query_result(queries.run_query(telemetry_db, tmp_path / "results.db", sql, 5.0, 10))
+        assert isinstance(outcome, Failed)
+        assert decode(encode(outcome)) == outcome

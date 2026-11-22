@@ -55,7 +55,7 @@ class Failed:
 
 @dataclass(frozen=True)
 class Stopped:
-    """The user's Stop ended the call. Not produced by the MCP path today."""
+    """The user's Stop ended the call (`from_query_result` makes it from a stopped query)."""
     error: str = "Stopped by the user."
     raw_error: str | None = None
     executed_sql: str | None = None

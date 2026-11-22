@@ -145,3 +145,14 @@ async def test_no_telemetry_value_ever_reaches_the_llm(make_agent, telemetry_db)
                 if m["role"] in ("system", "tool"):
                     for v in values:
                         assert v not in m["content"], (v, m["role"])
+
+
+async def test_a_result_table_made_partway_through_a_run_is_listed_in_the_next_steps_system_prompt(make_agent):
+    llm = ScriptedLLM(
+        [tool_call("run_query", sql=TOP_PORTS_SQL, title="top ports")],
+        [TextChunk("done")],
+    )
+    await collect(await make_agent(llm), "q")
+    name = last_tool_result(llm.calls[1])["result_table"]
+    assert name not in llm.calls[0][0]["content"]
+    assert f"- {name} (top ports)" in llm.calls[1][0]["content"]

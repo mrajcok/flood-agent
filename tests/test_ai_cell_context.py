@@ -151,3 +151,21 @@ def test_the_cells_passed_in_are_not_modified():
     ctx.context_above(cells, "last")
     ctx.stale_cells(cells)
     assert cells == before
+
+
+def test_listed_result_tables_are_those_of_cells_above_then_the_cells_own_run_by_creation_time_then_name():
+    from types import SimpleNamespace as T
+    made = {
+        ("a", "ra"): [T(name="rt_b", created_at_ms=2), T(name="rt_a", created_at_ms=2)],
+        ("b", "rb"): [T(name="rt_old", created_at_ms=1)],
+        ("me", "rme"): [T(name="rt_own", created_at_ms=3)],
+    }
+    asked = []
+
+    def tables_of_run(cell_id, run_id):
+        asked.append((cell_id, run_id))
+        return made.get((cell_id, run_id), [])
+
+    listed = ctx.listed_result_tables([("a", "ra"), ("b", "rb")], "me", "rme", tables_of_run)
+    assert [t.name for t in listed] == ["rt_old", "rt_a", "rt_b", "rt_own"]
+    assert asked == [("a", "ra"), ("b", "rb"), ("me", "rme")]

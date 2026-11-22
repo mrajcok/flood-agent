@@ -8,7 +8,7 @@ from flood_agent.ai_cell_context import SystemPrompt, parse_system_prompt
 from flood_agent.catalog import Table
 from flood_agent.semantic_layer import SYSTEM_INSTRUCTIONS, SemanticLayer
 
-# Captured from the code before the sections existed; if one differs, the change is wrong, not the golden.
+# Regression snapshot of the code before the sections existed; regenerate for an intentional change to the prompt.
 GOLDEN = json.loads((Path(__file__).parent / "golden" / "system_prompts.json").read_text())
 
 SMALL = """\
@@ -77,3 +77,12 @@ def test_the_parts_are_instructions_then_the_layer_with_its_heading_then_the_res
     prompt = "rules\n# Semantic Layer\ntables: x\n\n# Result Tables\nNone.\n"
     parsed = parse_system_prompt(prompt)
     assert parsed.parts() == ("rules\n", "# Semantic Layer\ntables: x\n", "# Result Tables\nNone.\n")
+
+
+def test_heading_like_text_mid_line_does_not_split_the_prompt():
+    prompt = "see # Semantic Layer\nrules\n\n# Semantic Layer\nnote: a # Result Tables\nb\n\n# Result Tables\nNone.\n"
+    parsed = parse_system_prompt(prompt)
+    assert parsed.instructions == "see # Semantic Layer\nrules\n\n"
+    assert parsed.semantic_layer == "# Semantic Layer\nnote: a # Result Tables\nb\n"
+    assert parsed.result_tables == "# Result Tables\nNone.\n"
+    assert parsed.render() == prompt

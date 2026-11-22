@@ -1,7 +1,7 @@
 """The AI Cell context module, tested by passing a Notebook's cells: no store, no LLM.
 
-The goldens in ai_cell_context_golden.json were captured from the Agent's code before the module existed:
-messages and fingerprints must stay byte-identical, so a mismatch means the change is wrong, not the golden."""
+The goldens in ai_cell_context_golden.json were captured from the Agent's code before the module existed.
+They are regression snapshots of that behaviour: regenerate them for an intentional change to the prompt or labels."""
 
 import copy
 import json

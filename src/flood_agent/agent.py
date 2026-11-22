@@ -19,6 +19,7 @@ from mcp.types import TextContent
 
 from flood_agent import ai_cell_context, flagging, queries, table_names
 from flood_agent.catalog import Catalog, CellRun, Owner, Table, canonical
+from flood_agent.cell_kinds import AI, MARKDOWN, SQL
 from flood_agent.events import (  # re-exported: callers import the event types from here
     CountEvent,
     DisplayEvent,
@@ -36,7 +37,7 @@ from flood_agent.llm import LLMClient, LLMError, ModelSpec, TextChunk, ToolCallC
 from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
 from flood_agent.mcp_protocol import QUERY_TOOLS
 from flood_agent.mcp_server import ServerSettings
-from flood_agent.notebooks import AI, COUNT_KIND, DEFAULT_MAX_ROWS, MARKDOWN, SQL, NotebookStore
+from flood_agent.notebooks import COUNT_KIND, DEFAULT_MAX_ROWS, NotebookStore
 from flood_agent.semantic_layer import SemanticLayer
 from flood_agent.sql_cell_run import SqlCellRuns
 from flood_agent.table_replacement import RefreshInProgress, ReplacementFailed, TableReplacement
@@ -167,7 +168,6 @@ GIVE_UP_MESSAGE = (
 )
 
 
-STOPPED_NOTE = ai_cell_context.STOPPED_NOTE
 
 
 @dataclass
@@ -342,7 +342,7 @@ class Agent:
             if item["type"] == "message":
                 m = item["message"]
                 if m["role"] == "assistant" and m.get("content"):
-                    text = m["content"].removesuffix(STOPPED_NOTE).rstrip()
+                    text = m["content"].removesuffix(ai_cell_context.STOPPED_NOTE).rstrip()
                     if text:
                         texts.append(text)
             elif item["kind"] in ("table", "chart") and item["result_table"] in self.tables:
@@ -686,9 +686,9 @@ class Agent:
         if live.open and not live.in_trace:
             trace.llm_step(live.system_prompt, live.text, [], None, live.started)
         trace.add("stopped")
-        message = (partial.rstrip() + "\n\n" if partial.strip() else "") + STOPPED_NOTE
+        message = (partial.rstrip() + "\n\n" if partial.strip() else "") + ai_cell_context.STOPPED_NOTE
         sink.record(history, {"role": "assistant", "content": message})
-        queue.put_nowait(TextDelta(queue.paragraph_break() + STOPPED_NOTE))
+        queue.put_nowait(TextDelta(queue.paragraph_break() + ai_cell_context.STOPPED_NOTE))
 
     async def _fail_turn(self, history, sink: ExchangeSink, trace: TraceBuilder, queue: _TurnQueue, error: BaseException) -> None:
         """A turn failed partway: tell the user, record it in the Trace and in the history."""

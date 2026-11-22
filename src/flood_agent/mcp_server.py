@@ -31,6 +31,7 @@ from flood_agent import logs, queries
 from flood_agent.catalog import CatalogView
 from flood_agent.mcp_protocol import META_MAX_RESULT_ROWS
 from flood_agent.notebooks import rename_data_source
+from flood_agent.tool_outcome import DisplayMade, Failed, TableDescribed, encode, from_query_result
 
 
 @dataclass(frozen=True)
@@ -226,14 +227,13 @@ def create_server(settings: ServerSettings, clock: Callable[[], int] | None = No
         a new Result Table (named by the tool). Returns only Query Metadata, never rows."""
         # The SELECT may reference any live Result Table (ADR 0003).
         allowed = catalog.readable() if catalog else set()
-        # A failed result may carry `raw_error`; the Agent strips it (keeping it for the Trace)
-        # before anything is sent to the LLM.
-        return json.dumps(
+        # The raw error and the executed CTAS travel in the outcome's internal part, for the Trace only.
+        return encode(from_query_result(
             queries.run_query(
                 settings.telemetry_db, settings.results_db, sql, settings.query_timeout_s,
                 _max_result_rows(ctx), allowed, title,
             )
-        )
+        ))
 
     @mcp.tool()
     @_in_worker_thread
@@ -242,9 +242,9 @@ def create_server(settings: ServerSettings, clock: Callable[[], int] | None = No
         No Result Table is created; the count itself is returned to you and you may state it. The user
         is shown it as a one-line Count Display labelled with `title` (a short name for what is counted)."""
         allowed = catalog.readable() if catalog else set()
-        return json.dumps(
+        return encode(from_query_result(
             queries.run_count_query(settings.telemetry_db, settings.results_db, sql, settings.query_timeout_s, allowed)
-        )
+        ))
 
     @mcp.tool()
     @_in_worker_thread
@@ -256,9 +256,9 @@ def create_server(settings: ServerSettings, clock: Callable[[], int] | None = No
         kind = kind if kind in ("lookup", "result", "saved") else None
         name = CatalogView.canonical(name)
         described = queries.describe_results_table(settings.results_db, name) if kind else None
-        if described is None:
-            return json.dumps({"success": False, "error": "No such table."})
-        return json.dumps({"success": True, "name": name, "kind": kind, **described})
+        if described is None or kind is None:
+            return encode(Failed("No such table."))
+        return encode(TableDescribed(name, kind, described["columns"], described["row_count"]))
 
     @mcp.tool()
     @_in_worker_thread
@@ -270,11 +270,11 @@ def create_server(settings: ServerSettings, clock: Callable[[], int] | None = No
         result_table = CatalogView.canonical(result_table)
         available = queries.result_table_columns(settings.results_db, result_table) if live else None
         if available is None:
-            return json.dumps({"success": False, "error": _not_showable(catalog, result_table)})
+            return encode(Failed(_not_showable(catalog, result_table)))
         if columns is not None and not set(columns) <= set(available):
-            return json.dumps({"success": False, "error": "Unknown column requested."})
+            return encode(Failed("Unknown column requested."))
         display = {"kind": "table", "result_table": result_table, "columns": columns or available}
-        return json.dumps({"success": True, "display": display})
+        return encode(DisplayMade(display))
 
     @mcp.tool()
     @_in_worker_thread
@@ -287,29 +287,29 @@ def create_server(settings: ServerSettings, clock: Callable[[], int] | None = No
         data = vega_lite_spec.get("data")
         table = data.get("name") if isinstance(data, dict) else None
         if not isinstance(table, str):
-            return json.dumps({"success": False, "error": "Missing data source. " + CHART_GUIDANCE})
+            return encode(Failed("Missing data source. " + CHART_GUIDANCE))
         live = catalog is not None and table in catalog
         if table != CatalogView.canonical(table):  # the Display records the table under its canonical name
             vega_lite_spec = rename_data_source(vega_lite_spec, table, CatalogView.canonical(table))
             table = CatalogView.canonical(table)
         count = queries.result_table_row_count(settings.results_db, table) if live else None
         if count is None:
-            return json.dumps({"success": False, "error": f"{_not_showable(catalog, table)} {CHART_GUIDANCE}"})
+            return encode(Failed(f"{_not_showable(catalog, table)} {CHART_GUIDANCE}"))
         violation = _find_violation(vega_lite_spec, table)
         if violation:
-            return json.dumps({"success": False, "error": violation})
+            return encode(Failed(violation))
         columns = queries.result_table_columns(settings.results_db, table) or []
         problem = _spec_problem(vega_lite_spec, set(columns) | _transform_outputs(vega_lite_spec))
         if problem:
-            return json.dumps({"success": False, "error": f"{problem} The columns of {table} are: {', '.join(columns)}."})
-        result: dict = {"success": True, "display": {"kind": "chart", "result_table": table, "spec": vega_lite_spec}}
+            return encode(Failed(f"{problem} The columns of {table} are: {', '.join(columns)}."))
+        note = None
         if count > settings.chart_row_cap:
-            result["note"] = (
+            note = (
                 f"Only the first {settings.chart_row_cap} rows of the Result Table are charted. Do not present the "
                 "chart as covering all the data; to chart everything, aggregate or filter with run_query "
                 "(e.g. GROUP BY a time bucket) and chart the new Result Table."
             )
-        return json.dumps(result)
+        return encode(DisplayMade({"kind": "chart", "result_table": table, "spec": vega_lite_spec}, note))
 
     return mcp
 

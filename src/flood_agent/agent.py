@@ -41,6 +41,7 @@ from flood_agent.notebooks import AI, COUNT_KIND, DEFAULT_MAX_ROWS, MARKDOWN, MA
 from flood_agent.semantic_layer import SemanticLayer
 from flood_agent.sql_cell_run import SqlCellRuns
 from flood_agent.table_replacement import RefreshInProgress, ReplacementFailed, TableReplacement
+from flood_agent.tool_outcome import Counted, DisplayMade, Failed, Outcome, ResultTableMade, Stopped, decode, project
 from flood_agent.trace import TraceBuilder, context_tokens
 from flood_agent.upgrade import drop_pre_notebook_data
 
@@ -185,10 +186,6 @@ STEP_LIMIT_MESSAGE = (
     "Sorry, I wasn't able to finish that within the allowed number of steps. "
     "Please try a simpler or more specific question."
 )
-
-
-def _fail(message: str) -> str:
-    return json.dumps({"success": False, "error": message})
 
 
 def _unwrap(e: BaseException) -> BaseException:
@@ -847,15 +844,18 @@ class Agent:
             step_displays: list[tuple[DisplayEvent | CountEvent, int]] = []
             for c in calls:
                 call_started = time.monotonic()
-                content, args, executed_sql, failed = await self._run_tool(
+                content, args, executed_sql, failed, outcome = await self._run_tool(
                     connection, c, queue, trace, sink, user_message, max_result_rows
                 )
                 failed_attempts += failed
                 trace.tool_call(c.name, args, content, call_started, executed_sql)
-                self._trace_result_table(trace, content)
-                displays, events = self._prepare_displays(content, args, trace)
+                displays, events = [], []
+                if isinstance(outcome, ResultTableMade):
+                    trace.result_table(outcome.result_table, outcome.row_count, outcome.columns)
+                elif isinstance(outcome, DisplayMade):
+                    displays, events = self._prepare_displays(outcome, trace)
                 step_displays += [(e, len(items)) for e in events]
-                count = self._count_display(c.name, content, args)
+                count = self._count_display(c.name, outcome, args)
                 if count:
                     displays.append((COUNT_KIND, None, {"title": count.title, "value": count.value, "sql": count.sql,
                                                      "computed_at_ms": count.computed_at_ms}))
@@ -884,47 +884,58 @@ class Agent:
     async def _run_tool(
         self, connection: McpConnection, c: ToolCallChunk, queue: asyncio.Queue, trace: TraceBuilder,
         sink: ExchangeSink, request: str, max_result_rows: int,
-    ) -> tuple[str, dict, str | None, int]:
-        """Execute one LLM tool call. Returns (content, args, executed_sql, failed 0/1).
+    ) -> tuple[str, dict, str | None, int, Outcome | None]:
+        """Execute one LLM tool call. Returns (content for the LLM, args, executed_sql, failed 0/1, outcome).
 
-        Never raises for problems the LLM caused (bad JSON, missing `sql`) or tool failures: it
+        A tool's result is decoded once into an `Outcome` (None only when the call itself broke): `content` is
+        its projection, and everything else the Agent needs comes from the outcome. Never raises for problems the LLM caused (bad JSON, missing `sql`) or tool failures: it
         returns an error result the LLM can act on, and a failed query tool call counts toward the limit."""
         is_query = c.name in QUERY_TOOLS
         args: dict = {}
-        executed_sql = None
+        outcome: Outcome | None = None
         try:
             parsed = json.loads(c.arguments or "{}")
         except ValueError:
             parsed = None
-            content = _fail("The tool arguments were not valid JSON. Send a JSON object and try again.")
+            outcome = Failed("The tool arguments were not valid JSON. Send a JSON object and try again.")
         else:
             if not isinstance(parsed, dict):
-                content = _fail("The tool arguments must be a JSON object. Try again.")
+                outcome = Failed("The tool arguments must be a JSON object. Try again.")
             elif is_query and not isinstance(parsed.get("sql"), str):
                 args = parsed
-                content = _fail(f"{c.name} requires a 'sql' string argument. Try again.")
+                outcome = Failed(f"{c.name} requires a 'sql' string argument. Try again.")
             else:
                 args = parsed
                 try:
                     result = await connection.call_tool(c.name, args, max_result_rows)
                 except Exception as e:  # a broken tool call must not corrupt or abort the turn
                     trace.add("tool_error", name=c.name, detail=f"{type(_unwrap(e)).__name__}: {_unwrap(e)}")
-                    return _fail("The tool failed to run. Try again."), args, None, 1
-                content = "".join(b.text for b in result.content if isinstance(b, TextContent))
-                try:
-                    # Straight after the call returns, before any other await, so a turn stopped here
-                    # still has its table registered (and so listed and swept).
-                    self._register_result_table(sink.owner, content, args, request, max_result_rows)
-                except Exception as e:  # the tool ran; only recording its table failed
-                    trace.add("registration_error", name=c.name, detail=f"{type(e).__name__}: {e}")
-                    return _fail("The query ran but its Result Table could not be recorded. Try again."), args, None, 1
+                    return project(Failed("The tool failed to run. Try again.")), args, None, 1, None
+                text = "".join(b.text for b in result.content if isinstance(b, TextContent))
                 if result.isError:
-                    content = _fail(content[:500] or "The tool call was rejected.")
-        if is_query:
-            content, executed_sql = self._strip_executed_sql(content)
-            content, failed = await self._split_query_error(content, args, queue, trace)
-            return content, args, executed_sql, failed
-        return content, args, None, 0
+                    outcome = Failed(text[:500] or "The tool call was rejected.")
+                else:
+                    outcome = decode(text)
+                if isinstance(outcome, ResultTableMade) and c.name == "run_query":
+                    try:
+                        # Straight after the call returns, before any other await, so a turn stopped here
+                        # still has its table registered (and so listed and swept).
+                        self._register_result_table(sink.owner, outcome, args, request, max_result_rows)
+                    except Exception as e:  # the tool ran; only recording its table failed
+                        trace.add("registration_error", name=c.name, detail=f"{type(e).__name__}: {e}")
+                        return project(Failed("The query ran but its Result Table could not be recorded. Try again.")), args, None, 1, None
+        assert outcome is not None
+        content = project(outcome)
+        if not is_query:
+            return content, args, None, 0, outcome
+        executed_sql = getattr(outcome, "executed_sql", None)
+        if not isinstance(outcome, Failed | Stopped):
+            return content, args, executed_sql, 0, outcome
+        # The raw error (or the undecodable text) reaches the Trace, never the LLM.
+        raw = outcome.raw_error if outcome.raw_error is not None else getattr(outcome, "raw_content", None)
+        await queue.put(TraceEntry("query_error", args.get("sql"), raw, outcome.error))
+        trace.add("query_error", sql=args.get("sql"), raw_error=raw, sanitized_error=outcome.error)
+        return content, args, executed_sql, 1, outcome
 
     @staticmethod
     async def _flag_unseen_values(
@@ -954,72 +965,21 @@ class Agent:
         await queue.put(FlagEvent([i["token"] for i in items], items))
 
     def _register_result_table(
-        self, owner: Owner, content: str, args: dict, request: str, max_result_rows: int
+        self, owner: Owner, made: ResultTableMade, args: dict, request: str, max_result_rows: int
     ) -> None:
-        """Record the Result Table a successful query tool call made, with the owner that made it."""
-        try:
-            payload = json.loads(content)
-        except ValueError:
-            return
-        if isinstance(payload, dict) and payload.get("success") and payload.get("result_table") and "display" not in payload:
-            title = args.get("title", "")
-            self.tables.register_for(
-                owner, payload["result_table"], title if isinstance(title, str) else "",
-                payload.get("columns", []), request, payload.get("truncated_to"), args.get("sql"), max_result_rows,
-            )
-
-    @staticmethod
-    def _strip_executed_sql(content: str) -> tuple[str, str | None]:
-        """The CTAS actually executed is for the Trace only; remove it from the LLM's metadata."""
-        try:
-            meta = json.loads(content)
-        except ValueError:
-            return content, None
-        if not isinstance(meta, dict) or "executed_sql" not in meta:
-            return content, None
-        executed = meta.pop("executed_sql")
-        return json.dumps(meta), executed
-
-    @staticmethod
-    def _trace_result_table(trace: TraceBuilder, content: str) -> None:
-        try:
-            meta = json.loads(content)
-        except ValueError:
-            return
-        if isinstance(meta, dict) and meta.get("success") and "display" not in meta and meta.get("result_table"):
-            trace.result_table(meta["result_table"], meta.get("row_count"), meta.get("columns"))
-
-    async def _split_query_error(
-        self, content: str, args: dict, queue, trace: TraceBuilder | None = None
-    ) -> tuple[str, int]:
-        """Strip the raw SQLite error from run_query / run_count_query output before the LLM sees it, and
-        emit it (with the sanitised error) as a Trace entry. Returns (content, failed 0/1)."""
-        try:
-            meta = json.loads(content)
-        except ValueError:
-            return content, 0
-        if not isinstance(meta, dict) or meta.get("success", True):
-            return content, 0
-        raw = meta.pop("raw_error", None)
-        await queue.put(TraceEntry("query_error", args.get("sql"), raw, meta.get("error")))
-        if trace:
-            trace.add("query_error", sql=args.get("sql"), raw_error=raw, sanitized_error=meta.get("error"))
-        return json.dumps(meta), 1
+        """Record the Result Table a successful run_query made, with the owner that made it."""
+        title = args.get("title", "")
+        self.tables.register_for(
+            owner, made.result_table, title if isinstance(title, str) else "",
+            made.columns, request, made.truncated_to, args.get("sql"), max_result_rows,
+        )
 
     def _prepare_displays(
-        self, tool_content: str, args: dict, trace: TraceBuilder,
+        self, made: DisplayMade, trace: TraceBuilder,
     ) -> tuple[list[tuple], list[DisplayEvent]]:
         """The Display a tool call made: the definitions [(kind, result_table, definition)] to persist with
         the tool message, and the events to send the user once the step is saved."""
-        try:
-            payload = json.loads(tool_content)
-        except ValueError:
-            return [], []
-        if not isinstance(payload, dict):
-            return [], []
-        display = payload.get("display")
-        if not display:
-            return [], []
+        display = made.display
         table = display["result_table"]
         # Any live Result Table may be shown (ADR 0003); the Display is saved with this
         # Cell, but the table stays owned by the one that created it.
@@ -1035,16 +995,11 @@ class Agent:
         return ([(display["kind"], table, {"columns": display["columns"]})],
                 [DisplayEvent(display["kind"], table, display["columns"])])
 
-    def _count_display(self, tool: str, content: str, args: dict) -> CountEvent | None:
-        """A successful run_count_query makes a Count Display (shown once it is saved). It has no result
-        table (so no Retention) and lives and dies with its Run."""
-        if tool != "run_count_query":
+    def _count_display(self, tool: str, outcome: Outcome | None, args: dict) -> CountEvent | None:
+        """A successful run_count_query makes a Count Display (shown once it is saved); any other call
+        makes none. It has no result table (so no Retention) and lives and dies with its Run."""
+        if tool != "run_count_query" or not isinstance(outcome, Counted):
             return None
-        try:
-            payload = json.loads(content)
-        except ValueError:
-            return None
-        if not isinstance(payload, dict) or not payload.get("success") or not isinstance(payload.get("count"), int):
-            return None
+        counted = outcome
         title = args.get("title")
-        return CountEvent(title if isinstance(title, str) else "", payload["count"], args["sql"], self.config.clock())
+        return CountEvent(title if isinstance(title, str) else "", counted.count, args["sql"], self.config.clock())

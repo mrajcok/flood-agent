@@ -63,7 +63,7 @@ Running a Result Table's, Saved Table's or Count Display's stored query again, w
 _Avoid_: Re-run, update, reload
 
 **Query Metadata**:
-What the LLM is told about a Result Table after a query runs: success or failure, column names and types, row count, and a value-free error message.
+What the LLM is told about a Result Table after a query runs: success or failure, column names and types, row count, and a value-free error message. It is an allow-list: only the fields named for each outcome reach the LLM, and nothing else in a tool's result does.
 _Avoid_: Query result, response
 
 ## Notebook

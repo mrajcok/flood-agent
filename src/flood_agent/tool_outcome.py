@@ -118,6 +118,20 @@ def _decode(text: str) -> Outcome:
     return result
 
 
+def from_query_result(result: dict) -> Outcome:
+    """The outcome of a `queries.run_query` / `run_count_query` result dict. Only the fields a kind names are
+    copied, so a stray key in the dict goes nowhere."""
+    if result.get("success"):
+        if "count" in result:
+            return Counted(result["count"])
+        return ResultTableMade(
+            result["result_table"], result["columns"], result["row_count"],
+            result.get("truncated_to"), result.get("note"), result.get("executed_sql"),
+        )
+    kind = Stopped if result.get("stopped") else Failed
+    return kind(result["error"], result.get("raw_error"), result.get("executed_sql"))
+
+
 def project(outcome: Outcome) -> str:
     """What the LLM is sent for this outcome: built field by field, never by deleting keys from a dict.
     Same keys, order and serialisation as the Query Metadata the tools returned before the codec."""

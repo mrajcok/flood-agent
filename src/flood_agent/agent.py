@@ -188,10 +188,6 @@ STEP_LIMIT_MESSAGE = (
 )
 
 
-def _fail(message: str) -> str:
-    return json.dumps({"success": False, "error": message})
-
-
 def _unwrap(e: BaseException) -> BaseException:
     while isinstance(e, BaseExceptionGroup) and e.exceptions:
         e = e.exceptions[0]  # the MCP client wraps the real failure in a TaskGroup
@@ -914,7 +910,7 @@ class Agent:
                     result = await connection.call_tool(c.name, args, max_result_rows)
                 except Exception as e:  # a broken tool call must not corrupt or abort the turn
                     trace.add("tool_error", name=c.name, detail=f"{type(_unwrap(e)).__name__}: {_unwrap(e)}")
-                    return _fail("The tool failed to run. Try again."), args, None, 1, None
+                    return project(Failed("The tool failed to run. Try again.")), args, None, 1, None
                 text = "".join(b.text for b in result.content if isinstance(b, TextContent))
                 if result.isError:
                     outcome = Failed(text[:500] or "The tool call was rejected.")
@@ -927,7 +923,7 @@ class Agent:
                         self._register_result_table(sink.owner, outcome, args, request, max_result_rows)
                     except Exception as e:  # the tool ran; only recording its table failed
                         trace.add("registration_error", name=c.name, detail=f"{type(e).__name__}: {e}")
-                        return _fail("The query ran but its Result Table could not be recorded. Try again."), args, None, 1, None
+                        return project(Failed("The query ran but its Result Table could not be recorded. Try again.")), args, None, 1, None
         assert outcome is not None
         content = project(outcome)
         if not is_query:

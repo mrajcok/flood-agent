@@ -500,9 +500,7 @@ class Agent:
         sink = _CellSink(self.notebooks, notebook_id, cell_id, run_id)
 
         def prompt_tables() -> list[Table]:
-            tables = [t for c, r in above for t in self.tables.tables_of_run(c, r)]
-            tables += self.tables.tables_of_run(cell_id, run_id)
-            return sorted(tables, key=lambda t: (t.created_at_ms, t.name))
+            return ai_cell_context.listed_result_tables(above, cell_id, run_id, self.tables.tables_of_run)
 
         queue = _TurnQueue()
         task = asyncio.create_task(self._produce_cell(

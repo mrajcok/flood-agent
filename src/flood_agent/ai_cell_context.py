@@ -11,7 +11,7 @@ between steps. `parse_system_prompt` is the inverse, for the Trace, which stores
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from flood_agent import table_names
 from flood_agent.notebooks import AI, MARKDOWN
@@ -52,6 +52,17 @@ def context_above(cells: list[dict], cell_id: str) -> AICellContext:
             messages += what_ran(other["run"])
             above.append((other["id"], other["run"]["id"]))
     return AICellContext(messages, above, fingerprint(messages))
+
+
+def listed_result_tables(
+    above: list[tuple[str, str]], cell_id: str, run_id: str, tables_of_run: "Callable[[str, str], list[Table]]",
+) -> "list[Table]":
+    """The Result Tables the system prompt lists: those of the AI Cells above (their current Runs, `above`) plus
+    the Cell's own current Run, oldest first then by name. `tables_of_run(cell_id, run_id)` looks up the live
+    tables; asked afresh each time because a step can make a Result Table partway through a Run."""
+    tables = [t for c, r in above for t in tables_of_run(c, r)]
+    tables += tables_of_run(cell_id, run_id)
+    return sorted(tables, key=lambda t: (t.created_at_ms, t.name))
 
 
 def stale_cells(cells: list[dict]) -> set[str]:

@@ -6,6 +6,8 @@ import pytest
 from conftest import ScriptedLLM, TextChunk, collect, in_process_transport, last_tool_result, mcp_children, tool_call
 from mcp import ClientSession
 
+from flood_agent.tool_outcome import decode, project
+
 CAP_KEY = "flood_agent/max_result_rows"
 
 
@@ -39,13 +41,15 @@ async def test_no_tool_schema_mentions_an_exchange_id_or_a_chat(make_agent):
 
 
 async def _raw_calls(agent, calls):
-    """Call the MCP server directly: [(tool, args, meta)] -> parsed results."""
+    """Call the MCP server directly: [(tool, args, meta)] -> parsed results (Query Metadata)."""
     out = []
     async with in_process_transport(agent._server_settings()) as (r, w), ClientSession(r, w) as session:
         await session.initialize()
         for name, args, meta in calls:
             res = await session.call_tool(name, args, meta=meta)
-            out.append(json.loads(res.content[0].text))
+            parsed = json.loads(res.content[0].text)
+            # A codec tool returns an outcome; what the LLM would be sent is its projection.
+            out.append(json.loads(project(decode(res.content[0].text))) if "outcome" in parsed else parsed)
     return out
 
 

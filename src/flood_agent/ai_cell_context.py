@@ -25,6 +25,7 @@ MARKDOWN_NOTE_LABEL = "[Markdown note]"  # prefixes a ticked Markdown Cell's tex
 SQL_CELL_LABEL = "[SQL Cell, run by the user]"  # prefixes a SQL Cell's stored message
 SHOW_CELL_LABEL = "[SHOW Cell, run by the user]"  # prefixes a SHOW Cell's stored message
 STOPPED_NOTE = "*Stopped by user.*"  # appended to an answer streamed before the user stopped the Run
+STOPPED_BELOW = "(stopped by the user)"  # how AI Cells below are sent a stopped Run, of either Cell kind
 
 
 @dataclass(frozen=True)
@@ -87,17 +88,22 @@ def markdown_note(draft: dict) -> str:
     return "\n".join(lines)
 
 
+def without_stop_note(text: str) -> str:
+    """An answer without the app's stop note, which the page and the Cells below say in their own words."""
+    return text.removesuffix(STOPPED_NOTE).rstrip()
+
+
 def what_ran(run: dict) -> list[dict]:
     """A finished Run's messages as the Cells below are sent them: a stopped or failed Run counts as having
-    run, with what it streamed plus "(stopped by the user)" or "failed: <value-free error>"."""
+    run, with what it streamed plus `STOPPED_BELOW` or "failed: <value-free error>"."""
     messages = repair_history(run["messages"])
     if run["status"] not in ("stopped", "failed"):
         return messages
     last = messages[-1] if messages and messages[-1]["role"] == "assistant" else None
     text = (last.get("content") or "") if last else ""
     if run["status"] == "stopped":
-        note = "(stopped by the user)"
-        text = text.removesuffix(STOPPED_NOTE).rstrip()
+        note = STOPPED_BELOW
+        text = without_stop_note(text)
     else:
         errors = [e["message"] for e in (run["trace"] or {}).get("entries", []) if e["kind"] == "error"]
         note = f"failed: {errors[0] if errors else 'the Run did not finish'}"

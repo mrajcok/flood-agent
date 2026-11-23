@@ -450,7 +450,7 @@ async def test_agent_aclose_cancels_and_awaits_in_flight_turns(build_agent):
     gen = agent.run_cell(nb, agent.add_ai_cell(nb, prompt="q"))
     first = asyncio.create_task(gen.__anext__())
     await asyncio.wait_for(started.wait(), 10)
-    producers = set(agent._turn_tasks)
+    producers = set(agent.ai_cells.tasks)
     assert producers
     await agent.aclose()
     assert all(t.done() for t in producers)

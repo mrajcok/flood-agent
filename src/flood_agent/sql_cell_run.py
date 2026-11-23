@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import AsyncIterator, Callable
 
 from flood_agent import queries, table_names
-from flood_agent.ai_cell_context import SHOW_CELL_LABEL, SQL_CELL_LABEL
+from flood_agent.ai_cell_context import SHOW_CELL_LABEL, SQL_CELL_LABEL, STOPPED_BELOW
 from flood_agent.catalog import Catalog, CellRun, Table, TableExpired
 from flood_agent.events import CountEvent, DisplayEvent, Event, TurnEnd, TurnError
 from flood_agent.notebooks import COUNT_KIND, DEFAULT_MAX_ROWS, NotebookStore
@@ -132,7 +132,7 @@ class _Stopped:
         return {"status": "stopped"}
 
     def detail(self) -> str:
-        return "(stopped by the user)"  # as an AI Cell's stopped Run reads below
+        return STOPPED_BELOW
 
     def shown(self, sql: str, clock: Callable[[], int]) -> _Shown:
         return [], []

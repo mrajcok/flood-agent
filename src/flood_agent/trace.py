@@ -10,6 +10,7 @@ Entry kinds: llm_step, tool_call, query_error, result_table, chart_spec, flag, s
 
 import time
 
+from flood_agent.ai_cell_context import parse_system_prompt
 from flood_agent.llm import UsageChunk
 from flood_agent.mcp_protocol import QUERY_TOOLS
 
@@ -73,17 +74,8 @@ class TraceBuilder:
 
 
 def split_system_prompt(prompt: str | None) -> tuple[str, str, str]:
-    """Split a system prompt into (instructions, Semantic Layer, rest) for display.
-
-    The rest is everything from the Result Tables section on, which can differ between turns.
-    Prompts without the expected headings land wholly in the first part.
-    """
-    prompt = prompt or ""
-    head, sep, tail = prompt.partition("# Semantic Layer\n")
-    if not sep:
-        return prompt, "", ""
-    layer, rt_sep, rest = tail.partition("\n# Result Tables")
-    return head, "# Semantic Layer\n" + layer, (rt_sep + rest).lstrip("\n")
+    """A system prompt as (instructions, Semantic Layer, Result Tables on) for display; the AI Cell context module parses it."""
+    return parse_system_prompt(prompt).parts()
 
 
 def context_tokens(trace: dict) -> int | None:

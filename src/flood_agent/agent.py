@@ -4,7 +4,6 @@ The HTTP/SSE layer is a thin adapter over `Agent.run_cell`. The LLM client is in
 """
 
 import asyncio
-import hashlib
 import json
 import logging
 import sys
@@ -18,8 +17,9 @@ from typing import AsyncIterator, Callable, Iterator, Literal, Protocol
 from mcp import StdioServerParameters
 from mcp.types import TextContent
 
-from flood_agent import flagging, queries, table_names
+from flood_agent import ai_cell_context, flagging, queries, table_names
 from flood_agent.catalog import Catalog, CellRun, Owner, Table, canonical
+from flood_agent.cell_kinds import AI, MARKDOWN, SQL
 from flood_agent.events import (  # re-exported: callers import the event types from here
     CountEvent,
     DisplayEvent,
@@ -37,7 +37,7 @@ from flood_agent.llm import LLMClient, LLMError, ModelSpec, TextChunk, ToolCallC
 from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
 from flood_agent.mcp_protocol import QUERY_TOOLS
 from flood_agent.mcp_server import ServerSettings
-from flood_agent.notebooks import AI, COUNT_KIND, DEFAULT_MAX_ROWS, MARKDOWN, MARKDOWN_NOTE_LABEL, SQL, NotebookStore
+from flood_agent.notebooks import COUNT_KIND, DEFAULT_MAX_ROWS, NotebookStore
 from flood_agent.semantic_layer import SemanticLayer
 from flood_agent.sql_cell_run import SqlCellRuns
 from flood_agent.table_replacement import RefreshInProgress, ReplacementFailed, TableReplacement
@@ -168,7 +168,6 @@ GIVE_UP_MESSAGE = (
 )
 
 
-STOPPED_NOTE = "*Stopped by user.*"
 
 
 @dataclass
@@ -194,31 +193,6 @@ def _unwrap(e: BaseException) -> BaseException:
     return e
 
 
-def repair_history(messages: list[dict]) -> list[dict]:
-    """Drop assistant tool_calls messages that lack a tool result for every call id (and the
-    partial results after them), and orphan tool messages, so a corrupt saved history never
-    makes the provider reject every later request."""
-    out: list[dict] = []
-    i = 0
-    while i < len(messages):
-        m = messages[i]
-        if m["role"] == "assistant" and m.get("tool_calls"):
-            j = i + 1
-            answered = set()
-            while j < len(messages) and messages[j]["role"] == "tool":
-                answered.add(messages[j].get("tool_call_id"))
-                j += 1
-            if {tc["id"] for tc in m["tool_calls"]} <= answered:
-                out.extend(messages[i:j])
-            i = j
-        elif m["role"] == "tool":
-            i += 1
-        else:
-            out.append(m)
-            i += 1
-    return out
-
-
 def resolve_chart_data(source: dict, table: str) -> dict:
     resolved = _resolve_data(source, table, {"url": f"/api/results/{table}/chart-rows"})
     assert isinstance(resolved, dict)  # a dict in gives a dict out
@@ -235,14 +209,6 @@ def _resolve_data(node, table: str, url: dict):
     if isinstance(node, list):
         return [_resolve_data(i, table, url) for i in node]
     return node
-
-
-def markdown_note(draft: dict) -> str:
-    """What an AI Cell is sent for a ticked Markdown Cell: its text, then one line per embedded Display naming
-    its kind and table. Never rows or a chart's data (ADR 0001); the same draft always gives the same note."""
-    lines = [f"{MARKDOWN_NOTE_LABEL} {draft.get('text', '').strip()}".rstrip()]
-    lines += [f"[Display: {d['kind']} {d['table']}]" for d in draft.get("displays") or []]
-    return "\n".join(lines)
 
 
 class Agent:
@@ -376,7 +342,7 @@ class Agent:
             if item["type"] == "message":
                 m = item["message"]
                 if m["role"] == "assistant" and m.get("content"):
-                    text = m["content"].removesuffix(STOPPED_NOTE).rstrip()
+                    text = m["content"].removesuffix(ai_cell_context.STOPPED_NOTE).rstrip()
                     if text:
                         texts.append(text)
             elif item["kind"] in ("table", "chart") and item["result_table"] in self.tables:
@@ -518,54 +484,23 @@ class Agent:
         finally:
             release()  # now, not whenever the task's done callback gets its turn
 
-    def _context_above(self, notebook_id: str, cell_id: str) -> tuple[list[dict], list[tuple[str, str]]]:
-        """What an AI Cell is sent from the cells above it, built from what each ran (never from Drafts), plus
-        the (cell id, run id) of each AI Cell above that has run. Shared by a Run and by stale detection."""
-        history: list[dict] = []
-        above: list[tuple[str, str]] = []
-        for other in self.notebooks.cells(notebook_id):
-            if other["id"] == cell_id:
-                break
-            if other["kind"] == MARKDOWN:
-                text = other["draft"].get("text", "").strip()
-                if other["draft"].get("send_to_ai") and (text or other["draft"].get("displays")):
-                    history.append({"role": "user", "content": markdown_note(other["draft"])})
-            elif other["run"]:
-                history += self._what_ran(other["run"])
-                above.append((other["id"], other["run"]["id"]))
-        return history, above
-
-    @staticmethod
-    def _fingerprint(history: list[dict]) -> str:
-        return hashlib.sha256(json.dumps(history, sort_keys=True).encode()).hexdigest()
-
     def stale_cells(self, notebook_id: str) -> set[str]:
-        """The ids of the notebook's AI Cells that are stale: the context each would be sent now differs from
-        the one its latest Run was sent. SQL Cells (which store no fingerprint), cells that never ran and cells
-        still running are never stale."""
-        stale = set()
-        for cell in self.notebooks.cells(notebook_id):
-            run = cell["run"]
-            if cell["kind"] == AI and run and run["status"] != "running" and run["context_fingerprint"]:
-                if self._fingerprint(self._context_above(notebook_id, cell["id"])[0]) != run["context_fingerprint"]:
-                    stale.add(cell["id"])
-        return stale
+        """The ids of the notebook's AI Cells that are Stale (see `ai_cell_context.stale_cells`)."""
+        return ai_cell_context.stale_cells(self.notebooks.cells(notebook_id))
 
     def _start_cell_run(
         self, notebook_id: str, cell: dict,
     ) -> tuple[asyncio.Task, _TurnQueue, Callable[[], None]]:
         cell_id, draft = cell["id"], cell["draft"]
-        history, above = self._context_above(notebook_id, cell_id)
-        fingerprint = self._fingerprint(history)
+        context = ai_cell_context.context_above(self.notebooks.cells(notebook_id), cell_id)
+        history, above, fingerprint = context.messages, context.above, context.fingerprint
         settings = {"model": draft.get("model") or self.config.model, "effort": draft.get("effort"),
                     "max_rows": draft.get("max_rows") or DEFAULT_MAX_ROWS}
         run_id = self.notebooks.start_run(cell_id, draft["prompt"], settings, fingerprint)
         sink = _CellSink(self.notebooks, notebook_id, cell_id, run_id)
 
         def prompt_tables() -> list[Table]:
-            tables = [t for c, r in above for t in self.tables.tables_of_run(c, r)]
-            tables += self.tables.tables_of_run(cell_id, run_id)
-            return sorted(tables, key=lambda t: (t.created_at_ms, t.name))
+            return ai_cell_context.listed_result_tables(above, cell_id, run_id, self.tables.tables_of_run)
 
         queue = _TurnQueue()
         task = asyncio.create_task(self._produce_cell(
@@ -584,27 +519,6 @@ class Agent:
                 self.notebooks.finish_run(run_id, "stopped" if task in self._stopped_turns else "failed")
         task.add_done_callback(release)
         return task, queue, release
-
-    @staticmethod
-    def _what_ran(run: dict) -> list[dict]:
-        """A finished Run's messages as the cells below are sent them: a stopped or failed Run counts as having
-        run, with what it streamed plus "(stopped by the user)" or "failed: <value-free error>"."""
-        messages = repair_history(run["messages"])
-        if run["status"] not in ("stopped", "failed"):
-            return messages
-        last = messages[-1] if messages and messages[-1]["role"] == "assistant" else None
-        text = (last.get("content") or "") if last else ""
-        if run["status"] == "stopped":
-            note = "(stopped by the user)"
-            text = text.removesuffix(STOPPED_NOTE).rstrip()
-        else:
-            errors = [e["message"] for e in (run["trace"] or {}).get("entries", []) if e["kind"] == "error"]
-            note = f"failed: {errors[0] if errors else 'the Run did not finish'}"
-            if errors and text == errors[0]:
-                text = ""  # the error message was recorded as the answer: say it once
-        if last:
-            messages = messages[:-1]
-        return messages + [{"role": "assistant", "content": f"{text}\n\n{note}" if text else note}]
 
     async def _produce_cell(
         self, history: list[dict], prompt_tables: Callable[[], list[Table]], sink: _CellSink, prompt: str,
@@ -772,9 +686,9 @@ class Agent:
         if live.open and not live.in_trace:
             trace.llm_step(live.system_prompt, live.text, [], None, live.started)
         trace.add("stopped")
-        message = (partial.rstrip() + "\n\n" if partial.strip() else "") + STOPPED_NOTE
+        message = (partial.rstrip() + "\n\n" if partial.strip() else "") + ai_cell_context.STOPPED_NOTE
         sink.record(history, {"role": "assistant", "content": message})
-        queue.put_nowait(TextDelta(queue.paragraph_break() + STOPPED_NOTE))
+        queue.put_nowait(TextDelta(queue.paragraph_break() + ai_cell_context.STOPPED_NOTE))
 
     async def _fail_turn(self, history, sink: ExchangeSink, trace: TraceBuilder, queue: _TurnQueue, error: BaseException) -> None:
         """A turn failed partway: tell the user, record it in the Trace and in the history."""

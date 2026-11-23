@@ -1,0 +1,849 @@
+{
+ "ai1": {
+  "above": [
+   [
+    "sql1",
+    "rs1"
+   ],
+   [
+    "sql2",
+    "rs2"
+   ]
+  ],
+  "fp": "f2eb7914e5cba88163f4769fd3e278a2249b3e59a60516d51d1d2c9bafa1c0cc",
+  "messages": [
+   {
+    "content": "[Markdown note] Notes here",
+    "role": "user"
+   },
+   {
+    "content": "[Markdown note] with disp\n[Display: table r_1]\n[Display: chart r_2]",
+    "role": "user"
+   },
+   {
+    "content": "[Markdown note]\n[Display: table r_3]",
+    "role": "user"
+   },
+   {
+    "content": "[SQL Cell, run by the user] select 1\n1 row",
+    "role": "user"
+   },
+   {
+    "content": "[SHOW Cell, run by the user] SHOW TABLES\nx",
+    "role": "user"
+   }
+  ]
+ },
+ "ai2": {
+  "above": [
+   [
+    "sql1",
+    "rs1"
+   ],
+   [
+    "sql2",
+    "rs2"
+   ],
+   [
+    "ai1",
+    "ra1"
+   ]
+  ],
+  "fp": "f034a5a61bf4da2a8fae123b140012f76ce7b06782a1a7e46f5da866d77cbe01",
+  "messages": [
+   {
+    "content": "[Markdown note] Notes here",
+    "role": "user"
+   },
+   {
+    "content": "[Markdown note] with disp\n[Display: table r_1]\n[Display: chart r_2]",
+    "role": "user"
+   },
+   {
+    "content": "[Markdown note]\n[Display: table r_3]",
+    "role": "user"
+   },
+   {
+    "content": "[SQL Cell, run by the user] select 1\n1 row",
+    "role": "user"
+   },
+   {
+    "content": "[SHOW Cell, run by the user] SHOW TABLES\nx",
+    "role": "user"
+   },
+   {
+    "content": "q1",
+    "role": "user"
+   },
+   {
+    "content": null,
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{\"sql\": \"select 1\"}",
+       "name": "run_query"
+      },
+      "id": "c1",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "{\"ok\": 1}",
+    "role": "tool",
+    "tool_call_id": "c1"
+   },
+   {
+    "content": "answer1",
+    "role": "assistant"
+   }
+  ]
+ },
+ "ai2b": {
+  "above": [
+   [
+    "sql1",
+    "rs1"
+   ],
+   [
+    "sql2",
+    "rs2"
+   ],
+   [
+    "ai1",
+    "ra1"
+   ],
+   [
+    "ai2",
+    "ra2"
+   ]
+  ],
+  "fp": "9e8befbf8fd694727bceca474862cf6f6d74321a15d6405a913e11eb3e09df76",
+  "messages": [
+   {
+    "content": "[Markdown note] Notes here",
+    "role": "user"
+   },
+   {
+    "content": "[Markdown note] with disp\n[Display: table r_1]\n[Display: chart r_2]",
+    "role": "user"
+   },
+   {
+    "content": "[Markdown note]\n[Display: table r_3]",
+    "role": "user"
+   },
+   {
+    "content": "[SQL Cell, run by the user] select 1\n1 row",
+    "role": "user"
+   },
+   {
+    "content": "[SHOW Cell, run by the user] SHOW TABLES\nx",
+    "role": "user"
+   },
+   {
+    "content": "q1",
+    "role": "user"
+   },
+   {
+    "content": null,
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{\"sql\": \"select 1\"}",
+       "name": "run_query"
+      },
+      "id": "c1",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "{\"ok\": 1}",
+    "role": "tool",
+    "tool_call_id": "c1"
+   },
+   {
+    "content": "answer1",
+    "role": "assistant"
+   },
+   {
+    "content": "q2",
+    "role": "user"
+   },
+   {
+    "content": "partial\n\n(stopped by the user)",
+    "role": "assistant"
+   }
+  ]
+ },
+ "ai3": {
+  "above": [
+   [
+    "sql1",
+    "rs1"
+   ],
+   [
+    "sql2",
+    "rs2"
+   ],
+   [
+    "ai1",
+    "ra1"
+   ],
+   [
+    "ai2",
+    "ra2"
+   ],
+   [
+    "ai2b",
+    "ra2b"
+   ]
+  ],
+  "fp": "e7bac437ef10f2bcb73613084779441688382757f022589e760c494ed837d8ad",
+  "messages": [
+   {
+    "content": "[Markdown note] Notes here",
+    "role": "user"
+   },
+   {
+    "content": "[Markdown note] with disp\n[Display: table r_1]\n[Display: chart r_2]",
+    "role": "user"
+   },
+   {
+    "content": "[Markdown note]\n[Display: table r_3]",
+    "role": "user"
+   },
+   {
+    "content": "[SQL Cell, run by the user] select 1\n1 row",
+    "role": "user"
+   },
+   {
+    "content": "[SHOW Cell, run by the user] SHOW TABLES\nx",
+    "role": "user"
+   },
+   {
+    "content": "q1",
+    "role": "user"
+   },
+   {
+    "content": null,
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{\"sql\": \"select 1\"}",
+       "name": "run_query"
+      },
+      "id": "c1",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "{\"ok\": 1}",
+    "role": "tool",
+    "tool_call_id": "c1"
+   },
+   {
+    "content": "answer1",
+    "role": "assistant"
+   },
+   {
+    "content": "q2",
+    "role": "user"
+   },
+   {
+    "content": "partial\n\n(stopped by the user)",
+    "role": "assistant"
+   },
+   {
+    "content": "q2b",
+    "role": "user"
+   },
+   {
+    "content": "(stopped by the user)",
+    "role": "assistant"
+   }
+  ]
+ },
+ "ai3b": {
+  "above": [
+   [
+    "sql1",
+    "rs1"
+   ],
+   [
+    "sql2",
+    "rs2"
+   ],
+   [
+    "ai1",
+    "ra1"
+   ],
+   [
+    "ai2",
+    "ra2"
+   ],
+   [
+    "ai2b",
+    "ra2b"
+   ],
+   [
+    "ai3",
+    "ra3"
+   ]
+  ],
+  "fp": "2ae150fafa11c8f07e9e012fc07870b5557a38c3acbf0e08dc6d7b744e9b787e",
+  "messages": [
+   {
+    "content": "[Markdown note] Notes here",
+    "role": "user"
+   },
+   {
+    "content": "[Markdown note] with disp\n[Display: table r_1]\n[Display: chart r_2]",
+    "role": "user"
+   },
+   {
+    "content": "[Markdown note]\n[Display: table r_3]",
+    "role": "user"
+   },
+   {
+    "content": "[SQL Cell, run by the user] select 1\n1 row",
+    "role": "user"
+   },
+   {
+    "content": "[SHOW Cell, run by the user] SHOW TABLES\nx",
+    "role": "user"
+   },
+   {
+    "content": "q1",
+    "role": "user"
+   },
+   {
+    "content": null,
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{\"sql\": \"select 1\"}",
+       "name": "run_query"
+      },
+      "id": "c1",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "{\"ok\": 1}",
+    "role": "tool",
+    "tool_call_id": "c1"
+   },
+   {
+    "content": "answer1",
+    "role": "assistant"
+   },
+   {
+    "content": "q2",
+    "role": "user"
+   },
+   {
+    "content": "partial\n\n(stopped by the user)",
+    "role": "assistant"
+   },
+   {
+    "content": "q2b",
+    "role": "user"
+   },
+   {
+    "content": "(stopped by the user)",
+    "role": "assistant"
+   },
+   {
+    "content": "q3",
+    "role": "user"
+   },
+   {
+    "content": "failed: boom",
+    "role": "assistant"
+   }
+  ]
+ },
+ "ai4": {
+  "above": [
+   [
+    "sql1",
+    "rs1"
+   ],
+   [
+    "sql2",
+    "rs2"
+   ],
+   [
+    "ai1",
+    "ra1"
+   ],
+   [
+    "ai2",
+    "ra2"
+   ],
+   [
+    "ai2b",
+    "ra2b"
+   ],
+   [
+    "ai3",
+    "ra3"
+   ],
+   [
+    "ai3b",
+    "ra3b"
+   ]
+  ],
+  "fp": "1501f77630c5d3514d9aed6f0b01f81a91aa9551d6d5c55a2bcbb970f1707aab",
+  "messages": [
+   {
+    "content": "[Markdown note] Notes here",
+    "role": "user"
+   },
+   {
+    "content": "[Markdown note] with disp\n[Display: table r_1]\n[Display: chart r_2]",
+    "role": "user"
+   },
+   {
+    "content": "[Markdown note]\n[Display: table r_3]",
+    "role": "user"
+   },
+   {
+    "content": "[SQL Cell, run by the user] select 1\n1 row",
+    "role": "user"
+   },
+   {
+    "content": "[SHOW Cell, run by the user] SHOW TABLES\nx",
+    "role": "user"
+   },
+   {
+    "content": "q1",
+    "role": "user"
+   },
+   {
+    "content": null,
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{\"sql\": \"select 1\"}",
+       "name": "run_query"
+      },
+      "id": "c1",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "{\"ok\": 1}",
+    "role": "tool",
+    "tool_call_id": "c1"
+   },
+   {
+    "content": "answer1",
+    "role": "assistant"
+   },
+   {
+    "content": "q2",
+    "role": "user"
+   },
+   {
+    "content": "partial\n\n(stopped by the user)",
+    "role": "assistant"
+   },
+   {
+    "content": "q2b",
+    "role": "user"
+   },
+   {
+    "content": "(stopped by the user)",
+    "role": "assistant"
+   },
+   {
+    "content": "q3",
+    "role": "user"
+   },
+   {
+    "content": "failed: boom",
+    "role": "assistant"
+   },
+   {
+    "content": "q3b",
+    "role": "user"
+   },
+   {
+    "content": "txt\n\nfailed: the Run did not finish",
+    "role": "assistant"
+   }
+  ]
+ },
+ "ai5": {
+  "above": [
+   [
+    "sql1",
+    "rs1"
+   ],
+   [
+    "sql2",
+    "rs2"
+   ],
+   [
+    "ai1",
+    "ra1"
+   ],
+   [
+    "ai2",
+    "ra2"
+   ],
+   [
+    "ai2b",
+    "ra2b"
+   ],
+   [
+    "ai3",
+    "ra3"
+   ],
+   [
+    "ai3b",
+    "ra3b"
+   ],
+   [
+    "ai4",
+    "ra4"
+   ]
+  ],
+  "fp": "a5925a4157b7da99de3d8c4c1d66ab2fee6e77417b0597d42e1c7bd99f412b7d",
+  "messages": [
+   {
+    "content": "[Markdown note] Notes here",
+    "role": "user"
+   },
+   {
+    "content": "[Markdown note] with disp\n[Display: table r_1]\n[Display: chart r_2]",
+    "role": "user"
+   },
+   {
+    "content": "[Markdown note]\n[Display: table r_3]",
+    "role": "user"
+   },
+   {
+    "content": "[SQL Cell, run by the user] select 1\n1 row",
+    "role": "user"
+   },
+   {
+    "content": "[SHOW Cell, run by the user] SHOW TABLES\nx",
+    "role": "user"
+   },
+   {
+    "content": "q1",
+    "role": "user"
+   },
+   {
+    "content": null,
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{\"sql\": \"select 1\"}",
+       "name": "run_query"
+      },
+      "id": "c1",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "{\"ok\": 1}",
+    "role": "tool",
+    "tool_call_id": "c1"
+   },
+   {
+    "content": "answer1",
+    "role": "assistant"
+   },
+   {
+    "content": "q2",
+    "role": "user"
+   },
+   {
+    "content": "partial\n\n(stopped by the user)",
+    "role": "assistant"
+   },
+   {
+    "content": "q2b",
+    "role": "user"
+   },
+   {
+    "content": "(stopped by the user)",
+    "role": "assistant"
+   },
+   {
+    "content": "q3",
+    "role": "user"
+   },
+   {
+    "content": "failed: boom",
+    "role": "assistant"
+   },
+   {
+    "content": "q3b",
+    "role": "user"
+   },
+   {
+    "content": "txt\n\nfailed: the Run did not finish",
+    "role": "assistant"
+   },
+   {
+    "content": "q4",
+    "role": "user"
+   },
+   {
+    "content": "a4",
+    "role": "assistant"
+   }
+  ]
+ },
+ "last": {
+  "above": [
+   [
+    "sql1",
+    "rs1"
+   ],
+   [
+    "sql2",
+    "rs2"
+   ],
+   [
+    "ai1",
+    "ra1"
+   ],
+   [
+    "ai2",
+    "ra2"
+   ],
+   [
+    "ai2b",
+    "ra2b"
+   ],
+   [
+    "ai3",
+    "ra3"
+   ],
+   [
+    "ai3b",
+    "ra3b"
+   ],
+   [
+    "ai4",
+    "ra4"
+   ],
+   [
+    "ai5",
+    "ra5"
+   ]
+  ],
+  "fp": "1e461b476c8737ae1013c1cc4975638aef69e80e10bc55fdc303e4dbc4384e12",
+  "messages": [
+   {
+    "content": "[Markdown note] Notes here",
+    "role": "user"
+   },
+   {
+    "content": "[Markdown note] with disp\n[Display: table r_1]\n[Display: chart r_2]",
+    "role": "user"
+   },
+   {
+    "content": "[Markdown note]\n[Display: table r_3]",
+    "role": "user"
+   },
+   {
+    "content": "[SQL Cell, run by the user] select 1\n1 row",
+    "role": "user"
+   },
+   {
+    "content": "[SHOW Cell, run by the user] SHOW TABLES\nx",
+    "role": "user"
+   },
+   {
+    "content": "q1",
+    "role": "user"
+   },
+   {
+    "content": null,
+    "role": "assistant",
+    "tool_calls": [
+     {
+      "function": {
+       "arguments": "{\"sql\": \"select 1\"}",
+       "name": "run_query"
+      },
+      "id": "c1",
+      "type": "function"
+     }
+    ]
+   },
+   {
+    "content": "{\"ok\": 1}",
+    "role": "tool",
+    "tool_call_id": "c1"
+   },
+   {
+    "content": "answer1",
+    "role": "assistant"
+   },
+   {
+    "content": "q2",
+    "role": "user"
+   },
+   {
+    "content": "partial\n\n(stopped by the user)",
+    "role": "assistant"
+   },
+   {
+    "content": "q2b",
+    "role": "user"
+   },
+   {
+    "content": "(stopped by the user)",
+    "role": "assistant"
+   },
+   {
+    "content": "q3",
+    "role": "user"
+   },
+   {
+    "content": "failed: boom",
+    "role": "assistant"
+   },
+   {
+    "content": "q3b",
+    "role": "user"
+   },
+   {
+    "content": "txt\n\nfailed: the Run did not finish",
+    "role": "assistant"
+   },
+   {
+    "content": "q4",
+    "role": "user"
+   },
+   {
+    "content": "a4",
+    "role": "assistant"
+   },
+   {
+    "content": "q5",
+    "role": "user"
+   }
+  ]
+ },
+ "md1": {
+  "above": [],
+  "fp": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+  "messages": []
+ },
+ "md2": {
+  "above": [],
+  "fp": "648beffe53c9f6e33c7a5deb659be18beb68485a94d5f0aac4b9b6192a4a2d92",
+  "messages": [
+   {
+    "content": "[Markdown note] Notes here",
+    "role": "user"
+   }
+  ]
+ },
+ "md3": {
+  "above": [],
+  "fp": "648beffe53c9f6e33c7a5deb659be18beb68485a94d5f0aac4b9b6192a4a2d92",
+  "messages": [
+   {
+    "content": "[Markdown note] Notes here",
+    "role": "user"
+   }
+  ]
+ },
+ "md4": {
+  "above": [],
+  "fp": "ae944f6295cb5d89a7917ab315d26251c1eadc04aa06867c6d3e163811d6f282",
+  "messages": [
+   {
+    "content": "[Markdown note] Notes here",
+    "role": "user"
+   },
+   {
+    "content": "[Markdown note] with disp\n[Display: table r_1]\n[Display: chart r_2]",
+    "role": "user"
+   }
+  ]
+ },
+ "md5": {
+  "above": [],
+  "fp": "8a49a7f58d8af0851af84a3a8e1d2f86ec3691e6ce568bedfd6657f041db97aa",
+  "messages": [
+   {
+    "content": "[Markdown note] Notes here",
+    "role": "user"
+   },
+   {
+    "content": "[Markdown note] with disp\n[Display: table r_1]\n[Display: chart r_2]",
+    "role": "user"
+   },
+   {
+    "content": "[Markdown note]\n[Display: table r_3]",
+    "role": "user"
+   }
+  ]
+ },
+ "sql1": {
+  "above": [],
+  "fp": "8a49a7f58d8af0851af84a3a8e1d2f86ec3691e6ce568bedfd6657f041db97aa",
+  "messages": [
+   {
+    "content": "[Markdown note] Notes here",
+    "role": "user"
+   },
+   {
+    "content": "[Markdown note] with disp\n[Display: table r_1]\n[Display: chart r_2]",
+    "role": "user"
+   },
+   {
+    "content": "[Markdown note]\n[Display: table r_3]",
+    "role": "user"
+   }
+  ]
+ },
+ "sql2": {
+  "above": [
+   [
+    "sql1",
+    "rs1"
+   ]
+  ],
+  "fp": "1af22ae558a22d81ca9eadaff082ed8b5881044cbcf7cf0ea1cf781f7a226589",
+  "messages": [
+   {
+    "content": "[Markdown note] Notes here",
+    "role": "user"
+   },
+   {
+    "content": "[Markdown note] with disp\n[Display: table r_1]\n[Display: chart r_2]",
+    "role": "user"
+   },
+   {
+    "content": "[Markdown note]\n[Display: table r_3]",
+    "role": "user"
+   },
+   {
+    "content": "[SQL Cell, run by the user] select 1\n1 row",
+    "role": "user"
+   }
+  ]
+ }
+}

@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import AsyncIterator, Callable
 
 from flood_agent import queries, table_names
+from flood_agent.ai_cell_context import SHOW_CELL_LABEL, SQL_CELL_LABEL
 from flood_agent.catalog import Catalog, CellRun, Table, TableExpired
 from flood_agent.events import CountEvent, DisplayEvent, Event, TurnEnd, TurnError
 from flood_agent.notebooks import COUNT_KIND, DEFAULT_MAX_ROWS, NotebookStore
@@ -182,7 +183,7 @@ class SqlCellRuns:
             self._running.pop(cell_id, None)
         elapsed_s = round(time.monotonic() - started, 3)
 
-        label = f"[SHOW Cell, run by the user] {statement}" if command else f"[SQL Cell, run by the user] {sql}"
+        label = f"{SHOW_CELL_LABEL} {statement}" if command else f"{SQL_CELL_LABEL} {sql}"
         displays, events = outcome.shown(sql, self.clock)
         # The message is stored once, so what AI Cells below are sent is frozen at this Run.
         self.notebooks.add_step(run_id, [({"role": "user", "content": f"{label}\n{outcome.detail()}"}, displays)])

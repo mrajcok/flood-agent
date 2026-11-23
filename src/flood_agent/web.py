@@ -527,10 +527,8 @@ def create_app(
 
     @app.post("/n/{notebook_id}/cells/{cell_id}/earlier-tables/delete", response_class=HTMLResponse)
     def delete_earlier_tables(notebook_id: str, cell_id: str):
-        """Drop the `rt_` tables of the cell's earlier Runs (never Saved Tables); returns the cell."""
-        cell = known_cell(notebook_id, cell_id)
-        if cell["run"]:
-            agent.tables.drop_earlier_of_cell(cell_id, cell["run"]["id"])
+        """Drop the `rt_` tables of the cell's earlier Runs (never Saved Tables); returns the cell. 409 while it runs."""
+        cell_operation(notebook_id, cell_id, lambda: agent.delete_earlier_tables(notebook_id, cell_id))
         return cell_html(notebook_id, cell_id, "notebook_cell.html")
 
     @app.post("/n/{notebook_id}/cells/{cell_id}/run", response_class=HTMLResponse)

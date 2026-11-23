@@ -449,6 +449,14 @@ class Agent:
             self.tables.drop_of_cell(cell_id)
         self.notebooks.delete_cell(cell_id)
 
+    def delete_earlier_tables(self, notebook_id: str, cell_id: str) -> list[str]:
+        """Drop the `rt_` tables of the cell's earlier Runs (never Saved Tables, never its latest Run's) and return
+        their names. `NotebookBusy` if the cell is running."""
+        cell = self._idle_cell(notebook_id, cell_id)
+        if cell["run"] is None:
+            return []
+        return self.tables.drop_earlier_of_cell(cell_id, cell["run"]["id"])
+
     async def run_cell(self, notebook_id: str, cell_id: str) -> AsyncIterator[Event]:
         """Run a cell, with what its Draft holds, and stream its events. A SQL Cell runs without the LLM, through
         the SQL Cell Run module, and needs no `start()`; an AI Cell needs `start()` first, and runs as follows.

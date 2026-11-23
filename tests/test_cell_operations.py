@@ -115,14 +115,15 @@ async def test_moving_or_deleting_a_cell_makes_the_cells_below_stale(make_agent)
     assert agent.stale_cells(nb) == {b, c}
 
 
-async def test_a_running_cell_cannot_be_moved_copied_or_deleted(make_agent):
+async def test_a_running_cell_cannot_be_moved_copied_deleted_or_cleared_of_earlier_tables(make_agent):
     agent = await make_agent(Slow())
     nb = agent.create_notebook()
     a, b = agent.add_ai_cell(nb, prompt="a"), agent.add_ai_cell(nb, prompt="b")
     task = asyncio.create_task(run(agent, nb, a))
     while agent.running_cell(nb) != a:
         await asyncio.sleep(0.01)
-    for op in (lambda: agent.move_cell(nb, a, "down"), lambda: agent.delete_cell(nb, a), lambda: agent.copy_cell(nb, a)):
+    for op in (lambda: agent.move_cell(nb, a, "down"), lambda: agent.delete_cell(nb, a), lambda: agent.copy_cell(nb, a),
+               lambda: agent.delete_earlier_tables(nb, a)):
         with pytest.raises(NotebookBusy):
             op()
     agent.stop_cell(a)

@@ -342,7 +342,7 @@ class Agent:
             if item["type"] == "message":
                 m = item["message"]
                 if m["role"] == "assistant" and m.get("content"):
-                    text = m["content"].removesuffix(ai_cell_context.STOPPED_NOTE).rstrip()
+                    text = ai_cell_context.without_stop_note(m["content"])
                     if text:
                         texts.append(text)
             elif item["kind"] in ("table", "chart") and item["result_table"] in self.tables:

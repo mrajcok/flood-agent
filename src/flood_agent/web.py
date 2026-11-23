@@ -38,7 +38,7 @@ from flood_agent.agent import (
     TurnEnd,
     resolve_chart_data,
 )
-from flood_agent.ai_cell_context import STOPPED_NOTE
+from flood_agent.ai_cell_context import without_stop_note
 from flood_agent.catalog import TableExpired
 from flood_agent.cell_kinds import MARKDOWN
 from flood_agent.context_usage import context_usage
@@ -262,7 +262,7 @@ def create_app(
                 continue
             m = item["message"]
             if m["role"] == "assistant" and m.get("content"):
-                text = m["content"].removesuffix(STOPPED_NOTE).rstrip()  # the cell says it in its own words
+                text = without_stop_note(m["content"])  # the cell says it in its own words
                 if text:
                     items.append({"type": "assistant", "text": text})
         return items

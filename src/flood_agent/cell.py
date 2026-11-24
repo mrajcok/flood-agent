@@ -9,11 +9,11 @@ Each AI and SQL Cell answers what its Draft would run as: its prompt or statemen
 
 Each AI and SQL Cell answers whether it is edited: whether its Draft differs from its latest Run.
 
-`cannot_run` says why a Cell cannot be Run (a plain, value-free reason), or None if it can.
+Each Cell answers `cannot_run()`: why it cannot be Run (a plain, value-free reason), or None if it can.
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from flood_agent import queries
 from flood_agent.cell_kinds import AI, MARKDOWN, SQL
@@ -26,6 +26,12 @@ def _squash(text: str) -> str:
     return " ".join(text.split())
 
 
+def _differs(text: str, ran: str, settings: object, ran_settings: object) -> bool:
+    """Whether a Draft that would run `text` with `settings` differs from a Run of `ran` with `ran_settings`: the
+    text compared ignoring spacing, the settings exactly."""
+    return _squash(text) != _squash(ran) or settings != ran_settings
+
+
 @dataclass(frozen=True)
 class AiRunSettings:
     """What an AI Cell runs with besides its prompt."""
@@ -33,6 +39,11 @@ class AiRunSettings:
     model: str
     effort: str | None
     max_rows: int
+
+    @classmethod
+    def from_stored(cls, s: dict) -> "AiRunSettings":
+        """From the settings a Run recorded (see `stored`)."""
+        return cls(s["model"], s.get("effort"), s["max_rows"])
 
     def stored(self) -> dict:
         """As a Run records them (a stored format: keep its keys)."""
@@ -42,13 +53,11 @@ class AiRunSettings:
 @dataclass(frozen=True)
 class AiDraft:
     prompt: str
-    model: str
-    effort: str | None
-    max_rows: int
+    settings: AiRunSettings
 
     def stored(self) -> dict:
         """As Notebook storage keeps it (a stored format: keep its keys)."""
-        return {"prompt": self.prompt, "model": self.model, "effort": self.effort, "max_rows": self.max_rows}
+        return {"prompt": self.prompt, **self.settings.stored()}
 
 
 @dataclass(frozen=True)
@@ -75,14 +84,17 @@ class AiCell:
     @property
     def run_settings(self) -> AiRunSettings:
         """The settings its Draft would run with."""
-        return AiRunSettings(self.draft.model, self.draft.effort, self.draft.max_rows)
+        return self.draft.settings
 
     @property
     def edited(self) -> bool:
         """Whether its Draft differs from its latest Run: the prompt compared ignoring spacing, the settings exactly.
         Never, with no Run. (The page's live check in cell_ai.html mirrors this.)"""
-        return self.run is not None and (
-            _squash(self.prompt) != _squash(self.run.prompt) or self.run_settings != self.run.settings)
+        return self.run is not None and _differs(self.prompt, self.run.prompt, self.run_settings, self.run.settings)
+
+    def cannot_run(self) -> str | None:
+        """Why its Draft cannot be Run (a plain, value-free reason), or None if it can be."""
+        return None if self.prompt.strip() else "Write a prompt to run"
 
 
 @dataclass(frozen=True)
@@ -92,6 +104,11 @@ class SqlRunSettings:
     max_rows: int
     command: str
 
+    @classmethod
+    def from_stored(cls, s: dict) -> "SqlRunSettings":
+        """From the settings a Run recorded (see `stored`)."""
+        return cls(s["max_rows"], s.get("command") or "")
+
     def stored(self) -> dict:
         """As a Run records them (a stored format: keep its keys)."""
         return {"max_rows": self.max_rows, "command": self.command}
@@ -99,16 +116,16 @@ class SqlRunSettings:
 
 @dataclass(frozen=True)
 class SqlDraft:
-    """A query in `sql`, or a SHOW or DESCRIBE TABLE `command` (with its `table`), which then runs instead."""
+    """A query in `sql`, or a SHOW or DESCRIBE TABLE command (in its settings, with its `table`), which then runs
+    instead."""
 
     sql: str
-    max_rows: int
-    command: str
+    settings: SqlRunSettings
     table: str
 
     def stored(self) -> dict:
         """As Notebook storage keeps it (a stored format: keep its keys)."""
-        return {"sql": self.sql, "max_rows": self.max_rows, "command": self.command, "table": self.table}
+        return {"sql": self.sql, **self.settings.stored(), "table": self.table}
 
 
 @dataclass(frozen=True)
@@ -130,19 +147,32 @@ class SqlCell:
     @property
     def statement(self) -> str:
         """The statement its Draft would run: its command (with its table, for DESCRIBE TABLE), else its query."""
-        return statement_of(self.draft.command, self.draft.table) if self.draft.command else self.draft.sql
+        command = self.draft.settings.command
+        return statement_of(command, self.draft.table) if command else self.draft.sql
 
     @property
     def run_settings(self) -> SqlRunSettings:
         """The settings its Draft would run with."""
-        return SqlRunSettings(self.draft.max_rows, self.draft.command)
+        return self.draft.settings
 
     @property
     def edited(self) -> bool:
         """Whether its Draft differs from its latest Run: the statement compared ignoring spacing, the settings
         exactly. Never, with no Run. (The page's live check in cell_sql.html mirrors this.)"""
-        return self.run is not None and (
-            _squash(self.statement) != _squash(self.run.statement) or self.run_settings != self.run.settings)
+        return self.run is not None and _differs(self.statement, self.run.statement, self.run_settings,
+                                                 self.run.settings)
+
+    def cannot_run(self) -> str | None:
+        """Why its Draft cannot be Run (a plain, value-free reason), or None if it can be. The page's Alpine
+        `runnable` getter (cell_sql.html) mirrors some of these rules as the user types."""
+        draft, command = self.draft, self.draft.settings.command
+        if command:
+            return "Pick a table to describe" if command == DESCRIBE_TABLE and not draft.table.strip() else None
+        if is_show_statement(draft.sql):
+            return SHOW_IN_TEXTBOX
+        if queries.ends_with_limit(draft.sql):
+            return queries.LIMIT_IN_SQL_CELL
+        return None if draft.sql.strip() else "Write some SQL to run"
 
 
 @dataclass(frozen=True)
@@ -158,6 +188,9 @@ class MarkdownDraft:
         return {"text": self.text, "send_to_ai": self.send_to_ai, "displays": list(self.displays)}
 
 
+NEVER_RUN = "A Markdown Cell is never Run"
+
+
 @dataclass(frozen=True)
 class MarkdownCell:
     """Never Run, so it has no Run."""
@@ -166,18 +199,12 @@ class MarkdownCell:
     notebook_id: str
     draft: MarkdownDraft
 
+    def cannot_run(self) -> str | None:
+        """Always: a Markdown Cell is never Run."""
+        return NEVER_RUN
+
 
 Cell = AiCell | SqlCell | MarkdownCell
-
-
-def _latest_ai_run(run: dict) -> LatestAiRun:
-    s = run["settings"]  # a Run always recorded the settings it ran with
-    return LatestAiRun(run["id"], run["prompt"], AiRunSettings(s["model"], s.get("effort"), s["max_rows"]))
-
-
-def _latest_sql_run(run: dict) -> LatestSqlRun:
-    s = run["settings"]
-    return LatestSqlRun(run["id"], run["prompt"], SqlRunSettings(s["max_rows"], s.get("command") or ""))
 
 
 def typed_cell(row: dict, default_model: str) -> Cell:
@@ -185,13 +212,15 @@ def typed_cell(row: dict, default_model: str) -> Cell:
     config) stands in for a missing model."""
     draft, run = row["draft"], row["run"]
     if row["kind"] == AI:
-        return AiCell(row["id"], row["notebook_id"], AiDraft(
-            draft.get("prompt", ""), draft.get("model") or default_model, draft.get("effort"),
-            draft.get("max_rows") or DEFAULT_MAX_ROWS), _latest_ai_run(run) if run else None)
+        settings = AiRunSettings(draft.get("model") or default_model, draft.get("effort"),
+                                 draft.get("max_rows") or DEFAULT_MAX_ROWS)
+        latest = LatestAiRun(run["id"], run["prompt"], AiRunSettings.from_stored(run["settings"])) if run else None
+        return AiCell(row["id"], row["notebook_id"], AiDraft(draft.get("prompt", ""), settings), latest)
     if row["kind"] == SQL:
-        return SqlCell(row["id"], row["notebook_id"], SqlDraft(
-            draft.get("sql", ""), draft.get("max_rows") or DEFAULT_MAX_ROWS, draft.get("command") or "",
-            draft.get("table") or ""), _latest_sql_run(run) if run else None)
+        settings = SqlRunSettings(draft.get("max_rows") or DEFAULT_MAX_ROWS, draft.get("command") or "")
+        latest_sql = LatestSqlRun(run["id"], run["prompt"], SqlRunSettings.from_stored(run["settings"])) if run else None
+        return SqlCell(row["id"], row["notebook_id"], SqlDraft(draft.get("sql", ""), settings, draft.get("table") or ""),
+                       latest_sql)
     if row["kind"] == MARKDOWN:
         return MarkdownCell(row["id"], row["notebook_id"], MarkdownDraft(
             draft.get("text", ""), bool(draft.get("send_to_ai")), tuple(draft.get("displays") or ())))
@@ -208,64 +237,44 @@ _KIND_OF_DRAFT = {AiDraft: AI, SqlDraft: SQL, MarkdownDraft: MARKDOWN}
 def save_draft(notebooks: NotebookStore, cell_id: str, draft: Draft) -> None:
     """Save `draft` as the Cell's Draft, whole, replacing the stored one (even when it cannot be Run). The latest Run
     is untouched. ValueError if the Draft is not of the Cell's kind; KeyError if the Cell is unknown."""
-    kind = notebooks.cell(cell_id)["kind"]
-    if _KIND_OF_DRAFT[type(draft)] != kind:
-        raise ValueError(f"a {type(draft).__name__} is not the Draft of a {kind} Cell")
-    notebooks.replace_draft(cell_id, draft.stored())
+    notebooks.replace_draft(cell_id, _KIND_OF_DRAFT[type(draft)], draft.stored())
 
 
 # --- Can run ---------------------------------------------------------------------------------------------------
-# The SQL Cell's Alpine `runnable` getter (cell_sql.html) mirrors some of these rules as the user types.
-
-NEVER_RUN = "A Markdown Cell is never Run."
 
 
 class CannotRun(Exception):
-    """The Cell cannot be Run; the message is the plain, value-free reason (see `cannot_run`)."""
-
-
-def cannot_run(cell: Cell) -> str | None:
-    """Why its Draft cannot be Run, plainly and with no values in it, or None if it can be."""
-    if isinstance(cell, MarkdownCell):
-        return NEVER_RUN
-    if isinstance(cell, AiCell):
-        return None if cell.draft.prompt.strip() else "Write a prompt to run"
-    draft = cell.draft
-    if draft.command:
-        return "Pick a table to describe" if draft.command == DESCRIBE_TABLE and not draft.table.strip() else None
-    if is_show_statement(draft.sql):
-        return SHOW_IN_TEXTBOX
-    if queries.ends_with_limit(draft.sql):
-        return queries.LIMIT_IN_SQL_CELL
-    return None if draft.sql.strip() else "Write some SQL to run"
+    """The Cell cannot be Run; the message is the plain, value-free reason (see each Cell's `cannot_run`)."""
 
 
 # --- Starting Drafts --------------------------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
-class UsableModel:
-    """What a new AI Cell needs of a model that can be used: the Efforts it offers and its default Effort."""
+class ModelEfforts:
+    """The Efforts a model offers (from the curated model list) and its default Effort."""
 
     efforts: tuple[str, ...]
     default_effort: str | None
 
 
 def starting_ai_draft(
-    last: dict | None, usable_model: Callable[[str], UsableModel | None], default_model: str,
+    last: AiRunSettings | None, can_use: Callable[[str], bool], efforts_of: Callable[[str], ModelEfforts | None],
+    default_model: str,
 ) -> AiDraft:
-    """What a new AI Cell starts with, given the settings last Run for an AI Cell (None: no earlier Run).
-    `usable_model` gives a model's Efforts, or None when it cannot be used (e.g. no API key)."""
-    last = last or {"model": default_model, "effort": None, "max_rows": DEFAULT_MAX_ROWS}
-    model, effort, spec = last["model"], last["effort"], usable_model(last["model"])
-    if spec is None:
-        model, effort, spec = default_model, None, usable_model(default_model)
-    if spec is None:  # nothing known of the default model's Efforts
-        return AiDraft("", model, None, last["max_rows"])
-    return AiDraft("", model, effort if effort in spec.efforts else spec.default_effort, last["max_rows"])
+    """What a new AI Cell starts with, given the settings last Run for an AI Cell (None: no earlier Run): those
+    settings if that model `can_use` here (e.g. it has an API key), else the default model. Its Effort is the last
+    one if the model offers it (`efforts_of`, None when nothing is known of the model), else the model's default."""
+    if last is None:
+        last = AiRunSettings(default_model, None, DEFAULT_MAX_ROWS)
+    elif not can_use(last.model):
+        last = AiRunSettings(default_model, None, last.max_rows)
+    known = efforts_of(last.model)
+    effort = None if known is None else last.effort if last.effort in known.efforts else known.default_effort
+    return AiDraft("", replace(last, effort=effort))
 
 
-def starting_sql_draft(last: dict | None) -> SqlDraft:
+def starting_sql_draft(last: SqlRunSettings | None) -> SqlDraft:
     """What a new SQL Cell starts with, given the settings last Run for a SQL Cell (None: no earlier Run): an empty
     query with that Run's row cap."""
-    return SqlDraft("", last["max_rows"] if last else DEFAULT_MAX_ROWS, "", "")
+    return SqlDraft("", SqlRunSettings(last.max_rows if last else DEFAULT_MAX_ROWS, ""), "")

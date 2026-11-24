@@ -17,6 +17,8 @@
                get statement() { return this.command ? (this.command === this.describe ? this.command + ' ' + this.tbl.trim() : this.command) : this.sql; },
                command: {{ cell.command | tojson | forceescape }}, describe: 'DESCRIBE TABLE',
                tpop: false, tq: '', listing: null, tbl: {{ cell.table | tojson | forceescape }}, cols: [], colError: '',
+               /* Some of the reference rules for whether a Cell can be Run (cell.py, SqlCell.cannot_run), live as the user
+                  types; the server checks them all on Run. Keep them agreeing. */
                get runnable() { return this.command ? (this.command !== this.describe || !!this.tbl) : !!this.sql.trim(); },
                async openTables() {
                  this.tpop = !this.tpop; this.tq = '';

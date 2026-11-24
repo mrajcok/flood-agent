@@ -10,10 +10,10 @@ from flood_agent.cell import (
     LatestSqlRun,
     MarkdownCell,
     MarkdownDraft,
+    ModelEfforts,
     SqlCell,
     SqlDraft,
     SqlRunSettings,
-    UsableModel,
     save_draft,
     starting_ai_draft,
     starting_sql_draft,
@@ -32,7 +32,7 @@ def test_an_ai_cell_is_built_with_its_draft():
     cell = typed_cell(_row("ai", {"prompt": "top ports", "model": "m/x", "effort": "high", "max_rows": 50}),
                       DEFAULT_MODEL)
 
-    assert cell == AiCell("c1", "nb1", AiDraft("top ports", "m/x", "high", 50), None)
+    assert cell == AiCell("c1", "nb1", AiDraft("top ports", AiRunSettings("m/x", "high", 50)), None)
     assert cell.prompt == "top ports"
     assert cell.run_settings == AiRunSettings("m/x", "high", 50)
 
@@ -53,7 +53,7 @@ def test_an_ai_cell_holds_the_prompt_and_settings_of_its_latest_run():
 def test_a_sql_cell_runs_its_query_with_its_row_cap():
     cell = typed_cell(_row("sql", {"sql": "SELECT 1", "max_rows": 20, "command": "", "table": ""}), DEFAULT_MODEL)
 
-    assert cell == SqlCell("c1", "nb1", SqlDraft("SELECT 1", 20, "", ""), None)
+    assert cell == SqlCell("c1", "nb1", SqlDraft("SELECT 1", SqlRunSettings(20, ""), ""), None)
     assert cell.statement == "SELECT 1"
     assert cell.run_settings == SqlRunSettings(20, "")
 
@@ -117,17 +117,17 @@ def _saved(store, cell_id):
 def test_an_ai_draft_is_saved_whole(tmp_path):
     store, cell_id = _stored_cell(tmp_path, "ai", {"prompt": "old", "model": "m/x", "effort": "low", "max_rows": 5})
 
-    save_draft(store, cell_id, AiDraft("top ports", "m/y", None, 50))
+    save_draft(store, cell_id, AiDraft("top ports", AiRunSettings("m/y", None, 50)))
 
-    assert _saved(store, cell_id) == AiDraft("top ports", "m/y", None, 50)
+    assert _saved(store, cell_id) == AiDraft("top ports", AiRunSettings("m/y", None, 50))
 
 
 def test_a_sql_draft_is_saved_whole(tmp_path):
     store, cell_id = _stored_cell(tmp_path, "sql", {"sql": "SELECT 1", "max_rows": 5, "command": "", "table": ""})
 
-    save_draft(store, cell_id, SqlDraft("", 20, "DESCRIBE TABLE", "flows"))
+    save_draft(store, cell_id, SqlDraft("", SqlRunSettings(20, "DESCRIBE TABLE"), "flows"))
 
-    assert _saved(store, cell_id) == SqlDraft("", 20, "DESCRIBE TABLE", "flows")
+    assert _saved(store, cell_id) == SqlDraft("", SqlRunSettings(20, "DESCRIBE TABLE"), "flows")
 
 
 def test_a_markdown_draft_is_saved_whole_with_its_displays(tmp_path):
@@ -142,7 +142,7 @@ def test_a_markdown_draft_is_saved_whole_with_its_displays(tmp_path):
 def test_a_draft_that_cannot_be_run_is_still_saved(tmp_path):
     store, cell_id = _stored_cell(tmp_path, "ai", {"prompt": "old", "model": "m/x", "effort": None, "max_rows": 5})
 
-    save_draft(store, cell_id, AiDraft("", "m/x", None, 5))
+    save_draft(store, cell_id, AiDraft("", AiRunSettings("m/x", None, 5)))
 
     assert _saved(store, cell_id).prompt == ""
 
@@ -151,15 +151,15 @@ def test_saving_a_draft_leaves_the_latest_run_in_place(tmp_path):
     store, cell_id = _stored_cell(tmp_path, "ai", {"prompt": "ran", "model": "m/x", "effort": None, "max_rows": 5})
     run_id = store.start_run(cell_id, "ran", {"model": "m/x", "effort": None, "max_rows": 5}, "fp")
 
-    save_draft(store, cell_id, AiDraft("edited", "m/x", None, 5))
+    save_draft(store, cell_id, AiDraft("edited", AiRunSettings("m/x", None, 5)))
 
     assert typed_cell(store.cell(cell_id), DEFAULT_MODEL).run == LatestAiRun(run_id, "ran", AiRunSettings("m/x", None, 5))
 
 
 @pytest.mark.parametrize("kind, draft", [
-    ("ai", SqlDraft("SELECT 1", 5, "", "")),
-    ("sql", AiDraft("q", "m/x", None, 5)),
-    ("markdown", AiDraft("q", "m/x", None, 5)),
+    ("ai", SqlDraft("SELECT 1", SqlRunSettings(5, ""), "")),
+    ("sql", AiDraft("q", AiRunSettings("m/x", None, 5))),
+    ("markdown", AiDraft("q", AiRunSettings("m/x", None, 5))),
     ("ai", MarkdownDraft("text", False, ())),
 ])
 def test_a_draft_of_the_wrong_kind_is_refused_and_the_stored_draft_kept(tmp_path, kind, draft):
@@ -174,152 +174,92 @@ def test_a_draft_of_the_wrong_kind_is_refused_and_the_stored_draft_kept(tmp_path
 
 # --- Can run ---------------------------------------------------------------------------------------------------
 
-from flood_agent.cell import cannot_run  # noqa: E402
-
-
 def test_ai_cells_and_sql_cells_with_something_to_run_can_run():
     for row in (_row("ai", {"prompt": "top ports"}), _row("sql", {"sql": "SELECT 1"}),
                 _row("sql", {"sql": "", "command": "SHOW TABLES"}),
                 _row("sql", {"sql": "SHOW TABLES", "command": "DESCRIBE TABLE", "table": "flows"}),
                 _row("sql", {"sql": "SELECT dport FROM flows WHERE dport IN (SELECT dport FROM flows LIMIT 5)"})):
-        assert cannot_run(typed_cell(row, DEFAULT_MODEL)) is None, row
+        assert typed_cell(row, DEFAULT_MODEL).cannot_run() is None, row
 
 
 def test_an_ai_cell_with_an_empty_prompt_cannot_run():
     for prompt in ("", "  \n\t"):
-        assert cannot_run(typed_cell(_row("ai", {"prompt": prompt}), DEFAULT_MODEL)) == "Write a prompt to run"
+        assert typed_cell(_row("ai", {"prompt": prompt}), DEFAULT_MODEL).cannot_run() == "Write a prompt to run"
 
 
 def test_a_sql_cell_with_empty_sql_cannot_run():
     for sql in ("", "  \n"):
-        assert cannot_run(typed_cell(_row("sql", {"sql": sql}), DEFAULT_MODEL)) == "Write some SQL to run"
+        assert typed_cell(_row("sql", {"sql": sql}), DEFAULT_MODEL).cannot_run() == "Write some SQL to run"
 
 
 def test_a_describe_table_cell_with_no_table_cannot_run():
     cell = typed_cell(_row("sql", {"sql": "", "command": "DESCRIBE TABLE", "table": " "}), DEFAULT_MODEL)
 
-    assert cannot_run(cell) == "Pick a table to describe"
+    assert cell.cannot_run() == "Pick a table to describe"
 
 
 def test_show_or_describe_typed_in_the_sql_box_cannot_run():
     for sql in ("SHOW TABLES", "describe flows", "-- note\nDESC flows"):
-        reason = cannot_run(typed_cell(_row("sql", {"sql": sql}), DEFAULT_MODEL))
+        reason = typed_cell(_row("sql", {"sql": sql}), DEFAULT_MODEL).cannot_run()
         assert reason == "SHOW and DESCRIBE are not run from the SQL box: pick one in the Command drop-down instead."
 
 
 def test_a_query_ending_in_limit_cannot_run_and_is_pointed_to_the_rows_drop_down():
-    reason = cannot_run(typed_cell(_row("sql", {"sql": "SELECT dport FROM flows LIMIT 5"}), DEFAULT_MODEL))
+    reason = typed_cell(_row("sql", {"sql": "SELECT dport FROM flows LIMIT 5"}), DEFAULT_MODEL).cannot_run()
 
     assert reason is not None and reason.startswith("End the query without LIMIT") and "row cap" in reason
 
 
 def test_a_markdown_cell_is_never_run():
-    assert cannot_run(typed_cell(_row("markdown", {"text": "# Notes"}), DEFAULT_MODEL)) == "A Markdown Cell is never Run."
+    assert typed_cell(_row("markdown", {"text": "# Notes"}), DEFAULT_MODEL).cannot_run() == "A Markdown Cell is never Run"
 
 
 # --- Starting Drafts ----------------------------------------------------------------------------------------
 
-USABLE = {DEFAULT_MODEL: UsableModel(("low", "high"), "low"), "m/other": UsableModel(("medium", "max"), "medium")}
+EFFORTS = {DEFAULT_MODEL: ModelEfforts(("low", "high"), "low"), "m/other": ModelEfforts(("medium", "max"), "medium"),
+           "m/keyless": ModelEfforts(("max",), "max")}
+
+
+def _can_use(*models):
+    return lambda model: model in models
+
+
+CAN_USE_BOTH = _can_use(DEFAULT_MODEL, "m/other")
+
+
+def _starting(last, can_use=CAN_USE_BOTH, efforts=EFFORTS):
+    return starting_ai_draft(last, can_use, efforts.get, DEFAULT_MODEL)
 
 
 def test_a_new_ai_cell_with_no_earlier_run_starts_with_the_defaults():
-    assert starting_ai_draft(None, USABLE.get, DEFAULT_MODEL) == AiDraft("", DEFAULT_MODEL, "low", DEFAULT_MAX_ROWS)
+    assert _starting(None) == AiDraft("", AiRunSettings(DEFAULT_MODEL, "low", DEFAULT_MAX_ROWS))
 
 
 def test_a_new_ai_cell_starts_with_the_last_settings_run_when_that_model_can_be_used():
-    last = {"model": "m/other", "effort": "max", "max_rows": 50}
-
-    assert starting_ai_draft(last, USABLE.get, DEFAULT_MODEL) == AiDraft("", "m/other", "max", 50)
+    assert _starting(AiRunSettings("m/other", "max", 50)) == AiDraft("", AiRunSettings("m/other", "max", 50))
 
 
 def test_a_new_ai_cell_falls_back_to_the_default_model_when_the_last_model_cannot_be_used():
-    last = {"model": "m/keyless", "effort": "max", "max_rows": 50}
-
-    assert starting_ai_draft(last, USABLE.get, DEFAULT_MODEL) == AiDraft("", DEFAULT_MODEL, "low", 50)
+    assert _starting(AiRunSettings("m/keyless", "max", 50)) == AiDraft("", AiRunSettings(DEFAULT_MODEL, "low", 50))
 
 
 def test_a_new_ai_cell_falls_back_to_the_models_default_effort_when_the_last_effort_is_not_offered():
-    last = {"model": "m/other", "effort": "low", "max_rows": 50}
-
-    assert starting_ai_draft(last, USABLE.get, DEFAULT_MODEL) == AiDraft("", "m/other", "medium", 50)
+    assert _starting(AiRunSettings("m/other", "low", 50)) == AiDraft("", AiRunSettings("m/other", "medium", 50))
 
 
 def test_a_new_ai_cell_with_a_model_without_effort_control_has_no_effort():
-    usable = {DEFAULT_MODEL: UsableModel((), None)}.get
+    efforts = {DEFAULT_MODEL: ModelEfforts((), None)}
 
-    assert starting_ai_draft(None, usable, DEFAULT_MODEL) == AiDraft("", DEFAULT_MODEL, None, DEFAULT_MAX_ROWS)
+    assert _starting(None, efforts=efforts) == AiDraft("", AiRunSettings(DEFAULT_MODEL, None, DEFAULT_MAX_ROWS))
+
+
+def test_a_new_ai_cell_starts_with_the_default_models_default_effort_even_when_that_model_cannot_be_used():
+    assert _starting(None, can_use=_can_use()) == AiDraft("", AiRunSettings(DEFAULT_MODEL, "low", DEFAULT_MAX_ROWS))
 
 
 def test_a_new_sql_cell_starts_with_the_last_row_cap_run():
-    assert starting_sql_draft({"max_rows": 50, "command": "SHOW TABLES"}) == SqlDraft("", 50, "", "")
+    assert starting_sql_draft(SqlRunSettings(50, "SHOW TABLES")) == SqlDraft("", SqlRunSettings(50, ""), "")
 
 
 def test_a_new_sql_cell_with_no_earlier_run_starts_with_the_default_row_cap():
-    assert starting_sql_draft(None) == SqlDraft("", DEFAULT_MAX_ROWS, "", "")
-
-
-# --- Edited, not run (#181) -------------------------------------------------------------------------------------
-
-AI_RUN = {"id": "r1", "status": "ok", "prompt": "top ports", "settings": {"model": "m/x", "effort": "high", "max_rows": 50}}
-
-
-def _ai(prompt="top ports", model="m/x", effort="high", max_rows=50, run=None):
-    return typed_cell(_row("ai", {"prompt": prompt, "model": model, "effort": effort, "max_rows": max_rows}, run),
-                      DEFAULT_MODEL)
-
-
-def test_an_ai_cell_never_run_is_not_edited():
-    assert not _ai().edited
-
-
-def test_an_ai_cell_whose_draft_is_what_it_ran_is_not_edited():
-    assert not _ai(run=AI_RUN).edited
-
-
-def test_an_ai_cell_differing_from_its_run_only_in_spacing_is_not_edited():
-    assert not _ai(prompt="  top\n\n   ports\t", run=AI_RUN).edited
-
-
-def test_an_ai_cell_with_a_changed_prompt_is_edited():
-    assert _ai(prompt="top hosts", run=AI_RUN).edited
-
-
-def test_an_ai_cell_with_a_changed_model_effort_or_row_cap_is_edited():
-    assert _ai(model="m/y", run=AI_RUN).edited
-    assert _ai(effort="low", run=AI_RUN).edited
-    assert _ai(effort=None, run=AI_RUN).edited
-    assert _ai(max_rows=51, run=AI_RUN).edited
-
-
-def _sql(sql="SELECT 1", max_rows=20, command="", table="", run=None):
-    return typed_cell(_row("sql", {"sql": sql, "max_rows": max_rows, "command": command, "table": table}, run),
-                      DEFAULT_MODEL)
-
-
-def _sql_run(statement="SELECT 1", max_rows=20, command=""):
-    return {"id": "r1", "status": "ok", "prompt": statement, "settings": {"max_rows": max_rows, "command": command}}
-
-
-def test_a_sql_cell_never_run_is_not_edited():
-    assert not _sql().edited
-
-
-def test_a_sql_cell_whose_draft_is_what_it_ran_is_not_edited():
-    assert not _sql(run=_sql_run()).edited
-    assert not _sql(sql="", command="DESCRIBE TABLE", table="flows",
-                    run=_sql_run("DESCRIBE TABLE flows", command="DESCRIBE TABLE")).edited
-
-
-def test_a_sql_cell_differing_from_its_run_only_in_spacing_is_not_edited():
-    assert not _sql(sql="SELECT\n    1  ", run=_sql_run("  SELECT 1")).edited
-
-
-def test_a_sql_cell_with_a_changed_statement_is_edited():
-    assert _sql(sql="SELECT 2", run=_sql_run()).edited
-
-
-def test_a_sql_cell_with_a_changed_command_described_table_or_row_cap_is_edited():
-    assert _sql(command="SHOW TABLES", run=_sql_run()).edited
-    assert _sql(sql="", command="DESCRIBE TABLE", table="hosts",
-                run=_sql_run("DESCRIBE TABLE flows", command="DESCRIBE TABLE")).edited
-    assert _sql(max_rows=21, run=_sql_run()).edited
+    assert starting_sql_draft(None) == SqlDraft("", SqlRunSettings(DEFAULT_MAX_ROWS, ""), "")

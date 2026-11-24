@@ -16,7 +16,7 @@ from conftest import DAY, Clock, ScriptedLLM
 
 from flood_agent import queries
 from flood_agent.catalog import CellRun
-from flood_agent.cell import save_draft
+from flood_agent.cell import SqlRunSettings, save_draft
 from flood_agent.events import CountEvent, DisplayEvent, TurnEnd
 from flood_agent.llm import TextChunk
 from flood_agent.notebooks import DEFAULT_MAX_ROWS
@@ -135,7 +135,7 @@ async def test_re_running_replaces_the_table_under_the_same_name(build_agent):
     cell = agent.add_sql_cell(nb, sql="SELECT dport FROM flows", max_rows=2)
     await run_sql(agent, nb, cell)
     first = table_of(agent, nb, 0)
-    save_draft(agent.notebooks, cell, replace(agent.cell(cell).draft, sql="SELECT sip, dport FROM flows", max_rows=3))
+    save_draft(agent.notebooks, cell, replace(agent.cell(cell).draft, sql="SELECT sip, dport FROM flows", settings=SqlRunSettings(3, "")))
     await run_sql(agent, nb, cell)
 
     second = table_of(agent, nb, 0)
@@ -322,7 +322,7 @@ async def test_a_re_run_never_overwrites_a_saved_table_it_makes_a_new_one(build_
     first = table_of(agent, nb, 0)
     agent.tables.update(first.name, new_name="my_ports")  # saved: no longer a Result Table
     saved_rows = rows_of(agent, "my_ports")
-    save_draft(agent.notebooks, cell, replace(agent.cell(cell).draft, sql="SELECT sip FROM flows", max_rows=3))
+    save_draft(agent.notebooks, cell, replace(agent.cell(cell).draft, sql="SELECT sip FROM flows", settings=SqlRunSettings(3, "")))
     await run_sql(agent, nb, cell)
 
     saved = agent.tables["my_ports"]

@@ -25,15 +25,25 @@ from flood_agent.agent import NO_MODEL, Agent, NotebookBusy, NotRefreshable, Ref
 from flood_agent.ai_cell_context import without_stop_note
 from flood_agent.ai_cell_run import resolve_chart_data
 from flood_agent.catalog import TableExpired
-from flood_agent.cell import AiDraft, MarkdownCell, SqlDraft
+from flood_agent.cell import (
+    AiCell,
+    AiDraft,
+    MarkdownCell,
+    SqlCell,
+    SqlDraft,
+    UsableModel,
+    starting_ai_draft,
+    starting_sql_draft,
+    typed_cell,
+)
 from flood_agent.cell import save_draft as save_cell_draft
-from flood_agent.cell_kinds import MARKDOWN, SQL
+from flood_agent.cell_kinds import AI, MARKDOWN, SQL
 from flood_agent.context_usage import context_usage
 from flood_agent.events import CountEvent, DisplayEvent, FlagEvent, LlmCallStarted, TextDelta, TraceLive, TurnEnd
 from flood_agent.lookup_tables import InvalidLookupTable
-from flood_agent.notebooks import COUNT_KIND, DEFAULT_MAX_ROWS
+from flood_agent.notebooks import COUNT_KIND
 from flood_agent.queries import InvalidSort
-from flood_agent.show_commands import DESCRIBE_TABLE, SHOW_COMMANDS, SHOW_IN_TEXTBOX, is_show_statement, statement_of
+from flood_agent.show_commands import DESCRIBE_TABLE, SHOW_COMMANDS, SHOW_IN_TEXTBOX, is_show_statement
 from flood_agent.table_replacement import RefreshInProgress
 from flood_agent.trace import short_model, split_system_prompt
 
@@ -111,11 +121,6 @@ def live_event_sse(ev, key: str, live: LiveCounter, refreshable_counts: bool = T
     if isinstance(ev, FlagEvent):
         return _sse("flag", TEMPLATES.get_template("flag_note.html").render(flags=ev.items))
     return None
-
-
-def _squash(text: str) -> str:
-    """Text with every run of whitespace as one space and none at the ends: spacing alone is not an edit."""
-    return " ".join(str(text).split())
 
 
 def _table_display_urls(result_table: str) -> dict:
@@ -217,23 +222,19 @@ def create_app(
         label = next((m["label"] for m in models if m["id"] == model), model)
         return f"{label} · {effort or 'no effort'} · ≤ {max_rows:,} rows"
 
-    def new_cell_settings() -> dict:
-        """What a new AI Cell starts with: the settings last run (if that model is still usable), else the defaults."""
-        last = agent.notebooks.last_settings()
-        if last is None or not any(m["id"] == last["model"] and not m["disabled"] for m in models):
-            last = {"model": default_model, "effort": None, "max_rows": DEFAULT_MAX_ROWS}
-        spec = agent.config.spec_of(last["model"])
-        effort = last["effort"] if spec and last["effort"] in spec.efforts else (spec.default_effort if spec else None)
-        return {"model": last["model"], "effort": effort, "max_rows": last["max_rows"]}
+    def usable_model(model_id: str) -> UsableModel | None:
+        """A model's Efforts, or None when it cannot be used here (not in the list, or no API key)."""
+        m = next((m for m in models if m["id"] == model_id and not m["disabled"]), None)
+        return UsableModel(tuple(m["efforts"]), m["default_effort"]) if m else None
 
     def add_ai_cell(notebook_id: str, after: str | None = None, before: str | None = None) -> str:
-        s = new_cell_settings()
-        return agent.add_ai_cell(notebook_id, model=s["model"], effort=s["effort"], max_rows=s["max_rows"], after=after, before=before)
+        d = starting_ai_draft(agent.notebooks.last_settings(AI), usable_model, default_model)
+        return agent.add_ai_cell(notebook_id, d.prompt, model=d.model, effort=d.effort, max_rows=d.max_rows,
+                                 after=after, before=before)
 
     def add_sql_cell(notebook_id: str, after: str | None = None, before: str | None = None, sql: str = "") -> str:
-        last = agent.notebooks.last_settings("sql")
-        return agent.add_sql_cell(
-            notebook_id, sql, max_rows=last["max_rows"] if last else DEFAULT_MAX_ROWS, after=after, before=before)
+        d = starting_sql_draft(agent.notebooks.last_settings(SQL))
+        return agent.add_sql_cell(notebook_id, sql, max_rows=d.max_rows, after=after, before=before)
 
     def output_items(run: dict, refreshable_counts: bool = True) -> list[dict]:
         """What a finished (or stopped) Run shows under its prompt: the answer's text and its Displays, in order.
@@ -279,11 +280,18 @@ def create_app(
                                      expired) for d in embedded]
             return {"id": cell["id"], "notebook_id": cell["notebook_id"], "kind": MARKDOWN,
                     "text": draft.get("text", ""), "send_to_ai": bool(draft.get("send_to_ai")), "displays": displays}
-        model = draft.get("model") or default_model
+        typed = typed_cell(cell, default_model)  # its Draft fields and "edited" come from the Cell module
+        assert isinstance(typed, AiCell | SqlCell)
+        if isinstance(typed, AiCell):
+            model, effort = typed.draft.model, typed.draft.effort or ""
+            prompt, sql, command, table = typed.draft.prompt, "", "", ""
+        else:
+            model, effort = default_model, ""
+            prompt, sql, command, table = "", typed.draft.sql, typed.draft.command, typed.draft.table
         view = {
-            "id": cell["id"], "notebook_id": cell["notebook_id"], "kind": cell["kind"], "prompt": draft.get("prompt", ""),
-            "sql": draft.get("sql", ""), "command": draft.get("command") or "", "table": draft.get("table") or "",
-            "model": model, "effort": draft.get("effort") or "", "max_rows": draft.get("max_rows") or DEFAULT_MAX_ROWS,
+            "id": cell["id"], "notebook_id": cell["notebook_id"], "kind": cell["kind"], "prompt": prompt,
+            "sql": sql, "command": command, "table": table,
+            "model": model, "effort": effort, "max_rows": typed.draft.max_rows,
             "running": starting, "streaming": starting, "polling": False, "status": None, "number": None,
             "output": [], "footer": None, "ran": None, "edited": False, "earlier_tables": [],
             "stale": stale,
@@ -302,16 +310,12 @@ def create_app(
             view["refreshed_at_ms"] = refreshed_elsewhere(run)
             view["ran"] = {"statement": run["prompt"], "command": run["settings"].get("command") or "",
                            "max_rows": run["settings"]["max_rows"]}
-            now = (statement_of(view["command"], view["table"]) if view["command"] else view["sql"],
-                   view["command"], view["max_rows"])
-            ran_sql = tuple(view["ran"].values())
-            view["edited"] = (_squash(now[0]), *now[1:]) != (_squash(ran_sql[0]), *ran_sql[1:])
+            view["edited"] = typed.edited
             return view
         ran = run["settings"]
         view["ran"] = {"prompt": run["prompt"], "model": ran["model"], "effort": ran["effort"] or "",
                        "max_rows": ran["max_rows"]}
-        ran_prompt, *ran_settings = view["ran"].values()
-        view["edited"] = (_squash(draft["prompt"]), model, view["effort"], view["max_rows"]) != (_squash(ran_prompt), *ran_settings)
+        view["edited"] = typed.edited
         if not view["running"]:
             view["earlier_tables"] = [
                 {"name": t.name, "settings_url": _table_display_urls(t.name)["settings_url"]}

@@ -7,7 +7,7 @@ from contextlib import closing
 from conftest import Clock, ScriptedLLM, collect, last_tool_result, run_of, tool_call
 from conftest import ask as run_in_notebook
 
-from flood_agent.agent import CountEvent, DisplayEvent, TextDelta
+from flood_agent.events import CountEvent, DisplayEvent, TextDelta
 from flood_agent.llm import TextChunk
 
 COUNT = "SELECT COUNT(*) FROM flows"

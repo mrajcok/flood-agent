@@ -6,7 +6,7 @@ import json
 import pytest
 from conftest import ScriptedLLM, ask, collect, last_tool_result, tool_call
 
-from flood_agent.agent import FlagEvent, TraceReady
+from flood_agent.events import FlagEvent, TraceReady
 from flood_agent.flagging import find_unseen_values
 from flood_agent.llm import TextChunk
 

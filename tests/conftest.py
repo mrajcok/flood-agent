@@ -25,9 +25,10 @@ from mcp.shared.memory import create_client_server_memory_streams
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
 
-from flood_agent.agent import Agent, AgentConfig, TextDelta
+from flood_agent.agent import Agent, AgentConfig
 from flood_agent.catalog import CellRun
 from flood_agent.config import Settings
+from flood_agent.events import TextDelta
 from flood_agent.generator import generate
 from flood_agent.llm import TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_server import ServerSettings, create_server
@@ -251,7 +252,7 @@ def in_process_mcp_server(request, monkeypatch):
     if request.node.get_closest_marker("subprocess") is not None:
         yield
         return
-    monkeypatch.setattr(Agent, "_transport", lambda self: lambda: in_process_transport(self._server_settings(), self.config.clock))
+    monkeypatch.setattr(Agent, "transport", lambda self: lambda: in_process_transport(self.server_settings(), self.config.clock))
     spawns = _spawns[0]
     yield
     # Scanning /proc costs a few ms, so only after a test that started a process.

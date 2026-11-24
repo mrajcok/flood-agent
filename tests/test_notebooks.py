@@ -7,8 +7,9 @@ from dataclasses import replace
 import pytest
 from conftest import ScriptedLLM, tool_call
 
-from flood_agent.agent import Agent, NotebookBusy, TextDelta, TraceReady
+from flood_agent.agent import Agent, NotebookBusy
 from flood_agent.catalog import CellRun
+from flood_agent.events import TextDelta, TraceReady
 from flood_agent.llm import TextChunk
 from flood_agent.notebooks import NotebookStore
 

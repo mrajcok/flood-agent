@@ -17,28 +17,10 @@ from typing import AsyncGenerator, AsyncIterator, Callable, Iterator, Literal, c
 from mcp import StdioServerParameters
 
 from flood_agent import ai_cell_context, queries, table_names
-from flood_agent.ai_cell_run import (  # noqa: F401 (the messages and resolve_chart_data are re-exported)
-    GIVE_UP_MESSAGE,
-    STEP_LIMIT_MESSAGE,
-    AiCellRuns,
-    ClientFactory,
-    resolve_chart_data,
-)
+from flood_agent.ai_cell_run import AiCellRuns, ClientFactory
 from flood_agent.catalog import Catalog, Table, canonical
 from flood_agent.cell_kinds import AI, MARKDOWN, SQL
-from flood_agent.events import (  # noqa: F401 (re-exported: callers import the event types from here)
-    CountEvent,
-    DisplayEvent,
-    Event,
-    FlagEvent,
-    LlmCallStarted,
-    TextDelta,
-    TraceEntry,
-    TraceLive,
-    TraceReady,
-    TurnEnd,
-    TurnError,
-)
+from flood_agent.events import Event
 from flood_agent.llm import ModelSpec
 from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
 from flood_agent.mcp_server import ServerSettings
@@ -137,9 +119,15 @@ class Agent:
         or PSV export."""
         if self._connection is not None:
             raise RuntimeError("Agent already started")
-        connection = McpConnection(self._transport())
+        connection = McpConnection(self.transport())
         await connection.start()
         self._connection = connection
+
+    @property
+    def mcp_server_alive(self) -> bool:
+        """Whether the MCP connection is up: False before `start`, after `aclose`, or once the server has died
+        (the next AI Cell Run replaces it)."""
+        return self._connection is not None and self._connection.alive
 
     async def _ensure_connection(self) -> McpConnection:
         """The live connection; a dead one (process exited or session broken) is replaced first."""
@@ -148,7 +136,7 @@ class Agent:
             if connection is None:
                 raise RuntimeError("Agent not started")
             if not connection.alive:
-                replacement = McpConnection(self._transport())
+                replacement = McpConnection(self.transport())
                 await connection.aclose()  # reap the dead one
                 await replacement.start()
                 self._connection = replacement
@@ -173,7 +161,8 @@ class Agent:
     async def __aexit__(self, *exc) -> None:
         await self.aclose()
 
-    def _server_settings(self) -> ServerSettings:
+    def server_settings(self) -> ServerSettings:
+        """What the MCP server is launched with."""
         # Static settings only. The row cap travels in each call's `_meta`, not here
         # and not as a tool argument, so the LLM can't choose it.
         return ServerSettings(
@@ -188,11 +177,12 @@ class Agent:
 
     def _server_params(self) -> StdioServerParameters:
         return StdioServerParameters(
-            command=sys.executable, args=["-m", "flood_agent.mcp_server"], env=self._server_settings().to_env()
+            command=sys.executable, args=["-m", "flood_agent.mcp_server"], env=self.server_settings().to_env()
         )
 
-    def _transport(self) -> Transport:
-        """How a new connection reaches its server: a stdio subprocess (tests swap in an in-process one)."""
+    def transport(self) -> Transport:
+        """How each new MCP connection reaches its server: a stdio subprocess. The seam where tests run the server
+        in-process instead."""
         return stdio_transport(self._server_params())
 
     # --- Notebooks (AI Cells only so far) ---------------------------------------------------------------

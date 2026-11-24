@@ -10,8 +10,8 @@ from conftest import canned_params, collect, leakable_values, post_run, text_of
 from fastapi.testclient import TestClient
 
 from flood_agent.__main__ import build_app, picker_entries
-from flood_agent.agent import DisplayEvent, TraceReady, TurnError
 from flood_agent.config import Settings
+from flood_agent.events import DisplayEvent, TraceReady, TurnError
 from flood_agent.fake_llm import CannedPrompt, FakeClient, Step, load_canned_prompts, parent_of
 from flood_agent.llm import TextChunk, ToolCallChunk
 

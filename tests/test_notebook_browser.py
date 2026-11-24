@@ -5,7 +5,7 @@ import re
 from conftest import GatedLLM, ScriptedLLM, add_below, last_tool_result, tool_call
 from playwright.sync_api import expect
 from test_notebooks import SQL
-from test_stop_turn import HangingLLM
+from test_stop_run import HangingLLM
 
 from flood_agent.llm import TextChunk
 

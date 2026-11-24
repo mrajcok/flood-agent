@@ -8,8 +8,8 @@ import json
 import pytest
 from conftest import ScriptedLLM, collect, last_tool_result, mcp_children, run_of, tables_in, tool_call
 
-import flood_agent.agent as agent_mod
-from flood_agent.agent import DisplayEvent, TextDelta, TraceReady, TurnEnd, TurnError
+from flood_agent import ai_cell_run
+from flood_agent.events import DisplayEvent, TextDelta, TraceReady, TurnEnd, TurnError
 from flood_agent.llm import LLMError, TextChunk, ToolCallChunk
 
 SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
@@ -68,7 +68,7 @@ async def test_run_query_without_sql_is_an_error_result_and_counts_as_a_failed_a
     events = await collect(await make_agent(llm), "q")
     r = last_tool_result(llm.calls[1])
     assert r["success"] is False and "sql" in r["error"]
-    assert agent_mod.GIVE_UP_MESSAGE in text_of(events)
+    assert ai_cell_run.GIVE_UP_MESSAGE in text_of(events)
     assert isinstance(events[-1], TurnEnd)
 
 
@@ -160,10 +160,10 @@ async def test_steps_exhausted_tells_the_user_and_saves_the_trace(make_agent):
     agent = await make_agent(llm, max_llm_steps=2)
     nb = agent.create_notebook()
     events = await collect(agent, "q", nb)
-    assert agent_mod.STEP_LIMIT_MESSAGE in text_of(events)
+    assert ai_cell_run.STEP_LIMIT_MESSAGE in text_of(events)
     assert any(isinstance(e, TraceReady) for e in events) and isinstance(events[-1], TurnEnd)
     saved = run_of(agent, nb)["messages"]
-    assert saved[-1] == {"role": "assistant", "content": agent_mod.STEP_LIMIT_MESSAGE}
+    assert saved[-1] == {"role": "assistant", "content": ai_cell_run.STEP_LIMIT_MESSAGE}
     assert_valid_history(saved)
 
 
@@ -263,7 +263,7 @@ async def kill_mcp_servers_and_settle(agent):
     """Kill the server and wait until the Agent's connection has noticed, as it would between real turns."""
     kill_mcp_servers()
     deadline = asyncio.get_running_loop().time() + 5
-    while agent._connection.alive:
+    while agent.mcp_server_alive:
         assert asyncio.get_running_loop().time() < deadline, "the connection never noticed the kill"
         await asyncio.sleep(0.01)
 
@@ -443,7 +443,7 @@ async def test_connection_start_after_aclose_or_twice_fails_clearly(build_agent)
     from flood_agent.mcp_connection import McpConnection
 
     agent = build_agent(ScriptedLLM())
-    conn = McpConnection(agent._transport())
+    conn = McpConnection(agent.transport())
     await conn.start()
     with pytest.raises(RuntimeError, match="already started"):
         await conn.start()

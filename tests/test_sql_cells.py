@@ -10,11 +10,12 @@ import logging
 import sqlite3
 import threading
 
+import pytest
 from conftest import DAY, Clock, ScriptedLLM
 
 from flood_agent import queries
-from flood_agent.agent import CountEvent, DisplayEvent, TurnEnd
 from flood_agent.catalog import CellRun
+from flood_agent.events import CountEvent, DisplayEvent, TurnEnd
 from flood_agent.llm import TextChunk
 
 SELECT = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
@@ -498,3 +499,14 @@ async def test_closing_the_agent_stops_a_running_sql_cell_and_waits_for_its_quer
 
     await asyncio.wait_for(task, 10)
     assert run_of(agent, nb, 0)["status"] == "stopped"
+
+
+async def test_a_sql_cell_cannot_run_once_the_agent_is_closed(build_agent):
+    agent = build_agent(ScriptedLLM())
+    nb = agent.create_notebook()
+    cell = agent.add_sql_cell(nb, sql=SELECT)
+    await agent.aclose()
+
+    with pytest.raises(RuntimeError, match="closed"):
+        await run(agent, nb, cell)
+    assert agent.notebooks.cell(cell)["run"] is None  # no Run was started

@@ -7,8 +7,10 @@ import pytest
 from conftest import ScriptedLLM, collect, tool_call
 from pydantic import ValidationError
 
-from flood_agent.agent import STEP_LIMIT_MESSAGE, Agent, TextDelta
+from flood_agent.agent import Agent
+from flood_agent.ai_cell_run import STEP_LIMIT_MESSAGE
 from flood_agent.config import DEFAULTS_FILE, Settings, render_env_example
+from flood_agent.events import TextDelta
 from flood_agent.llm import TextChunk
 
 ENV_EXAMPLE = Path(__file__).parent.parent / ".env.example"

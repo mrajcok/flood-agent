@@ -21,31 +21,18 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from flood_agent import dev_tools, lookup_tables, queries
-from flood_agent.agent import (
-    NO_MODEL,
-    Agent,
-    CountEvent,
-    DisplayEvent,
-    FlagEvent,
-    LlmCallStarted,
-    NotebookBusy,
-    NotRefreshable,
-    RefreshFailed,
-    RefreshInProgress,
-    TablesChoice,
-    TextDelta,
-    TraceLive,
-    TurnEnd,
-    resolve_chart_data,
-)
+from flood_agent.agent import NO_MODEL, Agent, NotebookBusy, NotRefreshable, RefreshFailed, TablesChoice
 from flood_agent.ai_cell_context import without_stop_note
+from flood_agent.ai_cell_run import resolve_chart_data
 from flood_agent.catalog import TableExpired
 from flood_agent.cell_kinds import MARKDOWN
 from flood_agent.context_usage import context_usage
+from flood_agent.events import CountEvent, DisplayEvent, FlagEvent, LlmCallStarted, TextDelta, TraceLive, TurnEnd
 from flood_agent.lookup_tables import InvalidLookupTable
 from flood_agent.notebooks import COUNT_KIND, DEFAULT_MAX_ROWS
 from flood_agent.queries import InvalidSort
 from flood_agent.show_commands import DESCRIBE_TABLE, SHOW_COMMANDS, SHOW_IN_TEXTBOX, is_show_statement, statement_of
+from flood_agent.table_replacement import RefreshInProgress
 from flood_agent.trace import short_model, split_system_prompt
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))

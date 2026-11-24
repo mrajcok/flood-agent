@@ -138,3 +138,70 @@ def test_a_new_sql_cell_starts_with_the_last_row_cap_run():
 
 def test_a_new_sql_cell_with_no_earlier_run_starts_with_the_default_row_cap():
     assert starting_sql_draft(None) == SqlDraft("", DEFAULT_MAX_ROWS, "", "")
+
+
+# --- Edited, not run (#181) -------------------------------------------------------------------------------------
+
+AI_RUN = {"id": "r1", "status": "ok", "prompt": "top ports", "settings": {"model": "m/x", "effort": "high", "max_rows": 50}}
+
+
+def _ai(prompt="top ports", model="m/x", effort="high", max_rows=50, run=None):
+    return typed_cell(_row("ai", {"prompt": prompt, "model": model, "effort": effort, "max_rows": max_rows}, run),
+                      DEFAULT_MODEL)
+
+
+def test_an_ai_cell_never_run_is_not_edited():
+    assert not _ai().edited
+
+
+def test_an_ai_cell_whose_draft_is_what_it_ran_is_not_edited():
+    assert not _ai(run=AI_RUN).edited
+
+
+def test_an_ai_cell_differing_from_its_run_only_in_spacing_is_not_edited():
+    assert not _ai(prompt="  top\n\n   ports\t", run=AI_RUN).edited
+
+
+def test_an_ai_cell_with_a_changed_prompt_is_edited():
+    assert _ai(prompt="top hosts", run=AI_RUN).edited
+
+
+def test_an_ai_cell_with_a_changed_model_effort_or_row_cap_is_edited():
+    assert _ai(model="m/y", run=AI_RUN).edited
+    assert _ai(effort="low", run=AI_RUN).edited
+    assert _ai(effort=None, run=AI_RUN).edited
+    assert _ai(max_rows=51, run=AI_RUN).edited
+
+
+def _sql(sql="SELECT 1", max_rows=20, command="", table="", run=None):
+    return typed_cell(_row("sql", {"sql": sql, "max_rows": max_rows, "command": command, "table": table}, run),
+                      DEFAULT_MODEL)
+
+
+def _sql_run(statement="SELECT 1", max_rows=20, command=""):
+    return {"id": "r1", "status": "ok", "prompt": statement, "settings": {"max_rows": max_rows, "command": command}}
+
+
+def test_a_sql_cell_never_run_is_not_edited():
+    assert not _sql().edited
+
+
+def test_a_sql_cell_whose_draft_is_what_it_ran_is_not_edited():
+    assert not _sql(run=_sql_run()).edited
+    assert not _sql(sql="", command="DESCRIBE TABLE", table="flows",
+                    run=_sql_run("DESCRIBE TABLE flows", command="DESCRIBE TABLE")).edited
+
+
+def test_a_sql_cell_differing_from_its_run_only_in_spacing_is_not_edited():
+    assert not _sql(sql="SELECT\n    1  ", run=_sql_run("  SELECT 1")).edited
+
+
+def test_a_sql_cell_with_a_changed_statement_is_edited():
+    assert _sql(sql="SELECT 2", run=_sql_run()).edited
+
+
+def test_a_sql_cell_with_a_changed_command_described_table_or_row_cap_is_edited():
+    assert _sql(command="SHOW TABLES", run=_sql_run()).edited
+    assert _sql(sql="", command="DESCRIBE TABLE", table="hosts",
+                run=_sql_run("DESCRIBE TABLE flows", command="DESCRIBE TABLE")).edited
+    assert _sql(max_rows=21, run=_sql_run()).edited

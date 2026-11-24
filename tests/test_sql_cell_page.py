@@ -33,8 +33,10 @@ def test_a_sql_cell_is_added_run_and_shown_without_the_llm(build_agent, web_clie
     assert "no such column: nope" in failed and "Only metadata about these results" not in failed
 
 
-def test_an_edited_sql_cell_is_marked_edited_not_run_and_a_never_run_one_is_not(build_agent, web_client):
-    client = web_client(build_agent(ScriptedLLM()))
+def test_the_edited_not_run_marker_on_a_sql_cell_is_the_typed_cells_answer(build_agent, web_client):
+    """The rule's cases are in test_cell.py; here, only that the page shows what the typed Cell answers."""
+    agent = build_agent(ScriptedLLM())
+    client = web_client(agent)
     nb, first = new_notebook(client)
     added = client.post(f"/n/{nb}/cells", data={"kind": "sql", "after": first})
     cell = re.search(r'data-cell-id="(\w+)"', added.text).group(1)
@@ -43,16 +45,9 @@ def test_an_edited_sql_cell_is_marked_edited_not_run_and_a_never_run_one_is_not(
         return 'data-edited="true"' in client.get(f"/n/{nb}/cells/{cell}").text
 
     sql = "SELECT dport FROM flows"
-    client.post(f"/n/{nb}/cells/{cell}/draft", data={"sql": "SELECT 1 AS one", "max_rows": "10"})
-    assert not edited()  # never run: nothing to be edited against
     client.post(f"/n/{nb}/cells/{cell}/run", data={"sql": sql, "max_rows": "10"})
     client.get(f"/n/{nb}/cells/{cell}/stream")
-    assert not edited()
-    client.post(f"/n/{nb}/cells/{cell}/draft", data={"sql": "SELECT  dport\n  FROM flows ", "max_rows": "10"})
-    assert not edited()  # only the spacing changed
-    for change in ({"sql": "SELECT sip FROM flows"}, {"max_rows": "5"}, {"command": "SHOW TABLES"}):
-        client.post(f"/n/{nb}/cells/{cell}/draft", data={"sql": sql, "max_rows": "10", **change})
-        page = client.get(f"/n/{nb}/cells/{cell}").text
-        assert 'data-edited="true"' in page and "edited, not run" in page, change
-    client.post(f"/n/{nb}/cells/{cell}/draft", data={"sql": sql, "max_rows": "10"})
-    assert not edited()  # back to what ran
+    assert not agent.cell(cell).edited and not edited()
+    client.post(f"/n/{nb}/cells/{cell}/draft", data={"sql": "SELECT sip FROM flows", "max_rows": "10"})
+    page = client.get(f"/n/{nb}/cells/{cell}").text
+    assert agent.cell(cell).edited and 'data-edited="true"' in page and "edited, not run" in page

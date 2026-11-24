@@ -25,14 +25,14 @@ from flood_agent.agent import NO_MODEL, Agent, NotebookBusy, NotRefreshable, Ref
 from flood_agent.ai_cell_context import without_stop_note
 from flood_agent.ai_cell_run import resolve_chart_data
 from flood_agent.catalog import TableExpired
-from flood_agent.cell import UsableModel, starting_ai_draft, starting_sql_draft
+from flood_agent.cell import AiCell, SqlCell, UsableModel, starting_ai_draft, starting_sql_draft, typed_cell
 from flood_agent.cell_kinds import AI, MARKDOWN, SQL
 from flood_agent.context_usage import context_usage
 from flood_agent.events import CountEvent, DisplayEvent, FlagEvent, LlmCallStarted, TextDelta, TraceLive, TurnEnd
 from flood_agent.lookup_tables import InvalidLookupTable
-from flood_agent.notebooks import COUNT_KIND, DEFAULT_MAX_ROWS
+from flood_agent.notebooks import COUNT_KIND
 from flood_agent.queries import InvalidSort
-from flood_agent.show_commands import DESCRIBE_TABLE, SHOW_COMMANDS, SHOW_IN_TEXTBOX, is_show_statement, statement_of
+from flood_agent.show_commands import DESCRIBE_TABLE, SHOW_COMMANDS, SHOW_IN_TEXTBOX, is_show_statement
 from flood_agent.table_replacement import RefreshInProgress
 from flood_agent.trace import short_model, split_system_prompt
 
@@ -110,11 +110,6 @@ def live_event_sse(ev, key: str, live: LiveCounter, refreshable_counts: bool = T
     if isinstance(ev, FlagEvent):
         return _sse("flag", TEMPLATES.get_template("flag_note.html").render(flags=ev.items))
     return None
-
-
-def _squash(text: str) -> str:
-    """Text with every run of whitespace as one space and none at the ends: spacing alone is not an edit."""
-    return " ".join(str(text).split())
 
 
 def _table_display_urls(result_table: str) -> dict:
@@ -274,11 +269,18 @@ def create_app(
                                      expired) for d in embedded]
             return {"id": cell["id"], "notebook_id": cell["notebook_id"], "kind": MARKDOWN,
                     "text": draft.get("text", ""), "send_to_ai": bool(draft.get("send_to_ai")), "displays": displays}
-        model = draft.get("model") or default_model
+        typed = typed_cell(cell, default_model)  # its Draft fields and "edited" come from the Cell module
+        assert isinstance(typed, AiCell | SqlCell)
+        if isinstance(typed, AiCell):
+            model, effort = typed.draft.model, typed.draft.effort or ""
+            prompt, sql, command, table = typed.draft.prompt, "", "", ""
+        else:
+            model, effort = default_model, ""
+            prompt, sql, command, table = "", typed.draft.sql, typed.draft.command, typed.draft.table
         view = {
-            "id": cell["id"], "notebook_id": cell["notebook_id"], "kind": cell["kind"], "prompt": draft.get("prompt", ""),
-            "sql": draft.get("sql", ""), "command": draft.get("command") or "", "table": draft.get("table") or "",
-            "model": model, "effort": draft.get("effort") or "", "max_rows": draft.get("max_rows") or DEFAULT_MAX_ROWS,
+            "id": cell["id"], "notebook_id": cell["notebook_id"], "kind": cell["kind"], "prompt": prompt,
+            "sql": sql, "command": command, "table": table,
+            "model": model, "effort": effort, "max_rows": typed.draft.max_rows,
             "running": starting, "streaming": starting, "polling": False, "status": None, "number": None,
             "output": [], "footer": None, "ran": None, "edited": False, "earlier_tables": [],
             "stale": stale,
@@ -297,16 +299,12 @@ def create_app(
             view["refreshed_at_ms"] = refreshed_elsewhere(run)
             view["ran"] = {"statement": run["prompt"], "command": run["settings"].get("command") or "",
                            "max_rows": run["settings"]["max_rows"]}
-            now = (statement_of(view["command"], view["table"]) if view["command"] else view["sql"],
-                   view["command"], view["max_rows"])
-            ran_sql = tuple(view["ran"].values())
-            view["edited"] = (_squash(now[0]), *now[1:]) != (_squash(ran_sql[0]), *ran_sql[1:])
+            view["edited"] = typed.edited
             return view
         ran = run["settings"]
         view["ran"] = {"prompt": run["prompt"], "model": ran["model"], "effort": ran["effort"] or "",
                        "max_rows": ran["max_rows"]}
-        ran_prompt, *ran_settings = view["ran"].values()
-        view["edited"] = (_squash(draft["prompt"]), model, view["effort"], view["max_rows"]) != (_squash(ran_prompt), *ran_settings)
+        view["edited"] = typed.edited
         if not view["running"]:
             view["earlier_tables"] = [
                 {"name": t.name, "settings_url": _table_display_urls(t.name)["settings_url"]}

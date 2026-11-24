@@ -17,6 +17,7 @@ from flood_agent import queries
 from flood_agent.catalog import CellRun
 from flood_agent.events import CountEvent, DisplayEvent, TurnEnd
 from flood_agent.llm import TextChunk
+from flood_agent.notebooks import DEFAULT_MAX_ROWS
 
 SELECT = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
 SLOW = ("WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 400000000) "
@@ -30,7 +31,7 @@ async def run(agent, notebook_id, cell_id):
 
 async def run_sql(agent, notebook_id, cell_id):
     """Run a SQL Cell through the SQL Cell Run module."""
-    return [ev async for ev in agent.sql_cells.run(agent.notebooks.cell(cell_id))]
+    return [ev async for ev in agent.sql_cells.run(agent.cell(cell_id))]
 
 
 def run_of(agent, notebook_id, index):
@@ -124,6 +125,16 @@ async def test_a_query_ending_in_limit_is_refused_with_a_pointer_to_the_row_cap(
     r = agent.notebooks.cell(cell)["run"]
     assert r["status"] == "failed" and "row cap" in r["error"]
     assert agent.tables.tables_of_run(cell, r["id"]) == []
+
+
+async def test_an_old_sql_cell_saved_without_a_row_cap_runs_with_the_default_row_cap(build_agent):
+    agent = build_agent(ScriptedLLM())
+    nb = agent.create_notebook()
+    cell = agent.notebooks.add_cell(nb, "sql", {"sql": "SELECT dport FROM flows"})
+    await run(agent, nb, cell)
+
+    r = run_of(agent, nb, 0)
+    assert r["status"] == "ok" and r["settings"] == {"max_rows": DEFAULT_MAX_ROWS, "command": ""}
 
 
 async def test_re_running_replaces_the_table_under_the_same_name(build_agent):

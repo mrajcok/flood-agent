@@ -207,5 +207,5 @@ async def test_an_ai_cell_cannot_run_once_its_runs_are_closed(make_agent):
     await agent.ai_cells.aclose()
 
     with pytest.raises(RuntimeError, match="closed"):
-        [e async for e in agent.ai_cells.run(agent.notebooks.cell(cell))]
+        [e async for e in agent.ai_cells.run(agent.cell(cell))]
     assert agent.notebooks.cell(cell)["run"] is None

@@ -20,6 +20,7 @@ from mcp.types import TextContent
 
 from flood_agent import ai_cell_context, flagging
 from flood_agent.catalog import Catalog, CellRun, Table
+from flood_agent.cell import AiCell
 from flood_agent.events import (
     CountEvent,
     DisplayEvent,
@@ -36,7 +37,7 @@ from flood_agent.events import (
 from flood_agent.llm import LLMClient, LLMError, ModelSpec, TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_connection import McpConnection
 from flood_agent.mcp_protocol import QUERY_TOOLS
-from flood_agent.notebooks import COUNT_KIND, DEFAULT_MAX_ROWS, NotebookStore, RunStatus
+from flood_agent.notebooks import COUNT_KIND, NotebookStore, RunStatus
 from flood_agent.semantic_layer import SemanticLayer
 from flood_agent.tool_outcome import Counted, DisplayMade, Failed, Outcome, ResultTableMade, Stopped, decode, project
 from flood_agent.trace import TraceBuilder, context_tokens
@@ -141,18 +142,18 @@ class AiCellRuns:
 
     def __init__(
         self, notebooks: NotebookStore, tables: Catalog, semantic_layer: SemanticLayer, client_for: ClientFactory,
-        connection: ConnectionProvider, default_model: str, spec_of: Callable[[str], ModelSpec | None],
+        connection: ConnectionProvider, spec_of: Callable[[str], ModelSpec | None],
         max_llm_steps: int, max_failed_attempts: int, clock: Callable[[], int],
     ):
         self.notebooks, self.tables, self.semantic_layer = notebooks, tables, semantic_layer
         self.client_for, self._connection = client_for, connection
-        self.default_model, self.spec_of = default_model, spec_of
+        self.spec_of = spec_of
         self.max_llm_steps, self.max_failed_attempts, self.clock = max_llm_steps, max_failed_attempts, clock
         self.tasks: set[asyncio.Task] = set()  # every running Run's producer task
         self._keyed: dict[str, asyncio.Task] = {}  # running Runs by cell id
         self._closed = False
 
-    async def run(self, cell: dict) -> AsyncIterator[Event]:
+    async def run(self, cell: AiCell) -> AsyncIterator[Event]:
         """Run an AI Cell with what its Draft holds and stream its events.
 
         It is sent the system prompt, then the AI Cells above it in order (each as its latest Run stored it:
@@ -187,13 +188,11 @@ class AiCellRuns:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    def _start(self, cell: dict) -> tuple[asyncio.Task, _RunQueue, Callable[[], None]]:
-        notebook_id, cell_id, draft = cell["notebook_id"], cell["id"], cell["draft"]
+    def _start(self, cell: AiCell) -> tuple[asyncio.Task, _RunQueue, Callable[[], None]]:
+        notebook_id, cell_id, prompt, settings = cell.notebook_id, cell.id, cell.prompt, cell.run_settings
         context = ai_cell_context.context_above(self.notebooks.cells(notebook_id), cell_id)
         history, above, fingerprint = context.messages, context.above, context.fingerprint
-        settings = {"model": draft.get("model") or self.default_model, "effort": draft.get("effort"),
-                    "max_rows": draft.get("max_rows") or DEFAULT_MAX_ROWS}
-        run_id = self.notebooks.start_run(cell_id, draft["prompt"], settings, fingerprint)
+        run_id = self.notebooks.start_run(cell_id, prompt, settings.stored(), fingerprint)
         run = CellRun(cell_id, run_id)
         session_id = f"notebook-{notebook_id}"  # lets OpenRouter route every step of every cell to one cache
 
@@ -201,8 +200,8 @@ class AiCellRuns:
             return ai_cell_context.listed_result_tables(above, cell_id, run_id, self.tables.tables_of_run)
 
         queue = _RunQueue()
-        active = _ActiveRun(run, draft["prompt"], prompt_tables, session_id, queue, settings["model"], settings["effort"],
-                            settings["max_rows"])
+        active = _ActiveRun(run, prompt, prompt_tables, session_id, queue, settings.model, settings.effort,
+                            settings.max_rows)
         task = asyncio.create_task(self._produce(history, active))
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)

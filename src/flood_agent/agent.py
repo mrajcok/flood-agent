@@ -19,6 +19,7 @@ from mcp import StdioServerParameters
 from flood_agent import ai_cell_context, queries, table_names
 from flood_agent.ai_cell_run import AiCellRuns, ClientFactory
 from flood_agent.catalog import Catalog, Table, canonical
+from flood_agent.cell import AiCell, Cell, MarkdownCell, SqlCell, typed_cell
 from flood_agent.cell_kinds import AI, MARKDOWN, SQL
 from flood_agent.events import Event
 from flood_agent.llm import ModelSpec
@@ -101,7 +102,7 @@ class Agent:
                                      config.results_db, config.query_timeout_s, config.clock)
         # `client_for` is looked up on each Run, so a client swapped in later is the one used.
         self.ai_cells = AiCellRuns(self.notebooks, self.tables, self.semantic_layer, lambda model: self.client_for(model),
-                                   self._ensure_connection, config.model, config.spec_of, config.max_llm_steps,
+                                   self._ensure_connection, config.spec_of, config.max_llm_steps,
                                    config.max_failed_attempts, config.clock)
         self._connection: McpConnection | None = None
         self._restart_lock = asyncio.Lock()
@@ -346,23 +347,29 @@ class Agent:
         the SQL Cell Run module, and needs no `start()`; an AI Cell runs through the AI Cell Run module, and needs
         `start()` first. Its Run replaces the cell's earlier one. `NotebookBusy` if a cell of this notebook is
         already running, KeyError if the cell is not in the notebook."""
-        cell = self.notebooks.cell(cell_id)
-        if cell["notebook_id"] != notebook_id:
+        cell = self.cell(cell_id)
+        if cell.notebook_id != notebook_id:
             raise KeyError(cell_id)
-        if cell["kind"] != SQL and self._connection is None:
+        if isinstance(cell, MarkdownCell):
+            raise ValueError("A Markdown Cell is never Run.")
+        if isinstance(cell, AiCell) and self._connection is None:
             raise RuntimeError("Agent not started: call `await agent.start()` or use `async with agent`")
         if notebook_id in self._running_cells:
             raise NotebookBusy("A cell in this notebook is already running.")
         self._running_cells[notebook_id] = cell_id
-        runs = self.sql_cells if cell["kind"] == SQL else self.ai_cells
+        run = self.sql_cells.run(cell) if isinstance(cell, SqlCell) else self.ai_cells.run(cell)
         try:
             # Closed with this stream, so that an abandoned stream (the page was closed) stops the Run now.
-            async with aclosing(cast(AsyncGenerator, runs.run(cell))) as events:
+            async with aclosing(cast(AsyncGenerator, run)) as events:
                 async for item in events:
                     yield item
         finally:
             if self._running_cells.get(notebook_id) == cell_id:
                 del self._running_cells[notebook_id]
+
+    def cell(self, cell_id: str) -> Cell:
+        """The Cell, typed, with the configured default model standing in for a missing one. KeyError if unknown."""
+        return typed_cell(self.notebooks.cell(cell_id), self.config.model)
 
     def stale_cells(self, notebook_id: str) -> set[str]:
         """The ids of the notebook's AI Cells that are Stale (see `ai_cell_context.stale_cells`)."""

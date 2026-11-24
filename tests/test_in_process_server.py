@@ -3,7 +3,7 @@
 import pytest
 from conftest import ScriptedLLM, collect, last_tool_result, mcp_children, tool_call
 
-from flood_agent.agent import TurnEnd
+from flood_agent.events import TurnEnd
 from flood_agent.llm import TextChunk
 
 

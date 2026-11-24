@@ -6,7 +6,8 @@ import re
 import pytest
 from conftest import canned_params, leakable_values
 
-from flood_agent.agent import NO_MODEL, DisplayEvent, TextDelta, TraceReady, TurnError
+from flood_agent.agent import NO_MODEL
+from flood_agent.events import DisplayEvent, TextDelta, TraceReady, TurnError
 from flood_agent.fake_llm import FakeClient, load_canned_prompts, parent_of
 
 CANNED = load_canned_prompts()

@@ -3,7 +3,7 @@
 import pytest
 from conftest import Clock, ScriptedLLM, all_telemetry_values, ask, collect, last_tool_result, query_limits, tool_call
 
-from flood_agent.agent import DisplayEvent
+from flood_agent.events import DisplayEvent
 from flood_agent.llm import TextChunk
 
 BY_PORT = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport"

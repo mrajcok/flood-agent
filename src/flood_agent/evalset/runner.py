@@ -27,12 +27,13 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from flood_agent import queries
-from flood_agent.agent import Agent, TraceEntry, TraceReady, TurnError
+from flood_agent.agent import Agent
 from flood_agent.config import Settings
 from flood_agent.evalset.client import UsageMeter
 from flood_agent.evalset.compare import DEFAULT_TOLERANCE, Comparison, compare
 from flood_agent.evalset.golden import Question, load_golden, run_reference
 from flood_agent.evalset.notebook import add_cells_above, run_ai_cell
+from flood_agent.events import TraceEntry, TraceReady, TurnError
 from flood_agent.generator import END_MS
 from flood_agent.llm import OpenRouterClient
 

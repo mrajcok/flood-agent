@@ -3,7 +3,7 @@
 import pytest
 from conftest import ScriptedLLM, all_telemetry_values, collect, last_tool_result, tool_call
 
-from flood_agent.agent import DisplayEvent
+from flood_agent.events import DisplayEvent
 from flood_agent.llm import TextChunk
 
 CHART_SQL = "SELECT etime, SUM(bytes) AS total_bytes FROM flows GROUP BY etime"

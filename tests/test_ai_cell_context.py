@@ -14,8 +14,8 @@ from flood_agent import ai_cell_context as ctx
 GOLDEN = json.loads((Path(__file__).parent / "ai_cell_context_golden.json").read_text())
 
 
-def _run(id, status="ok", messages=(), fp="x", trace=None):
-    return {"id": id, "status": status, "messages": list(messages), "context_fingerprint": fp, "trace": trace}
+def _run(id, status="ok", messages=(), fp="x", error=None):
+    return {"id": id, "status": status, "messages": list(messages), "context_fingerprint": fp, "error": error}
 
 
 def _cell(id, kind, draft=None, run=None):
@@ -47,10 +47,9 @@ def _cells():
             {"role": "user", "content": "q2"}, {"role": "assistant", "content": "partial\n\n*Stopped by user.*"}])),
         _cell("ai2b", "ai", {"prompt": "q2b"}, _run("ra2b", "stopped", [{"role": "user", "content": "q2b"}])),
         _cell("ai3", "ai", {"prompt": "q3"}, _run("ra3", "failed", [
-            {"role": "user", "content": "q3"}, {"role": "assistant", "content": "boom"}],
-            trace={"entries": [{"kind": "error", "message": "boom"}]})),
+            {"role": "user", "content": "q3"}, {"role": "assistant", "content": "boom"}], error="boom")),
         _cell("ai3b", "ai", {"prompt": "q3b"}, _run("ra3b", "failed", [
-            {"role": "user", "content": "q3b"}, {"role": "assistant", "content": "txt"}])),
+            {"role": "user", "content": "q3b"}, {"role": "assistant", "content": "txt"}], error="The Run did not finish.")),
         _cell("ai4", "ai", {"prompt": "q4"}, _run("ra4", messages=[  # corrupt: a call with a missing result, an orphan
             {"role": "user", "content": "q4"},
             {"role": "assistant", "content": None, "tool_calls": [_call("d1"), _call("d2")]},

@@ -21,31 +21,18 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from flood_agent import dev_tools, lookup_tables, queries
-from flood_agent.agent import (
-    NO_MODEL,
-    Agent,
-    CountEvent,
-    DisplayEvent,
-    FlagEvent,
-    LlmCallStarted,
-    NotebookBusy,
-    NotRefreshable,
-    RefreshFailed,
-    RefreshInProgress,
-    TablesChoice,
-    TextDelta,
-    TraceLive,
-    TurnEnd,
-    resolve_chart_data,
-)
-from flood_agent.ai_cell_context import STOPPED_NOTE
+from flood_agent.agent import NO_MODEL, Agent, NotebookBusy, NotRefreshable, RefreshFailed, TablesChoice
+from flood_agent.ai_cell_context import without_stop_note
+from flood_agent.ai_cell_run import resolve_chart_data
 from flood_agent.catalog import TableExpired
 from flood_agent.cell_kinds import MARKDOWN
 from flood_agent.context_usage import context_usage
+from flood_agent.events import CountEvent, DisplayEvent, FlagEvent, LlmCallStarted, TextDelta, TraceLive, TurnEnd
 from flood_agent.lookup_tables import InvalidLookupTable
 from flood_agent.notebooks import COUNT_KIND, DEFAULT_MAX_ROWS
 from flood_agent.queries import InvalidSort
 from flood_agent.show_commands import DESCRIBE_TABLE, SHOW_COMMANDS, SHOW_IN_TEXTBOX, is_show_statement, statement_of
+from flood_agent.table_replacement import RefreshInProgress
 from flood_agent.trace import short_model, split_system_prompt
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -262,7 +249,7 @@ def create_app(
                 continue
             m = item["message"]
             if m["role"] == "assistant" and m.get("content"):
-                text = m["content"].removesuffix(STOPPED_NOTE).rstrip()  # the cell says it in its own words
+                text = without_stop_note(m["content"])  # the cell says it in its own words
                 if text:
                     items.append({"type": "assistant", "text": text})
         return items
@@ -303,7 +290,7 @@ def create_app(
         if starting or run is None:
             return view
         view["number"], view["status"] = run["number"], run["status"]
-        if run["status"] == "running" and agent.running_cell(cell["notebook_id"]) == cell["id"]:
+        if run["status"] == "running":
             view["running"] = view["polling"] = True  # opened mid-run: nothing streams to this page, so it re-fetches
         view["output"] = output_items(run, refreshable_counts=cell["kind"] != "sql")
         if cell["kind"] == "sql":
@@ -331,7 +318,7 @@ def create_app(
         view["footer"] = {
             "started_at_ms": run["started_at"], "ran_utc": time.strftime("%H:%M UTC", time.gmtime(run["started_at"] / 1000)),
             "settings": settings_label(ran["model"], ran["effort"], ran["max_rows"]),
-            "stopped": run["status"] == "stopped", "failed": run["status"] == "failed", "trace": trace,
+            "stopped": run["status"] == "stopped", "failed": run["status"] == "failed", "error": run["error"], "trace": trace,
             "calls": trace["totals"]["llm_steps"] if trace else None,
             "cost": trace["totals"]["cost"] if trace else None,
             "context": usage(run["context_tokens"], ran["model"]),

@@ -8,8 +8,8 @@ import json
 import pytest
 from conftest import ScriptedLLM, collect, last_tool_result, mcp_children, run_of, tables_in, tool_call
 
-import flood_agent.agent as agent_mod
-from flood_agent.agent import DisplayEvent, TextDelta, TraceReady, TurnEnd, TurnError
+from flood_agent import ai_cell_run
+from flood_agent.events import DisplayEvent, TextDelta, TraceReady, TurnEnd, TurnError
 from flood_agent.llm import LLMError, TextChunk, ToolCallChunk
 
 SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
@@ -68,7 +68,7 @@ async def test_run_query_without_sql_is_an_error_result_and_counts_as_a_failed_a
     events = await collect(await make_agent(llm), "q")
     r = last_tool_result(llm.calls[1])
     assert r["success"] is False and "sql" in r["error"]
-    assert agent_mod.GIVE_UP_MESSAGE in text_of(events)
+    assert ai_cell_run.GIVE_UP_MESSAGE in text_of(events)
     assert isinstance(events[-1], TurnEnd)
 
 
@@ -137,6 +137,21 @@ async def test_a_cell_below_is_sent_a_repaired_copy_of_a_corrupt_saved_run(make_
     assert [m["role"] for m in msgs] == ["user", "user", "assistant", "tool", "assistant"]
 
 
+async def test_a_run_left_running_by_a_killed_app_is_failed_at_the_next_start(make_agent):
+    killed = await make_agent(ScriptedLLM())
+    nb = killed.create_notebook()
+    cut_off = killed.add_ai_cell(nb, prompt="hi")
+    killed.notebooks.start_run(cut_off, "hi", {"model": "m", "effort": None, "max_rows": 10}, "f")  # never finished
+
+    llm = ScriptedLLM([TextChunk("ok")])
+    restarted = await make_agent(llm)  # a new app on the same app database
+    run = run_of(restarted, nb, 0)
+    assert (run["status"], run["error"]) == ("failed", "The app stopped during this Run.")
+
+    await collect(restarted, "next", nb)
+    assert "failed: The app stopped during this Run." in [m["content"] for m in llm.calls[0]]
+
+
 async def test_steps_exhausted_tells_the_user_and_saves_the_trace(make_agent):
     llm = ScriptedLLM(
         [tool_call("run_query", "c1", sql=SQL, title="t")],
@@ -145,10 +160,10 @@ async def test_steps_exhausted_tells_the_user_and_saves_the_trace(make_agent):
     agent = await make_agent(llm, max_llm_steps=2)
     nb = agent.create_notebook()
     events = await collect(agent, "q", nb)
-    assert agent_mod.STEP_LIMIT_MESSAGE in text_of(events)
+    assert ai_cell_run.STEP_LIMIT_MESSAGE in text_of(events)
     assert any(isinstance(e, TraceReady) for e in events) and isinstance(events[-1], TurnEnd)
     saved = run_of(agent, nb)["messages"]
-    assert saved[-1] == {"role": "assistant", "content": agent_mod.STEP_LIMIT_MESSAGE}
+    assert saved[-1] == {"role": "assistant", "content": ai_cell_run.STEP_LIMIT_MESSAGE}
     assert_valid_history(saved)
 
 
@@ -248,7 +263,7 @@ async def kill_mcp_servers_and_settle(agent):
     """Kill the server and wait until the Agent's connection has noticed, as it would between real turns."""
     kill_mcp_servers()
     deadline = asyncio.get_running_loop().time() + 5
-    while agent._connection.alive:
+    while agent.mcp_server_alive:
         assert asyncio.get_running_loop().time() < deadline, "the connection never noticed the kill"
         await asyncio.sleep(0.01)
 
@@ -428,7 +443,7 @@ async def test_connection_start_after_aclose_or_twice_fails_clearly(build_agent)
     from flood_agent.mcp_connection import McpConnection
 
     agent = build_agent(ScriptedLLM())
-    conn = McpConnection(agent._transport())
+    conn = McpConnection(agent.transport())
     await conn.start()
     with pytest.raises(RuntimeError, match="already started"):
         await conn.start()
@@ -450,7 +465,7 @@ async def test_agent_aclose_cancels_and_awaits_in_flight_turns(build_agent):
     gen = agent.run_cell(nb, agent.add_ai_cell(nb, prompt="q"))
     first = asyncio.create_task(gen.__anext__())
     await asyncio.wait_for(started.wait(), 10)
-    producers = set(agent._turn_tasks)
+    producers = set(agent.ai_cells.tasks)
     assert producers
     await agent.aclose()
     assert all(t.done() for t in producers)

@@ -89,7 +89,7 @@ A Cell with a prompt and its own model, Effort and row cap. Running it asks the 
 _Avoid_: Prompt cell, chat cell
 
 **Run**:
-Executing a SQL Cell or an AI Cell. A Cell keeps only its latest Run, which is what it shows and what AI Cells below it see; a new Run replaces the old one. A Run is stopped, failed or ok, and records the settings it ran with. Retires "turn".
+Executing a SQL Cell or an AI Cell. A Cell keeps only its latest Run, which is what it shows and what AI Cells below it see; a new Run replaces the old one. A Run is stopped, failed or ok, and records the settings it ran with. A failed Run keeps a value-free reason, which is what AI Cells below are told. A Run the app was killed during is failed when the app next starts. Retires "turn".
 _Avoid_: Turn, execution, exchange
 
 **Draft**:
@@ -118,7 +118,7 @@ _Avoid_: Count result
 
 **Trace**:
 The per-Run record of an AI Cell of what passed between the Agent and the LLM — prompts, generated SQL, Query Metadata, errors, Chart Specs, cost and timings — shown to the user on demand. While the Cell runs, the same entries appear live, one section per LLM call, each collapsing when the next call starts; the live view is replaced by the Trace line in the Cell's footer when the Run ends.
-A user can **stop** a running Cell: what it had streamed is kept (in the page, the Run and the Trace, marked stopped), and AI Cells below see it as stopped.
+A user can **stop** a running Cell: what it had streamed is kept (in the page, the Run and the Trace, marked stopped), and AI Cells below see it as stopped. Closing the page mid-Run, or the app shutting down, stops it the same way.
 _Avoid_: Debug log, details
 
 **Query Plan**:

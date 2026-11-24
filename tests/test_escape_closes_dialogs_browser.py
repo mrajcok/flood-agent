@@ -4,7 +4,7 @@ from conftest import ScriptedLLM
 from playwright.sync_api import expect
 from test_explain_browser import trace_with
 from test_notebook_browser import run_in_new_notebook
-from test_stop_turn import HangingLLM
+from test_stop_run import HangingLLM
 
 
 def test_escape_closes_the_tables_dialog(live_page, build_agent):

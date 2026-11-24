@@ -6,7 +6,8 @@ A Run takes the Cell's Draft and runs one of three things:
 - a query, which makes a Result Table, or for a re-run puts new rows under the latest Run's own table through
   table replacement (ADR 0006)
 
-It records the Run in the NotebookStore: its status, its saved result, and the message AI Cells below are sent.
+It records the Run in the NotebookStore: its status (and, if it failed, its value-free error), its saved result,
+and the message AI Cells below are sent.
 That message is frozen at this Run, and from a table it carries only Query Metadata, never rows (ADR 0001).
 """
 
@@ -21,10 +22,10 @@ from pathlib import Path
 from typing import AsyncIterator, Callable
 
 from flood_agent import queries, table_names
-from flood_agent.ai_cell_context import SHOW_CELL_LABEL, SQL_CELL_LABEL
+from flood_agent.ai_cell_context import SHOW_CELL_LABEL, SQL_CELL_LABEL, STOPPED_BELOW
 from flood_agent.catalog import Catalog, CellRun, Table, TableExpired
 from flood_agent.events import CountEvent, DisplayEvent, Event, TurnEnd, TurnError
-from flood_agent.notebooks import COUNT_KIND, DEFAULT_MAX_ROWS, NotebookStore
+from flood_agent.notebooks import COUNT_KIND, DEFAULT_MAX_ROWS, NotebookStore, RunStatus
 from flood_agent.show_commands import SHOW_IN_TEXTBOX, ShowFailed, is_show_statement, run_show, statement_of
 from flood_agent.table_replacement import RefreshInProgress, ReplacementFailed, Rerun, TableReplacement
 
@@ -34,9 +35,9 @@ SHOW_ROWS_TO_AI = 100  # how many rows of a SHOW Cell's result an AI Cell below 
 CRASHED = "The query could not be run."
 
 
-# What the blocking part of a Run ended with. Each knows how it is saved with the Run (a stored format the page
-# and saved Notebooks read: keep its keys), how it reads to the AI Cells below, and what it shows: the Displays
-# saved with the Run and the events streamed before the end.
+# What the blocking part of a Run ended with. Each knows the Run's status, how it is saved with the Run (a stored
+# format the page and saved Notebooks read: keep its keys), how it reads to the AI Cells below, and what it shows:
+# the Displays saved with the Run and the events streamed before the end.
 
 _Shown = tuple[list[tuple], list[Event]]
 
@@ -46,10 +47,11 @@ class _ShowRows:
     columns: list[str]
     rows: list[list]
     command: str
-    status = "ok"
+    status: RunStatus = "ok"
+    error = None
 
     def saved(self) -> dict:
-        return {"status": "ok", "columns": self.columns, "rows": self.rows, "row_count": len(self.rows),
+        return {"columns": self.columns, "rows": self.rows, "row_count": len(self.rows),
                 "command": self.command}
 
     def detail(self) -> str:
@@ -67,10 +69,11 @@ class _ShowRows:
 @dataclass
 class _Count:
     value: int
-    status = "ok"
+    status: RunStatus = "ok"
+    error = None
 
     def saved(self) -> dict:
-        return {"status": "ok", "count": self.value}
+        return {"count": self.value}
 
     def detail(self) -> str:
         return f"Count: {self.value}"
@@ -87,10 +90,11 @@ class _TableMade:
     columns: list[dict]
     row_count: int
     truncated_to: int | None
-    status = "ok"
+    status: RunStatus = "ok"
+    error = None
 
     def saved(self) -> dict:  # the columns are the table's, not the Run's
-        return {"status": "ok", "table": self.name, "row_count": self.row_count, "truncated_to": self.truncated_to}
+        return {"table": self.name, "row_count": self.row_count, "truncated_to": self.truncated_to}
 
     def detail(self) -> str:
         meta: dict = {"result_table": self.name, "columns": self.columns, "row_count": self.row_count}
@@ -110,12 +114,12 @@ def _refused(text: str) -> "_Failed":
 
 @dataclass
 class _Failed:
-    error: str  # value-free: what the AI Cells below are sent
+    error: str  # value-free: stored on the Run, and what the AI Cells below are sent
     raw_error: str  # for the user, and logged
-    status = "failed"
+    status: RunStatus = "failed"
 
-    def saved(self) -> dict:
-        return {"status": "failed", "error": self.error, "raw_error": self.raw_error}
+    def saved(self) -> dict:  # the value-free error is the Run's
+        return {"raw_error": self.raw_error}
 
     def detail(self) -> str:
         return f"Failed: {self.error}"
@@ -126,13 +130,14 @@ class _Failed:
 
 @dataclass
 class _Stopped:
-    status = "stopped"
+    status: RunStatus = "stopped"
+    error = None
 
     def saved(self) -> dict:
-        return {"status": "stopped"}
+        return {}
 
     def detail(self) -> str:
-        return "(stopped by the user)"  # as an AI Cell's stopped Run reads below
+        return STOPPED_BELOW
 
     def shown(self, sql: str, clock: Callable[[], int]) -> _Shown:
         return [], []
@@ -150,11 +155,15 @@ class SqlCellRuns:
         self.notebooks, self.tables, self.replacement = notebooks, tables, replacement
         self.telemetry_db, self.results_db, self.timeout_s, self.clock = telemetry_db, results_db, timeout_s, clock
         self._running: dict[str, tuple[threading.Event, asyncio.Future]] = {}  # SQL Cell id -> its query's stop flag and thread
+        self._closed = False
 
     async def run(self, cell: dict) -> AsyncIterator[Event]:
         """Run a SQL Cell with what its Draft holds and stream its events: a table or Count Display, an error,
         then the end. Its Run replaces the Cell's earlier one. If the stream is abandoned (the client left, or
-        the app is closing), the query is stopped and waited for, and the Run is recorded as stopped."""
+        the app is closing), the query is stopped and waited for, and the Run is recorded as stopped.
+        RuntimeError after `aclose`."""
+        if self._closed:
+            raise RuntimeError("SQL Cell Runs are closed")
         cell_id, draft = cell["id"], cell["draft"]
         sql, max_rows = draft.get("sql", ""), draft.get("max_rows") or DEFAULT_MAX_ROWS
         command, table = draft.get("command") or "", draft.get("table") or ""
@@ -188,7 +197,7 @@ class SqlCellRuns:
         # The message is stored once, so what AI Cells below are sent is frozen at this Run.
         self.notebooks.add_step(run_id, [({"role": "user", "content": f"{label}\n{outcome.detail()}"}, displays)])
         self.notebooks.save_result(run_id, outcome.saved() | {"elapsed_s": elapsed_s})
-        self.notebooks.finish_run(run_id, outcome.status)
+        self.notebooks.finish_run(run_id, outcome.status, outcome.error)
         for event in events:
             yield event
         yield TurnEnd()
@@ -203,7 +212,9 @@ class SqlCellRuns:
         return True
 
     async def aclose(self) -> None:
-        """Stop every running SQL Cell's query and wait for its thread, so none is left using the databases."""
+        """Stop every running SQL Cell's query and wait for its thread, so none is left using the databases. No Run
+        starts after this."""
+        self._closed = True
         running = list(self._running.values())
         for stop, _ in running:
             stop.set()

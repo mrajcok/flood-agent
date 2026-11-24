@@ -7,9 +7,11 @@ from dataclasses import replace
 import pytest
 from conftest import ScriptedLLM, tool_call
 
-from flood_agent.agent import Agent, NotebookBusy, TextDelta, TraceReady
+from flood_agent.agent import Agent, NotebookBusy
 from flood_agent.catalog import CellRun
+from flood_agent.events import TextDelta, TraceReady
 from flood_agent.llm import TextChunk
+from flood_agent.notebooks import NotebookStore
 
 SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
 
@@ -227,3 +229,21 @@ async def test_the_last_settings_run_are_those_of_the_most_recently_started_run(
     await run(agent, nb, two)
     assert agent.notebooks.last_settings() == run_of(agent, nb, 1)["settings"]
     assert agent.notebooks.last_settings()["max_rows"] == 7
+
+
+def test_finishing_a_run_as_failed_needs_an_error_and_no_other_status_may_have_one(tmp_path):
+    store = NotebookStore(tmp_path / "app.db")
+    cell = store.add_ai_cell(store.create_notebook(), {"prompt": "q"})
+    run_id = store.start_run(cell, "q", {}, "")
+    with pytest.raises(ValueError):
+        store.finish_run(run_id, "failed")
+    for status in ("ok", "stopped"):
+        with pytest.raises(ValueError):
+            store.finish_run(run_id, status, "boom")
+    with pytest.raises(ValueError):
+        store.finish_run(run_id, "running")  # only starting a Run sets running
+    assert store.cell(cell)["run"]["status"] == "running"
+
+    store.finish_run(run_id, "failed", "The model gave no answer.")
+    run = store.cell(cell)["run"]
+    assert (run["status"], run["error"]) == ("failed", "The model gave no answer.")

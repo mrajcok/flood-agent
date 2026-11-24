@@ -4,7 +4,7 @@
 from conftest import ScriptedLLM, tool_call
 from test_notebooks import SQL, Slow
 
-from flood_agent.agent import TextDelta
+from flood_agent.events import TextDelta, TurnError
 from flood_agent.llm import LLMError, TextChunk
 
 
@@ -46,15 +46,28 @@ async def test_a_failed_run_reaches_the_cell_below_as_failed_with_a_value_free_e
     agent = await make_agent(ScriptedLLM(boom))
     nb = agent.create_notebook()
     a, b = agent.add_ai_cell(nb, prompt="ask A"), agent.add_ai_cell(nb, prompt="ask B")
-    await run(agent, nb, a)
-    assert agent.notebooks.cell(a)["run"]["status"] == "failed"
+    (shown,) = [e.message for e in await run(agent, nb, a) if isinstance(e, TurnError)]
+    failed = agent.notebooks.cell(a)["run"]
+    assert (failed["status"], failed["error"]) == ("failed", shown)
+    assert "upstream exploded" in shown
     scripted = ScriptedLLM([TextChunk("ok")])
     agent.client_for = lambda model: scripted
     await run(agent, nb, b)
 
-    below = [m["content"] for m in scripted.calls[0][1:]]
-    assert below[0] == "ask A" and below[2] == "ask B"
-    assert below[1].startswith("failed: ") and "upstream exploded" in below[1]
+    assert [m["content"] for m in scripted.calls[0][1:]] == ["ask A", f"failed: {shown}", "ask B"]
+
+
+async def test_a_failure_that_is_not_the_models_is_stored_as_the_message_the_analyst_was_shown(make_agent):
+    def boom(messages):
+        raise RuntimeError("secret value 10.1.2.3")
+
+    agent = await make_agent(ScriptedLLM(boom))
+    nb = agent.create_notebook()
+    a = agent.add_ai_cell(nb, prompt="ask A")
+    (shown,) = [e.message for e in await run(agent, nb, a) if isinstance(e, TurnError)]
+    failed = agent.notebooks.cell(a)["run"]
+    assert (failed["status"], failed["error"]) == ("failed", shown)
+    assert "10.1.2.3" not in failed["error"]  # value-free
 
 
 async def test_a_rerun_leaves_earlier_tables_out_of_every_system_prompt_but_keeps_them_owned(make_agent):

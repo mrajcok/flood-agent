@@ -10,11 +10,12 @@ import logging
 import sqlite3
 import threading
 
+import pytest
 from conftest import DAY, Clock, ScriptedLLM
 
 from flood_agent import queries
-from flood_agent.agent import CountEvent, DisplayEvent, TurnEnd
 from flood_agent.catalog import CellRun
+from flood_agent.events import CountEvent, DisplayEvent, TurnEnd
 from flood_agent.llm import TextChunk
 
 SELECT = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
@@ -103,7 +104,7 @@ async def test_statements_that_are_not_one_readable_select_are_refused(build_age
         r = agent.notebooks.cell(cell)["run"]
         assert r["status"] == "failed", sql
         assert agent.tables.tables_of_run(cell, r["id"]) == []
-        assert r["result"]["error"]
+        assert r["error"]
 
 
 def test_a_query_ending_in_limit_is_recognised_but_a_limit_in_a_subquery_is_not():
@@ -121,7 +122,7 @@ async def test_a_query_ending_in_limit_is_refused_with_a_pointer_to_the_row_cap(
     cell = agent.add_sql_cell(nb, sql="SELECT dport FROM flows LIMIT 5")
     await run_sql(agent, nb, cell)
     r = agent.notebooks.cell(cell)["run"]
-    assert r["status"] == "failed" and "row cap" in r["result"]["error"]
+    assert r["status"] == "failed" and "row cap" in r["error"]
     assert agent.tables.tables_of_run(cell, r["id"]) == []
 
 
@@ -190,7 +191,7 @@ async def test_a_client_that_leaves_mid_query_abandons_it_and_the_run_is_stopped
     agent = build_agent(ScriptedLLM(), query_timeout_s=60)
     nb = agent.create_notebook()
     cell = agent.add_sql_cell(nb, sql=SLOW)
-    task = asyncio.create_task(run_sql(agent, nb, cell))
+    task = asyncio.create_task(run(agent, nb, cell))
     await until_running(agent, nb, 0)
 
     task.cancel()  # the page was closed: the stream is abandoned
@@ -218,7 +219,7 @@ async def test_what_is_saved_with_the_run_and_sent_below_keeps_its_exact_shape(b
 
     name = table_of(agent, nb, 0).name
     assert saved(0) == (
-        [("status", "ok"), ("table", name), ("row_count", 2), ("truncated_to", 2)],
+        [("table", name), ("row_count", 2), ("truncated_to", 2)],
         "[SQL Cell, run by the user] SELECT dport FROM flows ORDER BY dport\nQuery Metadata: "
         f'{{"result_table": "{name}", "columns": [{{"name": "dport", "type": "INT"}}], "row_count": 2, "truncated_to": 2}}',
     )
@@ -227,7 +228,7 @@ async def test_what_is_saved_with_the_run_and_sent_below_keeps_its_exact_shape(b
                ("bytes", "INTEGER"), ("pkts", "INTEGER")]
     rows = [[n, t, i] for i, (n, t) in enumerate(columns, 1)]
     assert saved(1) == (
-        [("status", "ok"), ("columns", ["column_name", "data_type", "ordinal_position"]), ("rows", rows),
+        [("columns", ["column_name", "data_type", "ordinal_position"]), ("rows", rows),
          ("row_count", 11), ("command", "DESCRIBE TABLE")],
         "[SHOW Cell, run by the user] DESCRIBE TABLE flows\ncolumn_name | data_type | ordinal_position\n"
         + "\n".join(f"{n} | {t} | {i}" for n, t, i in rows),
@@ -283,8 +284,11 @@ async def test_the_user_sees_the_raw_error_the_ai_cell_below_the_value_free_one_
 
     r = run_of(agent, nb, 0)
     assert r["status"] == "failed" and "nosuchcolumn_7" in r["result"]["raw_error"]
+    assert r["error"] and "nosuchcolumn_7" not in r["error"]  # the Run keeps the value-free one
+    assert "status" not in r["result"] and "error" not in r["result"]  # each said once, on the Run
     seen = llm.calls[0][1]["content"]
-    assert seen.startswith("[SQL Cell, run by the user] SELECT * FROM results.nosuchcolumn_7") and "Failed:" in seen
+    assert seen.startswith("[SQL Cell, run by the user] SELECT * FROM results.nosuchcolumn_7")
+    assert f"Failed: {r['error']}" in seen
     assert "nosuchcolumn_7" not in seen.split("\n", 1)[1]  # past the SQL itself, the error carries no names
     assert any("nosuchcolumn_7" in rec.getMessage() and rec.levelno == logging.WARNING for rec in caplog.records)
 
@@ -495,3 +499,14 @@ async def test_closing_the_agent_stops_a_running_sql_cell_and_waits_for_its_quer
 
     await asyncio.wait_for(task, 10)
     assert run_of(agent, nb, 0)["status"] == "stopped"
+
+
+async def test_a_sql_cell_cannot_run_once_the_agent_is_closed(build_agent):
+    agent = build_agent(ScriptedLLM())
+    nb = agent.create_notebook()
+    cell = agent.add_sql_cell(nb, sql=SELECT)
+    await agent.aclose()
+
+    with pytest.raises(RuntimeError, match="closed"):
+        await run(agent, nb, cell)
+    assert agent.notebooks.cell(cell)["run"] is None  # no Run was started

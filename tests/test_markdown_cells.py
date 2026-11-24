@@ -5,7 +5,7 @@ import re
 from conftest import ScriptedLLM
 from test_notebook_page import new_notebook
 
-from flood_agent.agent import FlagEvent
+from flood_agent.events import FlagEvent
 from flood_agent.llm import TextChunk
 from flood_agent.semantic_layer import SYSTEM_INSTRUCTIONS
 

@@ -18,7 +18,8 @@ from pydantic_settings import (
     TomlConfigSettingsSource,
 )
 
-from flood_agent.agent import NO_MODEL, AgentConfig, ClientFactory
+from flood_agent.agent import NO_MODEL, AgentConfig
+from flood_agent.ai_cell_run import ClientFactory
 from flood_agent.fake_llm import FakeClient, load_canned_prompts
 from flood_agent.llm import LLMClient, ModelSpec, OpenRouterClient
 

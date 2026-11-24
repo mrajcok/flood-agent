@@ -5,7 +5,7 @@ import re
 
 from conftest import ScriptedLLM, ask, collect, last_tool_result, tool_call
 
-from flood_agent.agent import TraceReady
+from flood_agent.events import TraceReady
 from flood_agent.llm import TextChunk
 
 SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"

@@ -137,6 +137,21 @@ async def test_a_cell_below_is_sent_a_repaired_copy_of_a_corrupt_saved_run(make_
     assert [m["role"] for m in msgs] == ["user", "user", "assistant", "tool", "assistant"]
 
 
+async def test_a_run_left_running_by_a_killed_app_is_failed_at_the_next_start(make_agent):
+    killed = await make_agent(ScriptedLLM())
+    nb = killed.create_notebook()
+    cut_off = killed.add_ai_cell(nb, prompt="hi")
+    killed.notebooks.start_run(cut_off, "hi", {"model": "m", "effort": None, "max_rows": 10}, "f")  # never finished
+
+    llm = ScriptedLLM([TextChunk("ok")])
+    restarted = await make_agent(llm)  # a new app on the same app database
+    run = run_of(restarted, nb, 0)
+    assert (run["status"], run["error"]) == ("failed", "The app stopped during this Run.")
+
+    await collect(restarted, "next", nb)
+    assert "failed: The app stopped during this Run." in [m["content"] for m in llm.calls[0]]
+
+
 async def test_steps_exhausted_tells_the_user_and_saves_the_trace(make_agent):
     llm = ScriptedLLM(
         [tool_call("run_query", "c1", sql=SQL, title="t")],

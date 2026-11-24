@@ -13,12 +13,12 @@ import asyncio
 import json
 import time
 from dataclasses import dataclass
-from typing import AsyncIterator, Awaitable, Callable, Protocol
+from typing import AsyncIterator, Awaitable, Callable
 
 from mcp.types import TextContent
 
 from flood_agent import ai_cell_context, flagging
-from flood_agent.catalog import Catalog, CellRun, Owner, Table
+from flood_agent.catalog import Catalog, CellRun, Table
 from flood_agent.events import (
     CountEvent,
     DisplayEvent,
@@ -45,42 +45,6 @@ ClientFactory = Callable[[str], LLMClient]
 
 ConnectionProvider = Callable[[], Awaitable[McpConnection]]
 """Gives the live MCP connection, restarting a dead server first (the Agent's, ADR 0002)."""
-
-
-class ExchangeSink(Protocol):
-    """Where one LLM exchange is stored: its messages, Displays and Trace, and the owner its Result Tables
-    are recorded against. An AI Cell's Run is one."""
-
-    @property
-    def owner(self) -> Owner: ...
-    @property
-    def key(self) -> str: ...  # names the exchange (the cell id)
-    @property
-    def session_id(self) -> str: ...  # lets OpenRouter route every step of the exchange to one cache
-
-    def record(self, history: list[dict], message: dict) -> int: ...
-    def add_step(self, items: list[tuple[dict, list[tuple]]]) -> tuple[list[int], list[list[int]]]: ...
-    def save_trace(self, trace: dict) -> None: ...
-
-
-class _CellSink:
-    """Stores an AI Cell's Run in the NotebookStore."""
-
-    def __init__(self, store: NotebookStore, notebook_id: str, cell_id: str, run_id: str):
-        self.store, self.run_id = store, run_id
-        self.owner = CellRun(cell_id, run_id)
-        self.key = cell_id
-        self.session_id = f"notebook-{notebook_id}"  # one cache for every cell of a notebook
-
-    def record(self, history: list[dict], message: dict) -> int:
-        history.append(message)
-        return self.store.add_message(self.run_id, message)
-
-    def add_step(self, items):
-        return self.store.add_step(self.run_id, items)
-
-    def save_trace(self, trace: dict) -> None:
-        self.store.save_trace(self.run_id, trace, context_tokens(trace))
 
 
 class _TurnQueue(asyncio.Queue):
@@ -209,13 +173,14 @@ class AiCellRuns:
         settings = {"model": draft.get("model") or self.default_model, "effort": draft.get("effort"),
                     "max_rows": draft.get("max_rows") or DEFAULT_MAX_ROWS}
         run_id = self.notebooks.start_run(cell_id, draft["prompt"], settings, fingerprint)
-        sink = _CellSink(self.notebooks, notebook_id, cell_id, run_id)
+        run = CellRun(cell_id, run_id)
+        session_id = f"notebook-{notebook_id}"  # lets OpenRouter route every step of every cell to one cache
 
         def prompt_tables() -> list[Table]:
             return ai_cell_context.listed_result_tables(above, cell_id, run_id, self.tables.tables_of_run)
 
         queue = _TurnQueue()
-        task = asyncio.create_task(self._produce(history, prompt_tables, sink, draft["prompt"], queue, settings))
+        task = asyncio.create_task(self._produce(history, prompt_tables, run, session_id, draft["prompt"], queue, settings))
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
         self._keyed[cell_id] = task
@@ -233,16 +198,16 @@ class AiCellRuns:
         return task, queue, release
 
     async def _produce(
-        self, history: list[dict], prompt_tables: Callable[[], list[Table]], sink: _CellSink, prompt: str,
-        queue: _TurnQueue, settings: dict,
+        self, history: list[dict], prompt_tables: Callable[[], list[Table]], run: CellRun, session_id: str,
+        prompt: str, queue: _TurnQueue, settings: dict,
     ):
         def end(trace: dict, status: str, error: str | None) -> TraceReady:
-            self.notebooks.finish_run(sink.run_id, status, error)
+            self.notebooks.finish_run(run.run_id, status, error)
             return TraceReady(trace)
 
         try:
-            sink.record(history, {"role": "user", "content": prompt})
-            await self._exchange(history, prompt_tables, sink, prompt, queue, settings["max_rows"],
+            self._record(history, run, {"role": "user", "content": prompt})
+            await self._exchange(history, prompt_tables, run, session_id, prompt, queue, settings["max_rows"],
                                  settings["model"], settings["effort"], end=end)
             await queue.put(TurnEnd())
         except asyncio.CancelledError:
@@ -271,13 +236,13 @@ class AiCellRuns:
             await asyncio.gather(task, return_exceptions=True)
 
     async def _exchange(
-        self, history: list[dict], prompt_tables: Callable[[], list[Table]], sink: ExchangeSink, request: str,
-        queue: _TurnQueue, max_result_rows: int, model: str, effort: str | None,
+        self, history: list[dict], prompt_tables: Callable[[], list[Table]], run: CellRun, session_id: str,
+        request: str, queue: _TurnQueue, max_result_rows: int, model: str, effort: str | None,
         end: Callable[[dict, str, str | None], object],
     ):
         """The one path an LLM exchange runs through: `history` (already ending in the user's message, extended
-        in place), `prompt_tables` (the Result Tables the system prompt lists, asked before every step), and
-        `sink` (where messages, Displays, Trace and new Result Tables are recorded, whatever owns them).
+        in place), and `prompt_tables` (the Result Tables the system prompt lists, asked before every step). Its
+        messages, Displays and Trace are stored with `run`, and its Result Tables recorded against it.
 
         `end` gets the finished Trace and how the loop ended: ok (an answer, including a give-up or step-limit
         notice), stopped (the user's stop), or failed with the value-free message the user was shown."""
@@ -285,20 +250,27 @@ class AiCellRuns:
         live = _LiveStep()
         status, error = "ok", None
         try:
-            await self._converse(history, prompt_tables, sink, request, trace, queue, max_result_rows, model, effort, live)
+            await self._converse(history, prompt_tables, run, session_id, request, trace, queue, max_result_rows, model, effort, live)
         except asyncio.CancelledError:
             if asyncio.current_task() not in self._stopped:  # the client left or the app is closing
-                sink.save_trace(trace.finish())
+                self._save_trace(run, trace.finish())
                 raise
-            self._record_stop(history, sink, live, trace, queue)
+            self._record_stop(history, run, live, trace, queue)
             status = "stopped"
         except Exception as e:
-            status, error = "failed", await self._fail_turn(history, sink, trace, queue, e)
+            status, error = "failed", await self._fail_turn(history, run, trace, queue, e)
         finished = trace.finish()
-        sink.save_trace(finished)
+        self._save_trace(run, finished)
         await queue.put(end(finished, status, error))
 
-    def _record_stop(self, history, sink: ExchangeSink, live: _LiveStep, trace: TraceBuilder, queue: _TurnQueue) -> None:
+    def _record(self, history: list[dict], run: CellRun, message: dict) -> None:
+        history.append(message)
+        self.notebooks.add_message(run.run_id, message)
+
+    def _save_trace(self, run: CellRun, trace: dict) -> None:
+        self.notebooks.save_trace(run.run_id, trace, context_tokens(trace))
+
+    def _record_stop(self, history, run: CellRun, live: _LiveStep, trace: TraceBuilder, queue: _TurnQueue) -> None:
         """The user stopped the turn: keep the text of the step in progress, and say so, in the page,
         the history and the Trace. A step cut off before its tool calls were answered keeps only its text."""
         partial = live.text if live.open else ""
@@ -306,10 +278,10 @@ class AiCellRuns:
             trace.llm_step(live.system_prompt, live.text, [], None, live.started)
         trace.add("stopped")
         message = (partial.rstrip() + "\n\n" if partial.strip() else "") + ai_cell_context.STOPPED_NOTE
-        sink.record(history, {"role": "assistant", "content": message})
+        self._record(history, run, {"role": "assistant", "content": message})
         queue.put_nowait(TextDelta(queue.paragraph_break() + ai_cell_context.STOPPED_NOTE))
 
-    async def _fail_turn(self, history, sink: ExchangeSink, trace: TraceBuilder, queue: _TurnQueue, error: BaseException) -> str:
+    async def _fail_turn(self, history, run: CellRun, trace: TraceBuilder, queue: _TurnQueue, error: BaseException) -> str:
         """A turn failed partway: tell the user, record it in the Trace and in the history. Returns the
         value-free message the user was shown."""
         error = _unwrap(error)
@@ -319,13 +291,14 @@ class AiCellRuns:
         else:
             message = f"Sorry, something went wrong while handling that request ({type(error).__name__}). Please try again."
         trace.add("error", message=message, detail=detail)
-        sink.record(history, {"role": "assistant", "content": message})
+        self._record(history, run, {"role": "assistant", "content": message})
         await queue.put_notice(message)
         await queue.put(TurnError(message, detail))
         return message
 
     async def _converse(
-        self, history: list[dict], prompt_tables: Callable[[], list[Table]], sink: ExchangeSink, user_message: str,
+        self, history: list[dict], prompt_tables: Callable[[], list[Table]], run: CellRun, session_id: str,
+        user_message: str,
         trace: TraceBuilder, queue: _TurnQueue, max_result_rows: int, model: str, effort: str | None = None, live: _LiveStep | None = None,
     ):
         live = live or _LiveStep()
@@ -333,7 +306,6 @@ class AiCellRuns:
         spec = self.spec_of(model)
         # Only a non-default Effort is sent; the default sends nothing extra.
         reasoning = {"effort": effort} if effort and spec and effort != spec.default_effort else None
-        session_id = sink.session_id  # the client decides per model whether to send it
         connection = await self._connection()
         tools = connection.tools
         failed_attempts = 0
@@ -380,7 +352,7 @@ class AiCellRuns:
             for c in calls:
                 call_started = time.monotonic()
                 content, args, executed_sql, failed, outcome = await self._run_tool(
-                    connection, c, queue, trace, sink, user_message, max_result_rows
+                    connection, c, queue, trace, run, user_message, max_result_rows
                 )
                 failed_attempts += failed
                 trace.tool_call(c.name, args, content, call_started, executed_sql)
@@ -396,7 +368,7 @@ class AiCellRuns:
                                                      "computed_at_ms": count.computed_at_ms}))
                     step_displays.append((count, len(items)))
                 items.append(({"role": "tool", "tool_call_id": c.id, "content": content}, displays))
-            _, display_ids = sink.add_step(items)
+            _, display_ids = self.notebooks.add_step(run.run_id, items)
             for event, index in step_displays:
                 if isinstance(event, CountEvent):
                     event.display_id = display_ids[index][-1]  # a call makes one Display: its count is the last
@@ -406,19 +378,19 @@ class AiCellRuns:
             if not calls:
                 break
             if failed_attempts >= self.max_failed_attempts:
-                await self._end_with_notice(history, sink, GIVE_UP_MESSAGE, queue)
+                await self._end_with_notice(history, run, GIVE_UP_MESSAGE, queue)
                 break
         else:
             trace.add("step_limit", max_steps=self.max_llm_steps)
-            await self._end_with_notice(history, sink, STEP_LIMIT_MESSAGE, queue)
+            await self._end_with_notice(history, run, STEP_LIMIT_MESSAGE, queue)
 
-    async def _end_with_notice(self, history: list[dict], sink: ExchangeSink, message: str, queue: _TurnQueue) -> None:
-        sink.record(history, {"role": "assistant", "content": message})
+    async def _end_with_notice(self, history: list[dict], run: CellRun, message: str, queue: _TurnQueue) -> None:
+        self._record(history, run, {"role": "assistant", "content": message})
         await queue.put_notice(message)
 
     async def _run_tool(
         self, connection: McpConnection, c: ToolCallChunk, queue: asyncio.Queue, trace: TraceBuilder,
-        sink: ExchangeSink, request: str, max_result_rows: int,
+        run: CellRun, request: str, max_result_rows: int,
     ) -> tuple[str, dict, str | None, int, Outcome | None]:
         """Execute one LLM tool call. Returns (content for the LLM, args, executed_sql, failed 0/1, outcome).
 
@@ -455,7 +427,7 @@ class AiCellRuns:
                     try:
                         # Straight after the call returns, before any other await, so a turn stopped here
                         # still has its table registered (and so listed and swept).
-                        self._register_result_table(sink.owner, outcome, args, request, max_result_rows)
+                        self._register_result_table(run, outcome, args, request, max_result_rows)
                     except Exception as e:  # the tool ran; only recording its table failed
                         trace.add("registration_error", name=c.name, detail=f"{type(e).__name__}: {e}")
                         return project(Failed("The query ran but its Result Table could not be recorded. Try again.")), args, None, 1, None
@@ -500,12 +472,12 @@ class AiCellRuns:
         await queue.put(FlagEvent([i["token"] for i in items], items))
 
     def _register_result_table(
-        self, owner: Owner, made: ResultTableMade, args: dict, request: str, max_result_rows: int
+        self, run: CellRun, made: ResultTableMade, args: dict, request: str, max_result_rows: int
     ) -> None:
-        """Record the Result Table a successful run_query made, with the owner that made it."""
+        """Record the Result Table a successful run_query made, against the Cell and Run that made it."""
         title = args.get("title", "")
         self.tables.register_for(
-            owner, made.result_table, title if isinstance(title, str) else "",
+            run, made.result_table, title if isinstance(title, str) else "",
             made.columns, request, made.truncated_to, args.get("sql"), max_result_rows,
         )
 

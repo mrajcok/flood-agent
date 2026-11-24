@@ -159,11 +159,6 @@ class Agent:
             if connection is not None:
                 await connection.aclose()
 
-    @property
-    def _turn_tasks(self) -> set[asyncio.Task]:
-        """The running AI Cell Runs' producer tasks (a test checks `aclose` waits for them)."""
-        return self.ai_cells.tasks
-
     async def __aenter__(self) -> "Agent":
         await self.start()
         return self

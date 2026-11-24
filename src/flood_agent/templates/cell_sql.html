@@ -9,7 +9,8 @@
                running: {{ cell.running | tojson }},
                ran: {{ cell.ran | tojson | forceescape }},
                get edited() {
-                 /* The Draft differs from what ran: the old output stays, marked, and cells below are sent what ran. */
+                 /* The Draft differs from what ran: the old output stays, marked, and cells below are sent what ran.
+                    Live as the user types; the reference rule is the Cell module (cell.py, `edited`): keep them agreeing. */
                  const r = this.ran;
                  return !!r && (squash(this.statement) !== squash(r.statement) || this.command !== r.command || String(this.maxRows) !== String(r.max_rows));
                },

@@ -6,6 +6,8 @@ there, once: a missing model becomes the default model, a missing row cap the de
 defaults again.
 
 Each AI and SQL Cell answers what its Draft would run as: its prompt or statement, and its Run settings.
+
+Each AI and SQL Cell answers whether it is edited: whether its Draft differs from its latest Run.
 """
 
 from dataclasses import dataclass
@@ -13,6 +15,11 @@ from dataclasses import dataclass
 from flood_agent.cell_kinds import AI, MARKDOWN, SQL
 from flood_agent.notebooks import DEFAULT_MAX_ROWS
 from flood_agent.show_commands import statement_of
+
+
+def _squash(text: str) -> str:
+    """Text with every run of whitespace as one space and none at the ends: spacing alone is not an edit."""
+    return " ".join(text.split())
 
 
 @dataclass(frozen=True)
@@ -62,6 +69,13 @@ class AiCell:
         """The settings its Draft would run with."""
         return AiRunSettings(self.draft.model, self.draft.effort, self.draft.max_rows)
 
+    @property
+    def edited(self) -> bool:
+        """Whether its Draft differs from its latest Run: the prompt compared ignoring spacing, the settings exactly.
+        Never, with no Run. (The page's live check in cell_ai.html mirrors this.)"""
+        return self.run is not None and (
+            _squash(self.prompt) != _squash(self.run.prompt) or self.run_settings != self.run.settings)
+
 
 @dataclass(frozen=True)
 class SqlRunSettings:
@@ -110,6 +124,13 @@ class SqlCell:
     def run_settings(self) -> SqlRunSettings:
         """The settings its Draft would run with."""
         return SqlRunSettings(self.draft.max_rows, self.draft.command)
+
+    @property
+    def edited(self) -> bool:
+        """Whether its Draft differs from its latest Run: the statement compared ignoring spacing, the settings
+        exactly. Never, with no Run. (The page's live check in cell_sql.html mirrors this.)"""
+        return self.run is not None and (
+            _squash(self.statement) != _squash(self.run.statement) or self.run_settings != self.run.settings)
 
 
 @dataclass(frozen=True)

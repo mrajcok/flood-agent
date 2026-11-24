@@ -87,6 +87,22 @@ class _LiveStep:
     open: bool = False  # started, and not yet saved to the history
 
 
+@dataclass(frozen=True)
+class _ActiveRun:
+    """The Run being produced, and what it runs with: its Cell and Run ids, its prompt, the Result Tables its
+    system prompt lists (asked before every step), the session that routes its LLM calls to one cache, the
+    queue its events stream through, and the settings it was started with."""
+
+    cell_run: CellRun
+    prompt: str
+    prompt_tables: Callable[[], list[Table]]
+    session_id: str
+    queue: _RunQueue
+    model: str
+    effort: str | None
+    max_rows: int
+
+
 RUN_CRASHED = "The Run did not finish."  # a failed Run's reason when its task crashed without closing it
 
 STEP_LIMIT_MESSAGE = (
@@ -185,7 +201,9 @@ class AiCellRuns:
             return ai_cell_context.listed_result_tables(above, cell_id, run_id, self.tables.tables_of_run)
 
         queue = _RunQueue()
-        task = asyncio.create_task(self._produce(history, prompt_tables, run, session_id, draft["prompt"], queue, settings))
+        active = _ActiveRun(run, draft["prompt"], prompt_tables, session_id, queue, settings["model"], settings["effort"],
+                            settings["max_rows"])
+        task = asyncio.create_task(self._produce(history, active))
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
         self._keyed[cell_id] = task
@@ -209,19 +227,15 @@ class AiCellRuns:
         task.add_done_callback(end_stream)
         return task, queue, release
 
-    async def _produce(
-        self, history: list[dict], prompt_tables: Callable[[], list[Table]], run: CellRun, session_id: str,
-        prompt: str, queue: _RunQueue, settings: dict,
-    ):
+    async def _produce(self, history: list[dict], active: _ActiveRun):
         try:
-            self._record(history, run, {"role": "user", "content": prompt})
-            await self._run_llm_steps(history, prompt_tables, run, session_id, prompt, queue, settings["max_rows"],
-                                      settings["model"], settings["effort"])
-            await queue.put(TurnEnd())
+            self._record(history, active.cell_run, {"role": "user", "content": active.prompt})
+            await self._run_llm_steps(history, active)
+            await active.queue.put(TurnEnd())
         except asyncio.CancelledError:
             raise
         except BaseException as e:  # surfaced to the consumer
-            await queue.put(e)
+            await active.queue.put(e)
 
     @staticmethod
     async def _consume(task: asyncio.Task, queue: _RunQueue) -> AsyncGenerator[Event]:
@@ -243,28 +257,26 @@ class AiCellRuns:
                 task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
-    async def _run_llm_steps(
-        self, history: list[dict], prompt_tables: Callable[[], list[Table]], run: CellRun, session_id: str,
-        request: str, queue: _RunQueue, max_result_rows: int, model: str, effort: str | None,
-    ):
+    async def _run_llm_steps(self, history: list[dict], active: _ActiveRun):
         """The one path a Run's LLM steps run through: `history` (already ending in the user's message, extended
-        in place), and `prompt_tables` (the Result Tables the system prompt lists, asked before every step). Its
-        messages, Displays and Trace are stored with `run`, and its Result Tables recorded against it.
+        in place), and `active`, the Run being produced. Its messages, Displays and Trace are stored with its
+        CellRun, and its Result Tables recorded against it.
 
         It closes the Run with how the loop ended, then streams the finished Trace: ok (an answer, including a
         give-up or step-limit notice), stopped (the user's stop, the client leaving or the app closing), or failed
         with the value-free message the user was shown."""
-        trace = TraceBuilder(model, on_add=lambda entry: queue.put_nowait(TraceLive(entry)))
+        run, queue = active.cell_run, active.queue
+        trace = TraceBuilder(active.model, on_add=lambda entry: queue.put_nowait(TraceLive(entry)))
         live = _LiveStep()
         status: RunStatus = "ok"
         error: str | None = None
         try:
-            await self._converse(history, prompt_tables, run, session_id, request, trace, queue, max_result_rows, model, effort, live)
+            await self._converse(history, active, trace, live)
         except asyncio.CancelledError:  # the user's stop, the client leaving or the app closing: all stop the Run
-            self._record_stop(history, run, live, trace, queue)
+            self._record_stop(history, active, live, trace)
             status = "stopped"
         except Exception as e:
-            status, error = "failed", await self._record_failure(history, run, trace, queue, e)
+            status, error = "failed", await self._record_failure(history, active, trace, e)
         finished = trace.finish()
         self._save_trace(run, finished)
         self.notebooks.finish_run(run.run_id, status, error)
@@ -277,7 +289,7 @@ class AiCellRuns:
     def _save_trace(self, run: CellRun, trace: dict) -> None:
         self.notebooks.save_trace(run.run_id, trace, context_tokens(trace))
 
-    def _record_stop(self, history, run: CellRun, live: _LiveStep, trace: TraceBuilder, queue: _RunQueue) -> None:
+    def _record_stop(self, history: list[dict], active: _ActiveRun, live: _LiveStep, trace: TraceBuilder) -> None:
         """The Run was stopped: keep the text of the step in progress, and say so, in the page,
         the history and the Trace. A step cut off before its tool calls were answered keeps only its text."""
         partial = live.text if live.open else ""
@@ -285,10 +297,12 @@ class AiCellRuns:
             trace.llm_step(live.system_prompt, live.text, [], None, live.started)
         trace.add("stopped")
         message = (partial.rstrip() + "\n\n" if partial.strip() else "") + ai_cell_context.STOPPED_NOTE
-        self._record(history, run, {"role": "assistant", "content": message})
-        queue.put_nowait(TextDelta(queue.paragraph_break() + ai_cell_context.STOPPED_NOTE))
+        self._record(history, active.cell_run, {"role": "assistant", "content": message})
+        active.queue.put_nowait(TextDelta(active.queue.paragraph_break() + ai_cell_context.STOPPED_NOTE))
 
-    async def _record_failure(self, history, run: CellRun, trace: TraceBuilder, queue: _RunQueue, error: BaseException) -> str:
+    async def _record_failure(
+        self, history: list[dict], active: _ActiveRun, trace: TraceBuilder, error: BaseException,
+    ) -> str:
         """The Run failed partway: tell the user, record it in the Trace and in the history. Returns the
         value-free message the user was shown."""
         error = _unwrap(error)
@@ -298,16 +312,13 @@ class AiCellRuns:
         else:
             message = f"Sorry, something went wrong while handling that request ({type(error).__name__}). Please try again."
         trace.add("error", message=message, detail=detail)
-        self._record(history, run, {"role": "assistant", "content": message})
-        await queue.put_notice(message)
-        await queue.put(TurnError(message, detail))
+        self._record(history, active.cell_run, {"role": "assistant", "content": message})
+        await active.queue.put_notice(message)
+        await active.queue.put(TurnError(message, detail))
         return message
 
-    async def _converse(
-        self, history: list[dict], prompt_tables: Callable[[], list[Table]], run: CellRun, session_id: str,
-        user_message: str,
-        trace: TraceBuilder, queue: _RunQueue, max_result_rows: int, model: str, effort: str | None, live: _LiveStep,
-    ):
+    async def _converse(self, history: list[dict], active: _ActiveRun, trace: TraceBuilder, live: _LiveStep):
+        queue, model, effort = active.queue, active.model, active.effort
         llm = self.client_for(model)
         spec = self.spec_of(model)
         # Only a non-default Effort is sent; the default sends nothing extra.
@@ -316,14 +327,14 @@ class AiCellRuns:
         tools = connection.tools
         failed_attempts = 0
         for call_number in range(1, self.max_llm_steps + 1):
-            system_prompt = self.semantic_layer.system_prompt(prompt_tables())
+            system_prompt = self.semantic_layer.system_prompt(active.prompt_tables())
             messages = [{"role": "system", "content": system_prompt}]
             messages += history
             text, calls, usage = "", [], None
             step_started = time.monotonic()
             live.text, live.system_prompt, live.started, live.in_trace, live.open = "", system_prompt, step_started, False, True
             queue.put_nowait(LlmCallStarted(call_number))
-            async for chunk in llm.stream_chat(messages, tools, reasoning=reasoning, session_id=session_id):
+            async for chunk in llm.stream_chat(messages, tools, reasoning=reasoning, session_id=active.session_id):
                 if isinstance(chunk, TextChunk):
                     # Each step's text is a new paragraph on the page, as it is when the Run is reloaded.
                     shown = chunk.text if text or not chunk.text else queue.paragraph_break() + chunk.text
@@ -357,9 +368,7 @@ class AiCellRuns:
             step_displays: list[tuple[DisplayEvent | CountEvent, int]] = []
             for c in calls:
                 call_started = time.monotonic()
-                content, args, executed_sql, failed, outcome = await self._run_tool(
-                    connection, c, queue, trace, run, user_message, max_result_rows
-                )
+                content, args, executed_sql, failed, outcome = await self._run_tool(connection, c, trace, active)
                 failed_attempts += failed
                 trace.tool_call(c.name, args, content, call_started, executed_sql)
                 displays, events = [], []
@@ -374,7 +383,7 @@ class AiCellRuns:
                                                      "computed_at_ms": count.computed_at_ms}))
                     step_displays.append((count, len(items)))
                 items.append(({"role": "tool", "tool_call_id": c.id, "content": content}, displays))
-            _, display_ids = self.notebooks.add_step(run.run_id, items)
+            _, display_ids = self.notebooks.add_step(active.cell_run.run_id, items)
             for event, index in step_displays:
                 if isinstance(event, CountEvent):
                     event.display_id = display_ids[index][-1]  # a call makes one Display: its count is the last
@@ -384,19 +393,18 @@ class AiCellRuns:
             if not calls:
                 break
             if failed_attempts >= self.max_failed_attempts:
-                await self._end_with_notice(history, run, GIVE_UP_MESSAGE, queue)
+                await self._end_with_notice(history, active, GIVE_UP_MESSAGE)
                 break
         else:
             trace.add("step_limit", max_steps=self.max_llm_steps)
-            await self._end_with_notice(history, run, STEP_LIMIT_MESSAGE, queue)
+            await self._end_with_notice(history, active, STEP_LIMIT_MESSAGE)
 
-    async def _end_with_notice(self, history: list[dict], run: CellRun, message: str, queue: _RunQueue) -> None:
-        self._record(history, run, {"role": "assistant", "content": message})
-        await queue.put_notice(message)
+    async def _end_with_notice(self, history: list[dict], active: _ActiveRun, message: str) -> None:
+        self._record(history, active.cell_run, {"role": "assistant", "content": message})
+        await active.queue.put_notice(message)
 
     async def _run_tool(
-        self, connection: McpConnection, c: ToolCallChunk, queue: asyncio.Queue, trace: TraceBuilder,
-        run: CellRun, request: str, max_result_rows: int,
+        self, connection: McpConnection, c: ToolCallChunk, trace: TraceBuilder, active: _ActiveRun,
     ) -> tuple[str, dict, str | None, int, Outcome | None]:
         """Execute one LLM tool call. Returns (content for the LLM, args, executed_sql, failed 0/1, outcome).
 
@@ -420,7 +428,7 @@ class AiCellRuns:
             else:
                 args = parsed
                 try:
-                    result = await connection.call_tool(c.name, args, max_result_rows)
+                    result = await connection.call_tool(c.name, args, active.max_rows)
                 except Exception as e:  # a broken tool call must not corrupt or abort the Run
                     trace.add("tool_error", name=c.name, detail=f"{type(_unwrap(e)).__name__}: {_unwrap(e)}")
                     return project(Failed("The tool failed to run. Try again.")), args, None, 1, None
@@ -433,7 +441,7 @@ class AiCellRuns:
                     try:
                         # Straight after the call returns, before any other await, so a Run stopped here
                         # still has its table registered (and so listed and swept).
-                        self._register_result_table(run, outcome, args, request, max_result_rows)
+                        self._register_result_table(active, outcome, args)
                     except Exception as e:  # the tool ran; only recording its table failed
                         trace.add("registration_error", name=c.name, detail=f"{type(e).__name__}: {e}")
                         return project(Failed("The query ran but its Result Table could not be recorded. Try again.")), args, None, 1, None
@@ -446,7 +454,7 @@ class AiCellRuns:
             return content, args, executed_sql, 0, outcome
         # The raw error (or the undecodable text) reaches the Trace, never the LLM.
         raw = outcome.raw_error if outcome.raw_error is not None else getattr(outcome, "raw_content", None)
-        await queue.put(TraceEntry("query_error", args.get("sql"), raw, outcome.error))
+        await active.queue.put(TraceEntry("query_error", args.get("sql"), raw, outcome.error))
         trace.add("query_error", sql=args.get("sql"), raw_error=raw, sanitized_error=outcome.error)
         return content, args, executed_sql, 1, outcome
 
@@ -477,14 +485,12 @@ class AiCellRuns:
             trace.add("flag", **item)
         await queue.put(FlagEvent([i["token"] for i in items], items))
 
-    def _register_result_table(
-        self, run: CellRun, made: ResultTableMade, args: dict, request: str, max_result_rows: int
-    ) -> None:
+    def _register_result_table(self, active: _ActiveRun, made: ResultTableMade, args: dict) -> None:
         """Record the Result Table a successful run_query made, against the Cell and Run that made it."""
         title = args.get("title", "")
         self.tables.register_for(
-            run, made.result_table, title if isinstance(title, str) else "",
-            made.columns, request, made.truncated_to, args.get("sql"), max_result_rows,
+            active.cell_run, made.result_table, title if isinstance(title, str) else "",
+            made.columns, active.prompt, made.truncated_to, args.get("sql"), active.max_rows,
         )
 
     def _prepare_displays(

@@ -303,7 +303,7 @@ def create_app(
         if starting or run is None:
             return view
         view["number"], view["status"] = run["number"], run["status"]
-        if run["status"] == "running" and agent.running_cell(cell["notebook_id"]) == cell["id"]:
+        if run["status"] == "running":
             view["running"] = view["polling"] = True  # opened mid-run: nothing streams to this page, so it re-fetches
         view["output"] = output_items(run, refreshable_counts=cell["kind"] != "sql")
         if cell["kind"] == "sql":
@@ -331,7 +331,7 @@ def create_app(
         view["footer"] = {
             "started_at_ms": run["started_at"], "ran_utc": time.strftime("%H:%M UTC", time.gmtime(run["started_at"] / 1000)),
             "settings": settings_label(ran["model"], ran["effort"], ran["max_rows"]),
-            "stopped": run["status"] == "stopped", "failed": run["status"] == "failed", "trace": trace,
+            "stopped": run["status"] == "stopped", "failed": run["status"] == "failed", "error": run["error"], "trace": trace,
             "calls": trace["totals"]["llm_steps"] if trace else None,
             "cost": trace["totals"]["cost"] if trace else None,
             "context": usage(run["context_tokens"], ran["model"]),

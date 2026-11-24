@@ -96,6 +96,9 @@ class AgentConfig:
         return spec.context_window if spec else 0
 
 
+APP_STOPPED = "The app stopped during this Run."
+"""The value-free reason a Run left running by a killed app is failed with when the app next starts."""
+
 NO_MODEL = "no-model"
 """The Model Choice id for Fake Mode: a prompt sent with it is answered by the scripted stand-in."""
 
@@ -124,6 +127,10 @@ class Agent:
         self._refreshing: set[tuple[str, str | int]] = set()  # ("count", id) being refreshed now (tables: see table_replacement)
         self._refreshing_lock = threading.Lock()
         self.tables.sweep()
+        # A Run still running now was cut off by the app being killed. One app process per app database, so
+        # none of these is really in progress (eval runs and the caching smoke test use their own app database).
+        for run_id in self.notebooks.running_runs():
+            self.notebooks.finish_run(run_id, "failed", APP_STOPPED)
 
     async def start(self) -> None:
         """Launch the long-lived MCP server. Needed before `run_cell`, not for row fetches

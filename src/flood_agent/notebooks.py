@@ -318,6 +318,11 @@ class NotebookStore:
             con.execute("UPDATE runs SET status=?, error=?, finished_at=? WHERE id=?",
                         (status, error, self._now(), run_id))
 
+    def running_runs(self) -> list[str]:
+        """The ids of every Run still marked running, in any notebook."""
+        with closing(self._connect()) as con:
+            return [r[0] for r in con.execute("SELECT id FROM runs WHERE status='running'")]
+
     def status_of(self, run_id: str) -> str | None:
         with closing(self._connect()) as con:
             row = con.execute("SELECT status FROM runs WHERE id=?", (run_id,)).fetchone()

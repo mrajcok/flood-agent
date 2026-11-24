@@ -241,6 +241,48 @@ def test_stopping_a_cell_that_is_not_running_is_harmless(build_agent, web_client
     assert client.post(f"/n/{nb}/cells/nope/stop").status_code == 404
 
 
+POLLS = 'hx-trigger="every 2s"'  # a Cell shown as running re-fetches itself
+
+
+def test_the_stored_status_alone_says_whether_a_cell_is_running(build_agent, web_client):
+    agent = build_agent(ScriptedLLM())
+    client = web_client(agent)
+    nb, cell = new_notebook(client)
+    run = agent.notebooks.start_run(cell, "p", {"model": SONNET, "effort": None, "max_rows": 1000}, "f")
+    assert POLLS in client.get(f"/n/{nb}/cells/{cell}").text
+
+    agent.notebooks.finish_run(run, "ok")
+    assert POLLS not in client.get(f"/n/{nb}/cells/{cell}").text
+
+
+def test_a_cell_cut_off_by_a_killed_app_shows_as_failed_after_a_restart(build_agent, web_client):
+    killed = build_agent(ScriptedLLM())
+    client = web_client(killed)
+    nb, cell = new_notebook(client)
+    killed.notebooks.start_run(cell, "p", {"model": SONNET, "effort": None, "max_rows": 1000}, "f")  # never finished
+
+    page = web_client(build_agent(ScriptedLLM())).get(f"/n/{nb}/cells/{cell}").text
+    assert POLLS not in page
+    assert 'class="badge failed"' in page and "The app stopped during this Run." in page
+
+
+def test_a_second_tab_opened_mid_run_shows_the_cell_running_until_it_stops(build_agent, web_client):
+    client = web_client(build_agent(Slow()))
+    nb, cell = new_notebook(client)
+    client.post(f"/n/{nb}/cells/{cell}/run", data={"prompt": "p", "model": SONNET, "effort": "", "max_rows": "5"})
+    reader = threading.Thread(target=lambda: client.get(f"/n/{nb}/cells/{cell}/stream"))
+    reader.start()
+    for _ in range(100):
+        if "Partial answer" in (second_tab := client.get(f"/n/{nb}/cells/{cell}").text):
+            break
+        time.sleep(0.05)
+    assert POLLS in second_tab
+
+    client.post(f"/n/{nb}/cells/{cell}/stop")
+    reader.join(5)
+    assert POLLS not in client.get(f"/n/{nb}/cells/{cell}").text
+
+
 def test_deleting_a_later_cell_leaves_an_earlier_cells_table_readable_and_foreign_cells_404(build_agent, web_client):
     client = web_client(build_agent(ScriptedLLM(*table_script("one"), *table_script("two"), [TextChunk("other")])))
     nb, first, _ = ask(client, "first question")

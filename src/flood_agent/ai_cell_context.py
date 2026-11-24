@@ -95,7 +95,7 @@ def without_stop_note(text: str) -> str:
 
 def what_ran(run: dict) -> list[dict]:
     """A finished Run's messages as the Cells below are sent them: a stopped or failed Run counts as having
-    run, with what it streamed plus `STOPPED_BELOW` or "failed: <value-free error>"."""
+    run, with what it streamed plus `STOPPED_BELOW` or "failed: <the Run's value-free error>"."""
     messages = repair_history(run["messages"])
     if run["status"] not in ("stopped", "failed"):
         return messages
@@ -105,9 +105,8 @@ def what_ran(run: dict) -> list[dict]:
         note = STOPPED_BELOW
         text = without_stop_note(text)
     else:
-        errors = [e["message"] for e in (run["trace"] or {}).get("entries", []) if e["kind"] == "error"]
-        note = f"failed: {errors[0] if errors else 'the Run did not finish'}"
-        if errors and text == errors[0]:
+        note = f"failed: {run['error']}"
+        if text == run["error"]:
             text = ""  # the error message was recorded as the answer: say it once
     if last:
         messages = messages[:-1]

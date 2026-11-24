@@ -48,7 +48,7 @@ async def test_show_columns_and_describe_table(build_agent):
 
     agent, nb, cell, _ = await ran_show(build_agent, "DESCRIBE TABLE", "flows")
     res = run_of(agent, nb, 0)["result"]
-    assert res["status"] == "ok" and {"dport", "bytes"} <= set(column(res, "column_name"))
+    assert run_of(agent, nb, 0)["status"] == "ok" and {"dport", "bytes"} <= set(column(res, "column_name"))
 
 
 async def test_describe_of_an_unreadable_table_fails(build_agent):

@@ -122,6 +122,8 @@ class _LiveStep:
     open: bool = False  # started, and not yet saved to the history
 
 
+UNFINISHED = "The Run did not finish."  # a failed Run's reason when its task ended without closing it
+
 STEP_LIMIT_MESSAGE = (
     "Sorry, I wasn't able to finish that within the allowed number of steps. "
     "Please try a simpler or more specific question."
@@ -223,7 +225,10 @@ class AiCellRuns:
             if self._keyed.get(cell_id) is task:
                 del self._keyed[cell_id]
             if task.done() and self.notebooks.status_of(run_id) == "running":  # cancelled or crashed first
-                self.notebooks.finish_run(run_id, "stopped" if task in self._stopped else "failed")
+                if task in self._stopped:
+                    self.notebooks.finish_run(run_id, "stopped")
+                else:
+                    self.notebooks.finish_run(run_id, "failed", UNFINISHED)
         task.add_done_callback(release)
         return task, queue, release
 
@@ -231,9 +236,8 @@ class AiCellRuns:
         self, history: list[dict], prompt_tables: Callable[[], list[Table]], sink: _CellSink, prompt: str,
         queue: _TurnQueue, settings: dict,
     ):
-        def end(trace: dict) -> TraceReady:
-            kinds = {e["kind"] for e in trace["entries"]}
-            self.notebooks.finish_run(sink.run_id, "stopped" if "stopped" in kinds else "failed" if "error" in kinds else "ok")
+        def end(trace: dict, status: str, error: str | None) -> TraceReady:
+            self.notebooks.finish_run(sink.run_id, status, error)
             return TraceReady(trace)
 
         try:
@@ -268,13 +272,18 @@ class AiCellRuns:
 
     async def _exchange(
         self, history: list[dict], prompt_tables: Callable[[], list[Table]], sink: ExchangeSink, request: str,
-        queue: _TurnQueue, max_result_rows: int, model: str, effort: str | None, end: Callable[[dict], object],
+        queue: _TurnQueue, max_result_rows: int, model: str, effort: str | None,
+        end: Callable[[dict, str, str | None], object],
     ):
         """The one path an LLM exchange runs through: `history` (already ending in the user's message, extended
         in place), `prompt_tables` (the Result Tables the system prompt lists, asked before every step), and
-        `sink` (where messages, Displays, Trace and new Result Tables are recorded, whatever owns them)."""
+        `sink` (where messages, Displays, Trace and new Result Tables are recorded, whatever owns them).
+
+        `end` gets the finished Trace and how the loop ended: ok (an answer, including a give-up or step-limit
+        notice), stopped (the user's stop), or failed with the value-free message the user was shown."""
         trace = TraceBuilder(model, on_add=lambda entry: queue.put_nowait(TraceLive(entry)))
         live = _LiveStep()
+        status, error = "ok", None
         try:
             await self._converse(history, prompt_tables, sink, request, trace, queue, max_result_rows, model, effort, live)
         except asyncio.CancelledError:
@@ -282,11 +291,12 @@ class AiCellRuns:
                 sink.save_trace(trace.finish())
                 raise
             self._record_stop(history, sink, live, trace, queue)
+            status = "stopped"
         except Exception as e:
-            await self._fail_turn(history, sink, trace, queue, e)
+            status, error = "failed", await self._fail_turn(history, sink, trace, queue, e)
         finished = trace.finish()
         sink.save_trace(finished)
-        await queue.put(end(finished))
+        await queue.put(end(finished, status, error))
 
     def _record_stop(self, history, sink: ExchangeSink, live: _LiveStep, trace: TraceBuilder, queue: _TurnQueue) -> None:
         """The user stopped the turn: keep the text of the step in progress, and say so, in the page,
@@ -299,8 +309,9 @@ class AiCellRuns:
         sink.record(history, {"role": "assistant", "content": message})
         queue.put_nowait(TextDelta(queue.paragraph_break() + ai_cell_context.STOPPED_NOTE))
 
-    async def _fail_turn(self, history, sink: ExchangeSink, trace: TraceBuilder, queue: _TurnQueue, error: BaseException) -> None:
-        """A turn failed partway: tell the user, record it in the Trace and in the history."""
+    async def _fail_turn(self, history, sink: ExchangeSink, trace: TraceBuilder, queue: _TurnQueue, error: BaseException) -> str:
+        """A turn failed partway: tell the user, record it in the Trace and in the history. Returns the
+        value-free message the user was shown."""
         error = _unwrap(error)
         detail = f"{type(error).__name__}: {error}"
         if isinstance(error, LLMError):
@@ -311,6 +322,7 @@ class AiCellRuns:
         sink.record(history, {"role": "assistant", "content": message})
         await queue.put_notice(message)
         await queue.put(TurnError(message, detail))
+        return message
 
     async def _converse(
         self, history: list[dict], prompt_tables: Callable[[], list[Table]], sink: ExchangeSink, user_message: str,

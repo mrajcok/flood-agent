@@ -6,7 +6,8 @@ A Run takes the Cell's Draft and runs one of three things:
 - a query, which makes a Result Table, or for a re-run puts new rows under the latest Run's own table through
   table replacement (ADR 0006)
 
-It records the Run in the NotebookStore: its status, its saved result, and the message AI Cells below are sent.
+It records the Run in the NotebookStore: its status (and, if it failed, its value-free error), its saved result,
+and the message AI Cells below are sent.
 That message is frozen at this Run, and from a table it carries only Query Metadata, never rows (ADR 0001).
 """
 
@@ -34,9 +35,9 @@ SHOW_ROWS_TO_AI = 100  # how many rows of a SHOW Cell's result an AI Cell below 
 CRASHED = "The query could not be run."
 
 
-# What the blocking part of a Run ended with. Each knows how it is saved with the Run (a stored format the page
-# and saved Notebooks read: keep its keys), how it reads to the AI Cells below, and what it shows: the Displays
-# saved with the Run and the events streamed before the end.
+# What the blocking part of a Run ended with. Each knows the Run's status, how it is saved with the Run (a stored
+# format the page and saved Notebooks read: keep its keys), how it reads to the AI Cells below, and what it shows:
+# the Displays saved with the Run and the events streamed before the end.
 
 _Shown = tuple[list[tuple], list[Event]]
 
@@ -49,7 +50,7 @@ class _ShowRows:
     status = "ok"
 
     def saved(self) -> dict:
-        return {"status": "ok", "columns": self.columns, "rows": self.rows, "row_count": len(self.rows),
+        return {"columns": self.columns, "rows": self.rows, "row_count": len(self.rows),
                 "command": self.command}
 
     def detail(self) -> str:
@@ -70,7 +71,7 @@ class _Count:
     status = "ok"
 
     def saved(self) -> dict:
-        return {"status": "ok", "count": self.value}
+        return {"count": self.value}
 
     def detail(self) -> str:
         return f"Count: {self.value}"
@@ -90,7 +91,7 @@ class _TableMade:
     status = "ok"
 
     def saved(self) -> dict:  # the columns are the table's, not the Run's
-        return {"status": "ok", "table": self.name, "row_count": self.row_count, "truncated_to": self.truncated_to}
+        return {"table": self.name, "row_count": self.row_count, "truncated_to": self.truncated_to}
 
     def detail(self) -> str:
         meta: dict = {"result_table": self.name, "columns": self.columns, "row_count": self.row_count}
@@ -110,12 +111,12 @@ def _refused(text: str) -> "_Failed":
 
 @dataclass
 class _Failed:
-    error: str  # value-free: what the AI Cells below are sent
+    error: str  # value-free: stored on the Run, and what the AI Cells below are sent
     raw_error: str  # for the user, and logged
     status = "failed"
 
-    def saved(self) -> dict:
-        return {"status": "failed", "error": self.error, "raw_error": self.raw_error}
+    def saved(self) -> dict:  # the value-free error is the Run's
+        return {"raw_error": self.raw_error}
 
     def detail(self) -> str:
         return f"Failed: {self.error}"
@@ -129,7 +130,7 @@ class _Stopped:
     status = "stopped"
 
     def saved(self) -> dict:
-        return {"status": "stopped"}
+        return {}
 
     def detail(self) -> str:
         return STOPPED_BELOW
@@ -188,7 +189,7 @@ class SqlCellRuns:
         # The message is stored once, so what AI Cells below are sent is frozen at this Run.
         self.notebooks.add_step(run_id, [({"role": "user", "content": f"{label}\n{outcome.detail()}"}, displays)])
         self.notebooks.save_result(run_id, outcome.saved() | {"elapsed_s": elapsed_s})
-        self.notebooks.finish_run(run_id, outcome.status)
+        self.notebooks.finish_run(run_id, outcome.status, outcome.error if isinstance(outcome, _Failed) else None)
         for event in events:
             yield event
         yield TurnEnd()

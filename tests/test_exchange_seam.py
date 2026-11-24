@@ -40,7 +40,7 @@ async def test_an_exchange_runs_from_a_given_history_and_records_against_a_cell_
     asked = []
 
     await agent.ai_cells._exchange(history, lambda: asked.append(1) or [], sink, "ports please", queue, 1000,
-                                   agent.config.model, None, end=lambda trace: TraceReady(trace))
+                                   agent.config.model, None, end=lambda trace, *_: TraceReady(trace))
 
     assert [m["role"] for m in history] == ["user", "user", "assistant", "tool", "assistant"]
     assert len(sink.steps) == 2 and len(sink.traces) == 1

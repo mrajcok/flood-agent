@@ -173,15 +173,15 @@
     {% if cell.result and not cell.running %}
     {% set r = cell.result %}
     <div class="cell-foot sql-status">
-      {%- if r.status == "ok" -%}
+      {%- if cell.status == "ok" -%}
         {% if r.count is defined %}count{% else %}{{ "{:,}".format(r.row_count) }} row{{ "" if r.row_count == 1 else "s" }}{% endif %}
       {%- else -%}
-        {{ r.status }}
+        {{ cell.status }}
       {%- endif %} &middot; {{ r.elapsed_s }} s &middot; ran <time data-ms="{{ cell.started_at_ms }}" x-data x-text="new Date({{ cell.started_at_ms }}).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })">{{ cell.ran_utc }}</time>
       {%- if cell.refreshed_at_ms %} &middot; refreshed <time data-ms="{{ cell.refreshed_at_ms }}" x-data x-text="new Date({{ cell.refreshed_at_ms }}).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })"></time>{% endif %}
       <template x-if="edited"><span class="badge edited" title="The SQL, command or row cap changed since this ran; the cells below were sent what ran">edited, not run</span></template>
     </div>
-    {% if r.status == "ok" %}<div class="cell-foot sql-note">Only metadata about these results (column names and types, row count) will be sent to AI Cells below, never the rows.</div>{% endif %}
+    {% if cell.status == "ok" %}<div class="cell-foot sql-note">Only metadata about these results (column names and types, row count) will be sent to AI Cells below, never the rows.</div>{% endif %}
     {% endif %}
   </div>
 </div>

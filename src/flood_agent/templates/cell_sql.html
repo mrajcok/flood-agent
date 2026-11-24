@@ -9,13 +9,16 @@
                running: {{ cell.running | tojson }},
                ran: {{ cell.ran | tojson | forceescape }},
                get edited() {
-                 /* The Draft differs from what ran: the old output stays, marked, and cells below are sent what ran. */
+                 /* The Draft differs from what ran: the old output stays, marked, and cells below are sent what ran.
+                    Live as the user types; the reference rule is the Cell module (cell.py, `edited`): keep them agreeing. */
                  const r = this.ran;
                  return !!r && (squash(this.statement) !== squash(r.statement) || this.command !== r.command || String(this.maxRows) !== String(r.max_rows));
                },
                get statement() { return this.command ? (this.command === this.describe ? this.command + ' ' + this.tbl.trim() : this.command) : this.sql; },
                command: {{ cell.command | tojson | forceescape }}, describe: 'DESCRIBE TABLE',
                tpop: false, tq: '', listing: null, tbl: {{ cell.table | tojson | forceescape }}, cols: [], colError: '',
+               /* Some of the reference rules for whether a Cell can be Run (cell.py, SqlCell.cannot_run), live as the user
+                  types; the server checks them all on Run. Keep them agreeing. */
                get runnable() { return this.command ? (this.command !== this.describe || !!this.tbl) : !!this.sql.trim(); },
                async openTables() {
                  this.tpop = !this.tpop; this.tq = '';

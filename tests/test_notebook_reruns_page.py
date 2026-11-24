@@ -13,33 +13,18 @@ def edited(page: str) -> bool:
     return 'data-edited="true"' in page
 
 
-def test_an_edited_cell_keeps_its_old_output_and_is_marked_edited_not_run(build_agent, web_client):
-    client = web_client(build_agent(ScriptedLLM([TextChunk("Old answer.")])))
+def test_the_edited_not_run_marker_on_an_ai_cell_is_the_typed_cells_answer(build_agent, web_client):
+    """The rule's cases are in test_cell.py; here, only that the page shows what the typed Cell answers."""
+    agent = build_agent(ScriptedLLM([TextChunk("Old answer.")]))
+    client = web_client(agent)
     nb, cell = new_notebook(client)
-    assert not edited(client.get(f"/n/{nb}").text)  # never run: nothing to be edited against
     run_cell(client, nb, cell, prompt="original", effort="high", max_rows="1000")
-    assert not edited(client.get(f"/n/{nb}/cells/{cell}").text)
+    assert not agent.cell(cell).edited and not edited(client.get(f"/n/{nb}/cells/{cell}").text)
 
-    for change in ({"prompt": "changed"}, {"effort": "low"}, {"max_rows": "5"}, {"model": "qwen/qwen3.8-27b", "effort": "low"}):
-        data = {"prompt": "original", "model": SONNET, "effort": "high", "max_rows": "1000", **change}
-        client.post(f"/n/{nb}/cells/{cell}/draft", data=data)
-        page = client.get(f"/n/{nb}/cells/{cell}").text
-        assert edited(page) and "edited, not run" in page and "Old answer." in page, change
-    client.post(f"/n/{nb}/cells/{cell}/draft", data={
-        "prompt": "original", "model": SONNET, "effort": "high", "max_rows": "1000"})
-    assert not edited(client.get(f"/n/{nb}/cells/{cell}").text)  # back to what ran
-
-
-def test_a_prompt_that_differs_only_in_spacing_is_not_edited(build_agent, web_client):
-    client = web_client(build_agent(ScriptedLLM([TextChunk("Old answer.")])))
-    nb, cell = new_notebook(client)
-    run_cell(client, nb, cell, prompt="show  top ports", effort="high", max_rows="1000")
-    for spaced in ("show top ports", "  show top  ports  ", "show\ntop\tports"):
-        data = {"prompt": spaced, "model": SONNET, "effort": "high", "max_rows": "1000"}
-        client.post(f"/n/{nb}/cells/{cell}/draft", data=data)
-        assert not edited(client.get(f"/n/{nb}/cells/{cell}").text), repr(spaced)
-    client.post(f"/n/{nb}/cells/{cell}/draft", data={"prompt": "show topports", "model": SONNET, "effort": "high", "max_rows": "1000"})
-    assert edited(client.get(f"/n/{nb}/cells/{cell}").text)  # removing the space between words is a text change
+    client.post(f"/n/{nb}/cells/{cell}/draft", data={"prompt": "changed", "model": SONNET, "effort": "high",
+                                                     "max_rows": "1000"})
+    page = client.get(f"/n/{nb}/cells/{cell}").text
+    assert agent.cell(cell).edited and edited(page) and "edited, not run" in page and "Old answer." in page
 
 
 def test_earlier_runs_tables_are_listed_collapsed_and_clearing_them_spares_saved_tables(build_agent, web_client):

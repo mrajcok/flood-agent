@@ -34,7 +34,7 @@ def test_move_copy_and_delete_persist(build_agent, web_client):
     r = client.post(f"/n/{nb}/cells/{md}/copy")
     copy = re.search(r'data-cell-id="(\w+)" data-kind="markdown"', r.text).group(1)
     assert order(agent, nb) == [md, copy, ai]
-    assert agent.notebooks.cell(copy)["draft"] == {"text": "note", "send_to_ai": True}
+    assert agent.notebooks.cell(copy)["draft"] == {"text": "note", "send_to_ai": True, "displays": []}
 
     assert client.get(f"/n/{nb}/cells/{copy}/delete-preview").json() == {"result": 0, "saved": 0}
     assert client.post(f"/n/{nb}/cells/{copy}/delete", data={"tables": "keep"}).status_code == 204

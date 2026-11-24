@@ -9,14 +9,17 @@ import contextlib
 import logging
 import sqlite3
 import threading
+from dataclasses import replace
 
 import pytest
 from conftest import DAY, Clock, ScriptedLLM
 
 from flood_agent import queries
 from flood_agent.catalog import CellRun
+from flood_agent.cell import SqlRunSettings, save_draft
 from flood_agent.events import CountEvent, DisplayEvent, TurnEnd
 from flood_agent.llm import TextChunk
+from flood_agent.notebooks import DEFAULT_MAX_ROWS
 
 SELECT = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
 SLOW = ("WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 400000000) "
@@ -30,7 +33,7 @@ async def run(agent, notebook_id, cell_id):
 
 async def run_sql(agent, notebook_id, cell_id):
     """Run a SQL Cell through the SQL Cell Run module."""
-    return [ev async for ev in agent.sql_cells.run(agent.notebooks.cell(cell_id))]
+    return [ev async for ev in agent.sql_cells.run(agent.cell(cell_id))]
 
 
 def run_of(agent, notebook_id, index):
@@ -98,7 +101,7 @@ async def test_statements_that_are_not_one_readable_select_are_refused(build_age
     with sqlite3.connect(tmp_path / "results.db") as con:
         con.execute("CREATE TABLE secret(v)")
     nb = agent.create_notebook()
-    for sql in ("DELETE FROM flows", "SELECT 1; SELECT 2", "SELECT * FROM results.secret", "SHOW TABLES"):
+    for sql in ("DELETE FROM flows", "SELECT 1; SELECT 2", "SELECT * FROM results.secret"):
         cell = agent.add_sql_cell(nb, sql=sql)
         await run_sql(agent, nb, cell)
         r = agent.notebooks.cell(cell)["run"]
@@ -116,14 +119,14 @@ def test_a_query_ending_in_limit_is_recognised_but_a_limit_in_a_subquery_is_not(
         assert not queries.ends_with_limit(sql), sql
 
 
-async def test_a_query_ending_in_limit_is_refused_with_a_pointer_to_the_row_cap(build_agent):
+async def test_an_old_sql_cell_saved_without_a_row_cap_runs_with_the_default_row_cap(build_agent):
     agent = build_agent(ScriptedLLM())
     nb = agent.create_notebook()
-    cell = agent.add_sql_cell(nb, sql="SELECT dport FROM flows LIMIT 5")
-    await run_sql(agent, nb, cell)
-    r = agent.notebooks.cell(cell)["run"]
-    assert r["status"] == "failed" and "row cap" in r["error"]
-    assert agent.tables.tables_of_run(cell, r["id"]) == []
+    cell = agent.notebooks.add_cell(nb, "sql", {"sql": "SELECT dport FROM flows"})
+    await run(agent, nb, cell)
+
+    r = run_of(agent, nb, 0)
+    assert r["status"] == "ok" and r["settings"] == {"max_rows": DEFAULT_MAX_ROWS, "command": ""}
 
 
 async def test_re_running_replaces_the_table_under_the_same_name(build_agent):
@@ -132,7 +135,7 @@ async def test_re_running_replaces_the_table_under_the_same_name(build_agent):
     cell = agent.add_sql_cell(nb, sql="SELECT dport FROM flows", max_rows=2)
     await run_sql(agent, nb, cell)
     first = table_of(agent, nb, 0)
-    agent.notebooks.edit_cell(cell, sql="SELECT sip, dport FROM flows", max_rows=3)
+    save_draft(agent.notebooks, cell, replace(agent.cell(cell).draft, sql="SELECT sip, dport FROM flows", settings=SqlRunSettings(3, "")))
     await run_sql(agent, nb, cell)
 
     second = table_of(agent, nb, 0)
@@ -151,7 +154,7 @@ async def test_a_failing_re_run_leaves_the_old_table_and_rows_untouched(build_ag
     before_run = run_of(agent, nb, 0)["id"]
     old = agent.tables[table_of(agent, nb, 0).name]
     old_rows = rows_of(agent, old.name)
-    agent.notebooks.edit_cell(cell, sql="SELECT nosuchcolumn FROM flows")
+    save_draft(agent.notebooks, cell, replace(agent.cell(cell).draft, sql="SELECT nosuchcolumn FROM flows"))
     await run_sql(agent, nb, cell)
 
     assert run_of(agent, nb, 0)["status"] == "failed"
@@ -175,7 +178,7 @@ async def test_stop_ends_a_running_sql_cell_and_leaves_the_old_table_untouched(b
     await run_sql(agent, nb, cell)
     old = table_of(agent, nb, 0)
     old_rows = rows_of(agent, old.name)
-    agent.notebooks.edit_cell(cell, sql=SLOW)
+    save_draft(agent.notebooks, cell, replace(agent.cell(cell).draft, sql=SLOW))
 
     task = asyncio.create_task(run_sql(agent, nb, cell))
     await until_running(agent, nb, 0)
@@ -319,7 +322,7 @@ async def test_a_re_run_never_overwrites_a_saved_table_it_makes_a_new_one(build_
     first = table_of(agent, nb, 0)
     agent.tables.update(first.name, new_name="my_ports")  # saved: no longer a Result Table
     saved_rows = rows_of(agent, "my_ports")
-    agent.notebooks.edit_cell(cell, sql="SELECT sip FROM flows", max_rows=3)
+    save_draft(agent.notebooks, cell, replace(agent.cell(cell).draft, sql="SELECT sip FROM flows", settings=SqlRunSettings(3, "")))
     await run_sql(agent, nb, cell)
 
     saved = agent.tables["my_ports"]
@@ -334,9 +337,9 @@ async def test_a_re_run_after_a_run_that_made_no_table_creates_a_new_table(build
     cell = agent.add_sql_cell(nb, sql="SELECT dport FROM flows", max_rows=2)
     await run_sql(agent, nb, cell)
     old = table_of(agent, nb, 0)
-    agent.notebooks.edit_cell(cell, sql="SELECT nosuchcolumn FROM flows")
+    save_draft(agent.notebooks, cell, replace(agent.cell(cell).draft, sql="SELECT nosuchcolumn FROM flows"))
     await run_sql(agent, nb, cell)  # failed: the latest Run made no table
-    agent.notebooks.edit_cell(cell, sql="SELECT sip FROM flows")
+    save_draft(agent.notebooks, cell, replace(agent.cell(cell).draft, sql="SELECT sip FROM flows"))
     await run_sql(agent, nb, cell)
 
     new = table_of(agent, nb, 0)
@@ -470,10 +473,10 @@ async def test_the_frozen_message_for_a_count_a_failure_and_a_stop(build_agent):
     agent = build_agent(ScriptedLLM(), query_timeout_s=60)
     nb = agent.create_notebook()
     count = agent.add_sql_cell(nb, sql="SELECT COUNT(*) FROM flows")
-    limited = agent.add_sql_cell(nb, sql="SELECT dport FROM flows LIMIT 5")
+    rejected = agent.add_sql_cell(nb, sql="SELECT 1; SELECT 2")
     slow = agent.add_sql_cell(nb, sql=SLOW)
     await run_sql(agent, nb, count)
-    await run_sql(agent, nb, limited)
+    await run_sql(agent, nb, rejected)
     task = asyncio.create_task(run_sql(agent, nb, slow))
     await until_running(agent, nb, 2)
     agent.sql_cells.stop(slow)
@@ -484,7 +487,7 @@ async def test_the_frozen_message_for_a_count_a_failure_and_a_stop(build_agent):
 
     value = run_of(agent, nb, 0)["result"]["count"]
     assert message(0) == f"[SQL Cell, run by the user] SELECT COUNT(*) FROM flows\nCount: {value}"
-    assert message(1) == f"[SQL Cell, run by the user] SELECT dport FROM flows LIMIT 5\nFailed: {queries.LIMIT_IN_SQL_CELL}"
+    assert message(1) == "[SQL Cell, run by the user] SELECT 1; SELECT 2\nFailed: Only a single read-only SELECT statement is allowed."
     assert message(2) == f"[SQL Cell, run by the user] {SLOW}\n(stopped by the user)"
 
 

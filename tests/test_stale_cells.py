@@ -1,7 +1,10 @@
 """Stale AI Cells: an AI Cell is stale when the context it would be sent now differs from the one its Run was sent."""
 
+from dataclasses import replace
+
 from conftest import ScriptedLLM, tool_call
 
+from flood_agent.cell import save_draft
 from flood_agent.llm import TextChunk
 
 SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
@@ -31,7 +34,7 @@ async def test_a_cell_that_just_ran_is_not_stale_and_a_never_run_cell_is_not_eit
 async def test_rerunning_an_edited_cell_above_makes_the_cell_below_stale_until_it_is_rerun(make_agent):
     agent, nb, above, below = await two_ai_cells(
         make_agent, [TextChunk("A.")], [TextChunk("B.")], [TextChunk("A2.")], [TextChunk("B2.")])
-    agent.notebooks.edit_ai_cell(above, prompt="first, edited")
+    save_draft(agent.notebooks, above, replace(agent.cell(above).draft, prompt="first, edited"))
     assert agent.stale_cells(nb) == set()  # edited but not re-run: cells below are sent what ran
     await run(agent, nb, above)
     assert agent.stale_cells(nb) == {below}  # the cell above is not stale of itself
@@ -54,9 +57,9 @@ async def test_toggling_send_to_ai_above_marks_stale_and_toggling_back_clears_it
     note = agent.add_markdown_cell(nb, "note", send_to_ai=True)
     cell = agent.add_ai_cell(nb, prompt="ask")
     await run(agent, nb, cell)
-    agent.notebooks.edit_ai_cell(note, send_to_ai=False)
+    save_draft(agent.notebooks, note, replace(agent.cell(note).draft, send_to_ai=False))
     assert agent.stale_cells(nb) == {cell}
-    agent.notebooks.edit_ai_cell(note, send_to_ai=True)
+    save_draft(agent.notebooks, note, replace(agent.cell(note).draft, send_to_ai=True))
     assert agent.stale_cells(nb) == set()
 
 
@@ -68,10 +71,10 @@ async def test_an_sql_cell_is_never_stale_but_rerunning_it_makes_the_ai_cell_bel
     ai = agent.add_ai_cell(nb, prompt="ask", after=note)
     await run(agent, nb, sql)
     await run(agent, nb, ai)
-    agent.notebooks.edit_ai_cell(note, send_to_ai=False)
+    save_draft(agent.notebooks, note, replace(agent.cell(note).draft, send_to_ai=False))
     assert agent.stale_cells(nb) == {ai}  # the SQL Cell above it is not listed
-    agent.notebooks.edit_ai_cell(note, send_to_ai=True)
-    agent.notebooks.edit_cell(sql, sql="SELECT DISTINCT dport FROM flows")
+    save_draft(agent.notebooks, note, replace(agent.cell(note).draft, send_to_ai=True))
+    save_draft(agent.notebooks, sql, replace(agent.cell(sql).draft, sql="SELECT DISTINCT dport FROM flows"))
     assert agent.stale_cells(nb) == set()  # a Draft alone changes nothing
     await run(agent, nb, sql)
     assert agent.stale_cells(nb) == {ai}

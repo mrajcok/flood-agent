@@ -9,6 +9,7 @@ from conftest import ScriptedLLM, tool_call
 
 from flood_agent.agent import Agent, NotebookBusy
 from flood_agent.catalog import CellRun
+from flood_agent.cell import save_draft
 from flood_agent.events import TextDelta, TraceReady
 from flood_agent.llm import TextChunk
 from flood_agent.notebooks import NotebookStore
@@ -84,7 +85,7 @@ async def test_a_run_records_what_ran_settings_status_answer_and_trace(make_agen
     assert r["context_tokens"] == 100
 
     # editing the Draft does not touch the Run; a new Run replaces it, under a new id
-    agent.notebooks.edit_ai_cell(cell, prompt="again")
+    save_draft(agent.notebooks, cell, replace(agent.cell(cell).draft, prompt="again"))
     assert run_of(agent, nb, 0)["prompt"] == "hi"
     agent.client_for = lambda model: ScriptedLLM([TextChunk("Second.")])
     await run(agent, nb, cell)

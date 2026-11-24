@@ -24,9 +24,10 @@ from typing import AsyncIterator, Callable
 from flood_agent import queries, table_names
 from flood_agent.ai_cell_context import SHOW_CELL_LABEL, SQL_CELL_LABEL, STOPPED_BELOW
 from flood_agent.catalog import Catalog, CellRun, Table, TableExpired
+from flood_agent.cell import SqlCell
 from flood_agent.events import CountEvent, DisplayEvent, Event, TurnEnd, TurnError
-from flood_agent.notebooks import COUNT_KIND, DEFAULT_MAX_ROWS, NotebookStore, RunStatus
-from flood_agent.show_commands import SHOW_IN_TEXTBOX, ShowFailed, is_show_statement, run_show, statement_of
+from flood_agent.notebooks import COUNT_KIND, NotebookStore, RunStatus
+from flood_agent.show_commands import ShowFailed, run_show
 from flood_agent.table_replacement import RefreshInProgress, ReplacementFailed, Rerun, TableReplacement
 
 log = logging.getLogger("uvicorn.error")  # the app's terminal log
@@ -157,20 +158,19 @@ class SqlCellRuns:
         self._running: dict[str, tuple[threading.Event, asyncio.Future]] = {}  # SQL Cell id -> its query's stop flag and thread
         self._closed = False
 
-    async def run(self, cell: dict) -> AsyncIterator[Event]:
-        """Run a SQL Cell with what its Draft holds and stream its events: a table or Count Display, an error,
-        then the end. Its Run replaces the Cell's earlier one. If the stream is abandoned (the client left, or
-        the app is closing), the query is stopped and waited for, and the Run is recorded as stopped.
+    async def run(self, cell: SqlCell) -> AsyncIterator[Event]:
+        """Run a SQL Cell with what its Draft would run as and stream its events: a table or Count Display, an
+        error, then the end. Its Run replaces the Cell's earlier one. If the stream is abandoned (the client left,
+        or the app is closing), the query is stopped and waited for, and the Run is recorded as stopped.
         RuntimeError after `aclose`."""
         if self._closed:
             raise RuntimeError("SQL Cell Runs are closed")
-        cell_id, draft = cell["id"], cell["draft"]
-        sql, max_rows = draft.get("sql", ""), draft.get("max_rows") or DEFAULT_MAX_ROWS
-        command, table = draft.get("command") or "", draft.get("table") or ""
-        statement = statement_of(command, table) if command else sql
-        last = cell["run"]  # the table a re-run replaces: the latest Run's own Result Table, if still live; never a Saved Table
-        prior = next((t for t in (self.tables.tables_of_run(cell_id, last["id"]) if last else []) if t.kind == "result"), None)
-        run_id = self.notebooks.start_run(cell_id, statement, {"max_rows": max_rows, "command": command}, "")
+        cell_id, sql, table, statement = cell.id, cell.draft.sql, cell.draft.table, cell.statement
+        settings = cell.run_settings
+        max_rows, command = settings.max_rows, settings.command
+        last = cell.run  # the table a re-run replaces: the latest Run's own Result Table, if still live; never a Saved Table
+        prior = next((t for t in (self.tables.tables_of_run(cell_id, last.id) if last else []) if t.kind == "result"), None)
+        run_id = self.notebooks.start_run(cell_id, statement, settings.stored(), "")
         stop = threading.Event()
         work = asyncio.ensure_future(asyncio.to_thread(
             self._execute, sql, max_rows, stop, prior, CellRun(cell_id, run_id), command, table))
@@ -230,10 +230,6 @@ class SqlCellRuns:
                 log.warning("SQL Cell %s failed: %s", owner.cell_id, e)
                 return _refused(str(e))
             return _ShowRows(names, rows, command)
-        if is_show_statement(sql):
-            return _refused(SHOW_IN_TEXTBOX)
-        if queries.ends_with_limit(sql):
-            return _refused(queries.LIMIT_IN_SQL_CELL)
 
         def failure(error: str, raw_error: str | None = None, stopped: bool = False) -> _Outcome:
             if stopped:

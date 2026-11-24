@@ -1,6 +1,7 @@
 """Notebook management: rename, delete (keep or delete the `rt_` tables), search and ordering by activity."""
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 from conftest import ScriptedLLM
@@ -9,6 +10,7 @@ from test_notebook_page import new_notebook
 from test_notebooks import Slow, run
 
 from flood_agent.agent import NotebookBusy
+from flood_agent.cell import save_draft
 from flood_agent.llm import TextChunk
 
 
@@ -32,10 +34,11 @@ async def test_the_list_is_ordered_by_last_edit_or_run(make_agent):
     new = agent.create_notebook()
     a = agent.add_ai_cell(old, prompt="a")
     agent.notebooks._now = lambda: 10**13  # a later clock: the run touches `old`
-    agent.notebooks.edit_cell(a, prompt="b")
+    save_draft(agent.notebooks, a, replace(agent.cell(a).draft, prompt="b"))
     assert [n["id"] for n in agent.notebooks.list_notebooks()] == [old, new]
     agent.notebooks._now = lambda: 10**13 + 5
-    agent.notebooks.edit_cell(agent.add_ai_cell(new, prompt="x"), prompt="y")
+    x = agent.add_ai_cell(new, prompt="x")
+    save_draft(agent.notebooks, x, replace(agent.cell(x).draft, prompt="y"))
     assert [n["id"] for n in agent.notebooks.list_notebooks()] == [new, old]
 
 

@@ -10,28 +10,45 @@ import json
 import sqlite3
 import time
 from contextlib import aclosing, asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from html import escape
 from pathlib import Path
-from typing import AsyncGenerator, Literal, cast
+from typing import Annotated, AsyncGenerator, Literal, cast
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 
 from flood_agent import dev_tools, lookup_tables, queries
 from flood_agent.agent import NO_MODEL, Agent, NotebookBusy, NotRefreshable, RefreshFailed, TablesChoice
 from flood_agent.ai_cell_context import without_stop_note
 from flood_agent.ai_cell_run import resolve_chart_data
 from flood_agent.catalog import TableExpired
-from flood_agent.cell_kinds import MARKDOWN
+from flood_agent.cell import (
+    AiCell,
+    AiDraft,
+    AiRunSettings,
+    CannotRun,
+    Cell,
+    MarkdownCell,
+    ModelEfforts,
+    SqlCell,
+    SqlDraft,
+    SqlRunSettings,
+    save_draft,
+    starting_ai_draft,
+    starting_sql_draft,
+    typed_cell,
+)
+from flood_agent.cell_kinds import AI, MARKDOWN, SQL
 from flood_agent.context_usage import context_usage
 from flood_agent.events import CountEvent, DisplayEvent, FlagEvent, LlmCallStarted, TextDelta, TraceLive, TurnEnd
 from flood_agent.lookup_tables import InvalidLookupTable
-from flood_agent.notebooks import COUNT_KIND, DEFAULT_MAX_ROWS
+from flood_agent.notebooks import COUNT_KIND
 from flood_agent.queries import InvalidSort
-from flood_agent.show_commands import DESCRIBE_TABLE, SHOW_COMMANDS, SHOW_IN_TEXTBOX, is_show_statement, statement_of
+from flood_agent.show_commands import SHOW_COMMANDS
 from flood_agent.table_replacement import RefreshInProgress
 from flood_agent.trace import short_model, split_system_prompt
 
@@ -53,6 +70,19 @@ TEMPLATES.env.globals["show_commands"] = SHOW_COMMANDS
 def _sse(event: str, data: str) -> str:
     lines = "".join(f"data: {line}\n" for line in data.split("\n"))
     return f"event: {event}\n{lines}\n"
+
+
+class DraftForm(BaseModel):
+    """What an AI or SQL Cell's form posts, as typed: an AI Cell's prompt, model and Effort; a SQL Cell's query,
+    command and table; either's row cap. Each is "" when not posted."""
+
+    prompt: str = ""
+    model: str = ""
+    effort: str = ""
+    max_rows: str = ""
+    sql: str = ""
+    command: str = ""
+    table: str = ""
 
 
 @dataclass(frozen=True)
@@ -109,11 +139,6 @@ def live_event_sse(ev, key: str, live: LiveCounter, refreshable_counts: bool = T
     if isinstance(ev, FlagEvent):
         return _sse("flag", TEMPLATES.get_template("flag_note.html").render(flags=ev.items))
     return None
-
-
-def _squash(text: str) -> str:
-    """Text with every run of whitespace as one space and none at the ends: spacing alone is not an edit."""
-    return " ".join(str(text).split())
 
 
 def _table_display_urls(result_table: str) -> dict:
@@ -215,23 +240,26 @@ def create_app(
         label = next((m["label"] for m in models if m["id"] == model), model)
         return f"{label} · {effort or 'no effort'} · ≤ {max_rows:,} rows"
 
-    def new_cell_settings() -> dict:
-        """What a new AI Cell starts with: the settings last run (if that model is still usable), else the defaults."""
-        last = agent.notebooks.last_settings()
-        if last is None or not any(m["id"] == last["model"] and not m["disabled"] for m in models):
-            last = {"model": default_model, "effort": None, "max_rows": DEFAULT_MAX_ROWS}
-        spec = agent.config.spec_of(last["model"])
-        effort = last["effort"] if spec and last["effort"] in spec.efforts else (spec.default_effort if spec else None)
-        return {"model": last["model"], "effort": effort, "max_rows": last["max_rows"]}
+    def can_use(model_id: str) -> bool:
+        """Whether a model can be used here: in the list, and not disabled (no API key)."""
+        return any(m["id"] == model_id and not m["disabled"] for m in models)
+
+    def efforts_of(model_id: str) -> ModelEfforts | None:
+        """A curated model's Efforts, whether or not it can be used here; None outside the list."""
+        spec = agent.config.spec_of(model_id)
+        return ModelEfforts(tuple(spec.efforts), spec.default_effort) if spec else None
 
     def add_ai_cell(notebook_id: str, after: str | None = None, before: str | None = None) -> str:
-        s = new_cell_settings()
-        return agent.add_ai_cell(notebook_id, model=s["model"], effort=s["effort"], max_rows=s["max_rows"], after=after, before=before)
+        last = agent.notebooks.last_settings(AI)
+        d = starting_ai_draft(AiRunSettings.from_stored(last) if last else None, can_use, efforts_of, default_model)
+        s = d.settings
+        return agent.add_ai_cell(notebook_id, d.prompt, model=s.model, effort=s.effort, max_rows=s.max_rows,
+                                 after=after, before=before)
 
     def add_sql_cell(notebook_id: str, after: str | None = None, before: str | None = None, sql: str = "") -> str:
-        last = agent.notebooks.last_settings("sql")
-        return agent.add_sql_cell(
-            notebook_id, sql, max_rows=last["max_rows"] if last else DEFAULT_MAX_ROWS, after=after, before=before)
+        last = agent.notebooks.last_settings(SQL)
+        d = starting_sql_draft(SqlRunSettings.from_stored(last) if last else None)
+        return agent.add_sql_cell(notebook_id, sql, max_rows=d.settings.max_rows, after=after, before=before)
 
     def output_items(run: dict, refreshable_counts: bool = True) -> list[dict]:
         """What a finished (or stopped) Run shows under its prompt: the answer's text and its Displays, in order.
@@ -265,65 +293,83 @@ def create_app(
             return None
         return as_of if as_of > run["finished_at"] else None
 
-    def cell_view(cell: dict, starting: bool = False, stale: bool = False) -> dict:
-        """What the cell template needs. `starting`: its run has been asked for and its stream not yet opened,
-        so it shows as running with no output."""
-        draft, run = cell["draft"], cell["run"]
-        if cell["kind"] == MARKDOWN:
-            embedded = draft.get("displays") or []
-            tables = {d["table"] for d in embedded}
-            expired = tables - agent.tables.live_among(tables)
-            displays = [display_item({"kind": d["kind"], "result_table": d["table"], "spec": d.get("spec"), "columns": []},
-                                     expired) for d in embedded]
-            return {"id": cell["id"], "notebook_id": cell["notebook_id"], "kind": MARKDOWN,
-                    "text": draft.get("text", ""), "send_to_ai": bool(draft.get("send_to_ai")), "displays": displays}
-        model = draft.get("model") or default_model
+    def markdown_view(cell: MarkdownCell) -> dict:
+        """What a Markdown Cell's template needs: its text, its Send to AI tick and its embedded Displays."""
+        embedded = cell.draft.displays
+        tables = {d["table"] for d in embedded}
+        expired = tables - agent.tables.live_among(tables)
+        displays = [display_item({"kind": d["kind"], "result_table": d["table"], "spec": d.get("spec"), "columns": []},
+                                 expired) for d in embedded]
+        return {"id": cell.id, "notebook_id": cell.notebook_id, "kind": MARKDOWN,
+                "text": cell.draft.text, "send_to_ai": cell.draft.send_to_ai, "displays": displays}
+
+    def runnable_view(cell: AiCell | SqlCell, run: dict | None, starting: bool, stale: bool, model: str, effort: str,
+                      **fields) -> dict:
+        """What an AI or SQL Cell's template needs whatever its kind: its Draft (`fields`, the kind's own), its chip,
+        and its latest Run's number and status."""
         view = {
-            "id": cell["id"], "notebook_id": cell["notebook_id"], "kind": cell["kind"], "prompt": draft.get("prompt", ""),
-            "sql": draft.get("sql", ""), "command": draft.get("command") or "", "table": draft.get("table") or "",
-            "model": model, "effort": draft.get("effort") or "", "max_rows": draft.get("max_rows") or DEFAULT_MAX_ROWS,
+            "id": cell.id, "notebook_id": cell.notebook_id, "prompt": "", "sql": "", "command": "", "table": "",
+            **fields, "model": model, "effort": effort, "max_rows": cell.run_settings.max_rows,
             "running": starting, "streaming": starting, "polling": False, "status": None, "number": None,
             "output": [], "footer": None, "ran": None, "edited": False, "earlier_tables": [],
             "stale": stale,
         }
-        view["chip"] = settings_label(model, view["effort"], view["max_rows"])
+        view["chip"] = settings_label(model, effort, view["max_rows"])
         if starting or run is None:
             return view
-        view["number"], view["status"] = run["number"], run["status"]
+        view["number"], view["status"], view["edited"] = run["number"], run["status"], cell.edited
         if run["status"] == "running":
             view["running"] = view["polling"] = True  # opened mid-run: nothing streams to this page, so it re-fetches
-        view["output"] = output_items(run, refreshable_counts=cell["kind"] != "sql")
-        if cell["kind"] == "sql":
-            view["result"] = run["result"]
-            view["ran_utc"] = time.strftime("%H:%M UTC", time.gmtime(run["started_at"] / 1000))
-            view["started_at_ms"] = run["started_at"]
-            view["refreshed_at_ms"] = refreshed_elsewhere(run)
-            view["ran"] = {"statement": run["prompt"], "command": run["settings"].get("command") or "",
-                           "max_rows": run["settings"]["max_rows"]}
-            now = (statement_of(view["command"], view["table"]) if view["command"] else view["sql"],
-                   view["command"], view["max_rows"])
-            ran_sql = tuple(view["ran"].values())
-            view["edited"] = (_squash(now[0]), *now[1:]) != (_squash(ran_sql[0]), *ran_sql[1:])
+        return view
+
+    def ai_view(cell: AiCell, run: dict | None, starting: bool, stale: bool) -> dict:
+        s = cell.run_settings
+        view = runnable_view(cell, run, starting, stale, s.model, s.effort or "", kind=AI, prompt=cell.prompt)
+        if starting or run is None or cell.run is None:
             return view
-        ran = run["settings"]
-        view["ran"] = {"prompt": run["prompt"], "model": ran["model"], "effort": ran["effort"] or "",
-                       "max_rows": ran["max_rows"]}
-        ran_prompt, *ran_settings = view["ran"].values()
-        view["edited"] = (_squash(draft["prompt"]), model, view["effort"], view["max_rows"]) != (_squash(ran_prompt), *ran_settings)
+        view["output"] = output_items(run)
+        ran = cell.run.settings
+        view["ran"] = {"prompt": cell.run.prompt, "model": ran.model, "effort": ran.effort or "",
+                       "max_rows": ran.max_rows}
         if not view["running"]:
             view["earlier_tables"] = [
                 {"name": t.name, "settings_url": _table_display_urls(t.name)["settings_url"]}
-                for t in agent.tables.earlier_tables_of_cell(cell["id"], run["id"])]
+                for t in agent.tables.earlier_tables_of_cell(cell.id, run["id"])]
         trace = run["trace"]
         view["footer"] = {
             "started_at_ms": run["started_at"], "ran_utc": time.strftime("%H:%M UTC", time.gmtime(run["started_at"] / 1000)),
-            "settings": settings_label(ran["model"], ran["effort"], ran["max_rows"]),
+            "settings": settings_label(ran.model, ran.effort, ran.max_rows),
             "stopped": run["status"] == "stopped", "failed": run["status"] == "failed", "error": run["error"], "trace": trace,
             "calls": trace["totals"]["llm_steps"] if trace else None,
             "cost": trace["totals"]["cost"] if trace else None,
-            "context": usage(run["context_tokens"], ran["model"]),
+            "context": usage(run["context_tokens"], ran.model),
         }
         return view
+
+    def sql_view(cell: SqlCell, run: dict | None, starting: bool, stale: bool) -> dict:
+        d = cell.draft
+        view = runnable_view(cell, run, starting, stale, default_model, "", kind=SQL, sql=d.sql,
+                             command=d.settings.command, table=d.table)
+        if starting or run is None or cell.run is None:
+            return view
+        view["output"] = output_items(run, refreshable_counts=False)
+        view["result"] = run["result"]
+        view["ran_utc"] = time.strftime("%H:%M UTC", time.gmtime(run["started_at"] / 1000))
+        view["started_at_ms"] = run["started_at"]
+        view["refreshed_at_ms"] = refreshed_elsewhere(run)
+        view["ran"] = {"statement": cell.run.statement, "command": cell.run.settings.command,
+                       "max_rows": cell.run.settings.max_rows}
+        return view
+
+    def cell_view(row: dict, starting: bool = False, stale: bool = False) -> dict:
+        """What the cell template needs, for a row from Notebook storage. `starting`: its run has been asked for and
+        its stream not yet opened, so it shows as running with no output."""
+        cell = typed_cell(row, default_model)
+        if isinstance(cell, MarkdownCell):
+            return markdown_view(cell)
+        if isinstance(cell, AiCell):
+            return ai_view(cell, row["run"], starting, stale)
+        return sql_view(cell, row["run"], starting, stale)
 
     def cell_html(notebook_id: str, cell_id: str, template: str, starting: bool = False) -> str:
         cell = agent.notebooks.cell(cell_id)
@@ -331,26 +377,27 @@ def create_app(
         return TEMPLATES.get_template(template).render(
             cell=cell_view(cell, starting, stale), notebook_id=notebook_id, **model_picker())
 
-    def known_cell(notebook_id: str, cell_id: str) -> dict:
+    def known_cell(notebook_id: str, cell_id: str) -> Cell:
+        """The Cell, typed, if it is in the notebook (404 otherwise)."""
         if not agent.notebooks.exists(notebook_id):
             raise HTTPException(404, "unknown notebook")
         try:
-            cell = agent.notebooks.cell(cell_id)
+            cell = agent.cell(cell_id)
         except KeyError:
             raise HTTPException(404, "unknown cell")
-        if cell["notebook_id"] != notebook_id:
+        if cell.notebook_id != notebook_id:
             raise HTTPException(404, "unknown cell")
         return cell
 
-    def posted_settings(prompt: str, model: str, effort: str, max_rows: str) -> dict:
-        chosen = model_choice(model)
-        return {"prompt": prompt, "model": chosen, "effort": effort_choice(chosen, effort),
-                "max_rows": _parse_max_rows(max_rows)}
-
-    def posted_command(command: str, table: str) -> dict:
-        if command and command not in SHOW_COMMANDS:
-            raise HTTPException(422, f"unknown command {command!r}")
-        return {"command": command, "table": table.strip()}
+    def posted_draft(cell: AiCell | SqlCell, form: DraftForm) -> AiDraft | SqlDraft:
+        """The typed Draft an AI or SQL Cell's form posted (422 for a model, Effort, row cap or command it can't have)."""
+        max_rows = _parse_max_rows(form.max_rows)
+        if isinstance(cell, SqlCell):
+            if form.command and form.command not in SHOW_COMMANDS:
+                raise HTTPException(422, f"unknown command {form.command!r}")
+            return SqlDraft(form.sql, SqlRunSettings(max_rows, form.command), form.table.strip())
+        chosen = model_choice(form.model)
+        return AiDraft(form.prompt, AiRunSettings(chosen, effort_choice(chosen, form.effort), max_rows))
 
     def new_notebook() -> str:
         notebook_id = agent.create_notebook()
@@ -422,13 +469,13 @@ def create_app(
         return [c["id"] for c in agent.notebooks.cells(notebook_id) if c["id"] in stale]
 
     @app.post("/n/{notebook_id}/cells", response_class=HTMLResponse)
-    def add_cell(notebook_id: str, kind: str = Form("ai"), after: str | None = Form(None), at: str = Form(""),
+    def add_cell(notebook_id: str, kind: str = Form(AI), after: str | None = Form(None), at: str = Form(""),
                  sql: str = Form("")):
         """Insert a cell after `after` (or at the end; at the very top with `at=start`); returns it, for the
         page to place. A SQL Cell starts with `sql` as its Draft (Open as SQL Cell)."""
         if not agent.notebooks.exists(notebook_id):
             raise HTTPException(404, "unknown notebook")
-        if kind not in ("ai", "sql", MARKDOWN):
+        if kind not in (AI, SQL, MARKDOWN):
             raise HTTPException(422, f"unknown cell kind {kind!r}")
         if after:
             known_cell(notebook_id, after)
@@ -438,7 +485,7 @@ def create_app(
             before = first[0]["id"] if first else None
         if kind == MARKDOWN:
             cell_id = agent.add_markdown_cell(notebook_id, after=after or None, before=before)
-        elif kind == "sql":
+        elif kind == SQL:
             cell_id = add_sql_cell(notebook_id, after or None, before, sql)
         else:
             cell_id = add_ai_cell(notebook_id, after or None, before)
@@ -495,22 +542,20 @@ def create_app(
         return cell_html(notebook_id, cell_id, "notebook_cell.html")
 
     @app.post("/n/{notebook_id}/cells/{cell_id}/draft", status_code=204)
-    def save_draft(notebook_id: str, cell_id: str, prompt: str = Form(""), model: str = Form(""),
-                   effort: str = Form(""), max_rows: str = Form(""), sql: str = Form(""),
-                   command: str = Form(""), table: str = Form("")):
+    def save_posted_draft(notebook_id: str, cell_id: str, form: Annotated[DraftForm, Form()]):
         """Remember a cell's edited prompt (or SQL) and settings without running them."""
         cell = known_cell(notebook_id, cell_id)
-        if cell["kind"] == "sql":
-            agent.notebooks.edit_cell(cell_id, sql=sql, max_rows=_parse_max_rows(max_rows), **posted_command(command, table))
-            return
-        agent.notebooks.edit_ai_cell(cell_id, **posted_settings(prompt, model, effort, max_rows))
+        if isinstance(cell, MarkdownCell):
+            raise HTTPException(422, "a Markdown Cell's Draft is saved as Markdown")
+        save_draft(agent.notebooks, cell_id, posted_draft(cell, form))
 
     @app.post("/n/{notebook_id}/cells/{cell_id}/markdown", status_code=204)
     def save_markdown(notebook_id: str, cell_id: str, text: str = Form(""), send_to_ai: str = Form("")):
         """Remember a Markdown Cell's text and its Send to AI tick (a missing tick is unticked)."""
-        if known_cell(notebook_id, cell_id)["kind"] != MARKDOWN:
+        cell = known_cell(notebook_id, cell_id)
+        if not isinstance(cell, MarkdownCell):
             raise HTTPException(422, "not a Markdown Cell")
-        agent.notebooks.edit_ai_cell(cell_id, text=text, send_to_ai=bool(send_to_ai))
+        save_draft(agent.notebooks, cell_id, replace(cell.draft, text=text, send_to_ai=bool(send_to_ai)))
 
     @app.post("/n/{notebook_id}/cells/{cell_id}/earlier-tables/delete", response_class=HTMLResponse)
     def delete_earlier_tables(notebook_id: str, cell_id: str):
@@ -519,29 +564,19 @@ def create_app(
         return cell_html(notebook_id, cell_id, "notebook_cell.html")
 
     @app.post("/n/{notebook_id}/cells/{cell_id}/run", response_class=HTMLResponse)
-    def run_cell(notebook_id: str, cell_id: str, prompt: str = Form(""), model: str = Form(""),
-                 effort: str = Form(""), max_rows: str = Form(""), sql: str = Form(""),
-                 command: str = Form(""), table: str = Form("")):
-        """Save the cell's prompt (or SQL) and settings as its Draft and return the cell, running; its stream starts the Run."""
+    def run_cell(notebook_id: str, cell_id: str, form: Annotated[DraftForm, Form()]):
+        """Save the cell's prompt (or SQL) and settings as its Draft and return the cell, running; its stream starts the
+        Run. 422 with the reason if the Draft cannot be Run (it stays saved)."""
         cell = known_cell(notebook_id, cell_id)
-        if cell["kind"] not in ("ai", "sql"):
+        if isinstance(cell, MarkdownCell):
             raise HTTPException(422, "only AI and SQL Cells run")
-        is_sql = cell["kind"] == "sql"
-        if is_sql and command:
-            if command == DESCRIBE_TABLE and not table.strip():
-                raise HTTPException(422, "Pick a table to describe")
-        elif is_sql and is_show_statement(sql):
-            raise HTTPException(422, SHOW_IN_TEXTBOX)
-        elif is_sql and queries.ends_with_limit(sql):
-            raise HTTPException(422, queries.LIMIT_IN_SQL_CELL)
-        elif not (sql if is_sql else prompt).strip():
-            raise HTTPException(422, "Write some SQL to run" if is_sql else "Write a prompt to run")
+        draft = posted_draft(cell, form)
+        save_draft(agent.notebooks, cell_id, draft)
+        reason = replace(cell, draft=draft).cannot_run()
+        if reason is not None:
+            raise HTTPException(422, reason)
         if agent.running_cell(notebook_id):
             raise HTTPException(409, "A cell in this notebook is already running")
-        if is_sql:
-            agent.notebooks.edit_cell(cell_id, sql=sql, max_rows=_parse_max_rows(max_rows), **posted_command(command, table))
-        else:
-            agent.notebooks.edit_ai_cell(cell_id, **posted_settings(prompt, model, effort, max_rows))
         return cell_html(notebook_id, cell_id, "notebook_cell.html", starting=True)
 
     @app.get("/n/{notebook_id}/cells/{cell_id}/stream")
@@ -560,6 +595,8 @@ def create_app(
                             break
             except NotebookBusy:
                 yield _sse("text", '<span class="md-delta">A cell in this notebook is already running.</span>')
+            except CannotRun as e:  # its Draft changed after the Run route accepted it
+                yield _sse("text", f'<span class="md-delta">{escape(str(e))}</span>')
             except Exception as e:  # keep the stream well-formed for the browser
                 yield _sse("text", f'<span class="md-delta">{escape(f" [error: {type(e).__name__}]")}</span>')
             yield _sse("end", "done")

@@ -190,7 +190,7 @@ async def test_a_client_that_leaves_mid_query_abandons_it_and_the_run_is_stopped
     agent = build_agent(ScriptedLLM(), query_timeout_s=60)
     nb = agent.create_notebook()
     cell = agent.add_sql_cell(nb, sql=SLOW)
-    task = asyncio.create_task(run_sql(agent, nb, cell))
+    task = asyncio.create_task(run(agent, nb, cell))
     await until_running(agent, nb, 0)
 
     task.cancel()  # the page was closed: the stream is abandoned

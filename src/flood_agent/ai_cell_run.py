@@ -3,7 +3,7 @@
 A Run sends the LLM the system prompt, the AI Cell context above the Cell and its prompt, then runs the LLM step
 loop: each step's text is streamed, its tool calls are run on the MCP server, and their outcomes become Result
 Tables, Displays and Count Displays. Values in a reply the LLM was never sent are flagged. The loop ends with an
-answer, a give-up or step-limit notice, the user's stop, or a failure.
+answer, a give-up or step-limit notice, a stop (the user's, or the stream dropped), or a failure.
 
 It records the Run in the NotebookStore (its messages, Displays and Trace) and its Result Tables in the Table
 Catalog against the Cell and Run.
@@ -12,8 +12,9 @@ Catalog against the Cell and Run.
 import asyncio
 import json
 import time
+from contextlib import aclosing
 from dataclasses import dataclass
-from typing import AsyncIterator, Awaitable, Callable
+from typing import AsyncGenerator, AsyncIterator, Awaitable, Callable
 
 from mcp.types import TextContent
 
@@ -140,12 +141,13 @@ class AiCellRuns:
 
         It is sent the system prompt, then the AI Cells above it in order (each as its latest Run stored it:
         prompt, answer, tool calls and results), then its own prompt; cells below are never sent. Its Run
-        replaces the cell's earlier one. If the stream is abandoned (the client left), the Run is cancelled
-        and waited for."""
+        replaces the cell's earlier one. If the stream is abandoned (the client left), the Run is stopped as
+        the user's stop does (what it had streamed is kept) and waited for."""
         task, queue, release = self._start(cell)
         try:
-            async for item in self._consume(task, queue):
-                yield item
+            async with aclosing(self._consume(task, queue)) as events:  # closed with this stream, not later
+                async for item in events:
+                    yield item
         finally:
             release()  # now, not whenever the task's done callback gets its turn
 
@@ -216,7 +218,7 @@ class AiCellRuns:
             await queue.put(e)
 
     @staticmethod
-    async def _consume(task: asyncio.Task, queue: _TurnQueue) -> AsyncIterator[Event]:
+    async def _consume(task: asyncio.Task, queue: _TurnQueue) -> AsyncGenerator[Event]:
         """Yield a producer task's events until its end. If the consumer stops early, the task is cancelled
         and awaited."""
         finished = False
@@ -245,16 +247,13 @@ class AiCellRuns:
         messages, Displays and Trace are stored with `run`, and its Result Tables recorded against it.
 
         `end` gets the finished Trace and how the loop ended: ok (an answer, including a give-up or step-limit
-        notice), stopped (the user's stop), or failed with the value-free message the user was shown."""
+        notice), stopped (the user's stop, the client leaving or the app closing), or failed with the value-free message the user was shown."""
         trace = TraceBuilder(model, on_add=lambda entry: queue.put_nowait(TraceLive(entry)))
         live = _LiveStep()
         status, error = "ok", None
         try:
             await self._converse(history, prompt_tables, run, session_id, request, trace, queue, max_result_rows, model, effort, live)
-        except asyncio.CancelledError:
-            if asyncio.current_task() not in self._stopped:  # the client left or the app is closing
-                self._save_trace(run, trace.finish())
-                raise
+        except asyncio.CancelledError:  # the user's stop, the client leaving or the app closing: all stop the Run
             self._record_stop(history, run, live, trace, queue)
             status = "stopped"
         except Exception as e:
@@ -271,7 +270,7 @@ class AiCellRuns:
         self.notebooks.save_trace(run.run_id, trace, context_tokens(trace))
 
     def _record_stop(self, history, run: CellRun, live: _LiveStep, trace: TraceBuilder, queue: _TurnQueue) -> None:
-        """The user stopped the turn: keep the text of the step in progress, and say so, in the page,
+        """The turn was stopped: keep the text of the step in progress, and say so, in the page,
         the history and the Trace. A step cut off before its tool calls were answered keeps only its text."""
         partial = live.text if live.open else ""
         if live.open and not live.in_trace:

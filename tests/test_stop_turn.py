@@ -131,3 +131,50 @@ async def test_a_registration_failure_is_not_reported_as_the_tool_failing(make_a
     tool_messages = [m["content"] for m in run_of(agent, nb)["messages"] if m["role"] == "tool"]
     assert tool_messages and "could not be recorded" in tool_messages[0]
     assert "failed to run" not in tool_messages[0]
+
+
+async def abandoned_run(agent, notebook, cell, until):
+    """Run a cell until `until(event)` holds, then leave, as a closed page does: the event stream is abandoned."""
+    events = agent.run_cell(notebook, cell)
+    async for ev in events:
+        if until(ev):
+            break
+    await events.aclose()
+
+
+async def test_closing_the_page_mid_text_stops_the_run_and_keeps_its_partial_answer(make_agent):
+    agent = await make_agent(HangingLLM())
+    nb = agent.create_notebook()
+    cell = agent.add_ai_cell(nb, prompt="q")
+    await abandoned_run(agent, nb, cell, lambda ev: isinstance(ev, TextDelta) and "Partial" in ev.text)
+
+    run = run_of(agent, nb)
+    assert run["status"] == "stopped" and run["error"] is None
+    assert run["messages"][-1] == {"role": "assistant", "content": "Partial answer\n\n*Stopped by user.*"}
+    assert [e["kind"] for e in run["trace"]["entries"]] == ["llm_step", "stopped"]
+    assert run["trace"]["entries"][0]["raw_response"]["content"] == "Partial answer"
+
+
+async def test_a_run_whose_page_was_closed_reaches_the_cell_below_as_stopped_by_the_user(make_agent):
+    agent = await make_agent(HangingLLM())
+    nb = agent.create_notebook()
+    a, b = agent.add_ai_cell(nb, prompt="ask A"), agent.add_ai_cell(nb, prompt="ask B")
+    await abandoned_run(agent, nb, a, lambda ev: isinstance(ev, TextDelta) and "Partial" in ev.text)
+    scripted = ScriptedLLM([TextChunk("ok")])
+    agent.client_for = lambda model: scripted
+    async for _ in agent.run_cell(nb, b):
+        pass
+
+    assert [m["content"] for m in scripted.calls[0][1:]] == [
+        "ask A", "Partial answer\n\n(stopped by the user)", "ask B"]
+
+
+async def test_closing_the_page_before_any_text_stops_the_run_with_no_answer_text(make_agent):
+    agent = await make_agent(HangingLLM(text=""))
+    nb = agent.create_notebook()
+    cell = agent.add_ai_cell(nb, prompt="q")
+    await abandoned_run(agent, nb, cell, lambda ev: isinstance(ev, LlmCallStarted))
+
+    run = run_of(agent, nb)
+    assert run["status"] == "stopped"
+    assert run["messages"] == [{"role": "user", "content": "q"}, {"role": "assistant", "content": "*Stopped by user.*"}]

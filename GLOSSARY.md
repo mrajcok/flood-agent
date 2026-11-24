@@ -118,7 +118,7 @@ _Avoid_: Count result
 
 **Trace**:
 The per-Run record of an AI Cell of what passed between the Agent and the LLM — prompts, generated SQL, Query Metadata, errors, Chart Specs, cost and timings — shown to the user on demand. While the Cell runs, the same entries appear live, one section per LLM call, each collapsing when the next call starts; the live view is replaced by the Trace line in the Cell's footer when the Run ends.
-A user can **stop** a running Cell: what it had streamed is kept (in the page, the Run and the Trace, marked stopped), and AI Cells below see it as stopped.
+A user can **stop** a running Cell: what it had streamed is kept (in the page, the Run and the Trace, marked stopped), and AI Cells below see it as stopped. Closing the page mid-Run, or the app shutting down, stops it the same way.
 _Avoid_: Debug log, details
 
 **Query Plan**:

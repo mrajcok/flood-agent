@@ -9,10 +9,10 @@ import logging
 import sys
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import aclosing, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import AsyncIterator, Callable, Iterator, Literal
+from typing import AsyncGenerator, AsyncIterator, Callable, Iterator, Literal, cast
 
 from mcp import StdioServerParameters
 
@@ -359,8 +359,10 @@ class Agent:
         self._running_cells[notebook_id] = cell_id
         runs = self.sql_cells if cell["kind"] == SQL else self.ai_cells
         try:
-            async for item in runs.run(cell):
-                yield item
+            # Closed with this stream, so that an abandoned stream (the page was closed) stops the Run now.
+            async with aclosing(cast(AsyncGenerator, runs.run(cell))) as events:
+                async for item in events:
+                    yield item
         finally:
             if self._running_cells.get(notebook_id) == cell_id:
                 del self._running_cells[notebook_id]

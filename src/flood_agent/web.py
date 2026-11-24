@@ -10,7 +10,7 @@ import json
 import sqlite3
 import time
 from contextlib import aclosing, asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from html import escape
 from pathlib import Path
 from typing import AsyncGenerator, Literal, cast
@@ -25,7 +25,9 @@ from flood_agent.agent import NO_MODEL, Agent, NotebookBusy, NotRefreshable, Ref
 from flood_agent.ai_cell_context import without_stop_note
 from flood_agent.ai_cell_run import resolve_chart_data
 from flood_agent.catalog import TableExpired
-from flood_agent.cell_kinds import MARKDOWN
+from flood_agent.cell import AiDraft, MarkdownCell, SqlDraft
+from flood_agent.cell import save_draft as save_cell_draft
+from flood_agent.cell_kinds import MARKDOWN, SQL
 from flood_agent.context_usage import context_usage
 from flood_agent.events import CountEvent, DisplayEvent, FlagEvent, LlmCallStarted, TextDelta, TraceLive, TurnEnd
 from flood_agent.lookup_tables import InvalidLookupTable
@@ -342,15 +344,15 @@ def create_app(
             raise HTTPException(404, "unknown cell")
         return cell
 
-    def posted_settings(prompt: str, model: str, effort: str, max_rows: str) -> dict:
+    def posted_draft(kind: str, prompt: str, model: str, effort: str, max_rows: str, sql: str, command: str,
+                     table: str) -> AiDraft | SqlDraft:
+        """The typed Draft an AI or SQL Cell's form posted (422 for a model, Effort, row cap or command it can't have)."""
+        if kind == SQL:
+            if command and command not in SHOW_COMMANDS:
+                raise HTTPException(422, f"unknown command {command!r}")
+            return SqlDraft(sql, _parse_max_rows(max_rows), command, table.strip())
         chosen = model_choice(model)
-        return {"prompt": prompt, "model": chosen, "effort": effort_choice(chosen, effort),
-                "max_rows": _parse_max_rows(max_rows)}
-
-    def posted_command(command: str, table: str) -> dict:
-        if command and command not in SHOW_COMMANDS:
-            raise HTTPException(422, f"unknown command {command!r}")
-        return {"command": command, "table": table.strip()}
+        return AiDraft(prompt, chosen, effort_choice(chosen, effort), _parse_max_rows(max_rows))
 
     def new_notebook() -> str:
         notebook_id = agent.create_notebook()
@@ -499,18 +501,19 @@ def create_app(
                    effort: str = Form(""), max_rows: str = Form(""), sql: str = Form(""),
                    command: str = Form(""), table: str = Form("")):
         """Remember a cell's edited prompt (or SQL) and settings without running them."""
-        cell = known_cell(notebook_id, cell_id)
-        if cell["kind"] == "sql":
-            agent.notebooks.edit_cell(cell_id, sql=sql, max_rows=_parse_max_rows(max_rows), **posted_command(command, table))
-            return
-        agent.notebooks.edit_ai_cell(cell_id, **posted_settings(prompt, model, effort, max_rows))
+        kind = known_cell(notebook_id, cell_id)["kind"]
+        if kind == MARKDOWN:
+            raise HTTPException(422, "a Markdown Cell's Draft is saved as Markdown")
+        save_cell_draft(agent.notebooks, cell_id, posted_draft(kind, prompt, model, effort, max_rows, sql, command, table))
 
     @app.post("/n/{notebook_id}/cells/{cell_id}/markdown", status_code=204)
     def save_markdown(notebook_id: str, cell_id: str, text: str = Form(""), send_to_ai: str = Form("")):
         """Remember a Markdown Cell's text and its Send to AI tick (a missing tick is unticked)."""
-        if known_cell(notebook_id, cell_id)["kind"] != MARKDOWN:
+        known_cell(notebook_id, cell_id)
+        cell = agent.cell(cell_id)
+        if not isinstance(cell, MarkdownCell):
             raise HTTPException(422, "not a Markdown Cell")
-        agent.notebooks.edit_ai_cell(cell_id, text=text, send_to_ai=bool(send_to_ai))
+        save_cell_draft(agent.notebooks, cell_id, replace(cell.draft, text=text, send_to_ai=bool(send_to_ai)))
 
     @app.post("/n/{notebook_id}/cells/{cell_id}/earlier-tables/delete", response_class=HTMLResponse)
     def delete_earlier_tables(notebook_id: str, cell_id: str):
@@ -538,10 +541,7 @@ def create_app(
             raise HTTPException(422, "Write some SQL to run" if is_sql else "Write a prompt to run")
         if agent.running_cell(notebook_id):
             raise HTTPException(409, "A cell in this notebook is already running")
-        if is_sql:
-            agent.notebooks.edit_cell(cell_id, sql=sql, max_rows=_parse_max_rows(max_rows), **posted_command(command, table))
-        else:
-            agent.notebooks.edit_ai_cell(cell_id, **posted_settings(prompt, model, effort, max_rows))
+        save_cell_draft(agent.notebooks, cell_id, posted_draft(cell["kind"], prompt, model, effort, max_rows, sql, command, table))
         return cell_html(notebook_id, cell_id, "notebook_cell.html", starting=True)
 
     @app.get("/n/{notebook_id}/cells/{cell_id}/stream")

@@ -1,5 +1,7 @@
 """The Cell module, tested by passing the rows Notebook storage returns: no HTTP client, no MCP server."""
 
+import pytest
+
 from flood_agent.cell import (
     AiCell,
     AiDraft,
@@ -11,9 +13,10 @@ from flood_agent.cell import (
     SqlCell,
     SqlDraft,
     SqlRunSettings,
+    save_draft,
     typed_cell,
 )
-from flood_agent.notebooks import DEFAULT_MAX_ROWS
+from flood_agent.notebooks import DEFAULT_MAX_ROWS, NotebookStore
 
 DEFAULT_MODEL = "default/model"
 
@@ -94,3 +97,73 @@ def test_a_markdown_cell_without_displays_or_send_to_ai_has_none_and_is_not_sent
     cell = typed_cell(_row("markdown", {"text": "x"}), DEFAULT_MODEL)
 
     assert cell.draft == MarkdownDraft("x", False, ())
+
+
+# --- saving a Draft, through a real Notebook storage --------------------------------------------------------------
+
+
+def _stored_cell(tmp_path, kind, draft):
+    store = NotebookStore(tmp_path / "app.db")
+    return store, store.add_cell(store.create_notebook(), kind, draft)
+
+
+def _saved(store, cell_id):
+    return typed_cell(store.cell(cell_id), DEFAULT_MODEL).draft
+
+
+def test_an_ai_draft_is_saved_whole(tmp_path):
+    store, cell_id = _stored_cell(tmp_path, "ai", {"prompt": "old", "model": "m/x", "effort": "low", "max_rows": 5})
+
+    save_draft(store, cell_id, AiDraft("top ports", "m/y", None, 50))
+
+    assert _saved(store, cell_id) == AiDraft("top ports", "m/y", None, 50)
+
+
+def test_a_sql_draft_is_saved_whole(tmp_path):
+    store, cell_id = _stored_cell(tmp_path, "sql", {"sql": "SELECT 1", "max_rows": 5, "command": "", "table": ""})
+
+    save_draft(store, cell_id, SqlDraft("", 20, "DESCRIBE TABLE", "flows"))
+
+    assert _saved(store, cell_id) == SqlDraft("", 20, "DESCRIBE TABLE", "flows")
+
+
+def test_a_markdown_draft_is_saved_whole_with_its_displays(tmp_path):
+    store, cell_id = _stored_cell(tmp_path, "markdown", {"text": "old", "send_to_ai": True})
+    displays = ({"kind": "chart", "table": "rt_1", "spec": {"mark": "bar"}},)
+
+    save_draft(store, cell_id, MarkdownDraft("# Notes", False, displays))
+
+    assert _saved(store, cell_id) == MarkdownDraft("# Notes", False, displays)
+
+
+def test_a_draft_that_cannot_be_run_is_still_saved(tmp_path):
+    store, cell_id = _stored_cell(tmp_path, "ai", {"prompt": "old", "model": "m/x", "effort": None, "max_rows": 5})
+
+    save_draft(store, cell_id, AiDraft("", "m/x", None, 5))
+
+    assert _saved(store, cell_id).prompt == ""
+
+
+def test_saving_a_draft_leaves_the_latest_run_in_place(tmp_path):
+    store, cell_id = _stored_cell(tmp_path, "ai", {"prompt": "ran", "model": "m/x", "effort": None, "max_rows": 5})
+    run_id = store.start_run(cell_id, "ran", {"model": "m/x", "effort": None, "max_rows": 5}, "fp")
+
+    save_draft(store, cell_id, AiDraft("edited", "m/x", None, 5))
+
+    assert typed_cell(store.cell(cell_id), DEFAULT_MODEL).run == LatestAiRun(run_id, "ran", AiRunSettings("m/x", None, 5))
+
+
+@pytest.mark.parametrize("kind, draft", [
+    ("ai", SqlDraft("SELECT 1", 5, "", "")),
+    ("sql", AiDraft("q", "m/x", None, 5)),
+    ("markdown", AiDraft("q", "m/x", None, 5)),
+    ("ai", MarkdownDraft("text", False, ())),
+])
+def test_a_draft_of_the_wrong_kind_is_refused_and_the_stored_draft_kept(tmp_path, kind, draft):
+    stored = {"ai": {"prompt": "kept"}, "sql": {"sql": "kept"}, "markdown": {"text": "kept"}}[kind]
+    store, cell_id = _stored_cell(tmp_path, kind, stored)
+
+    with pytest.raises(ValueError):
+        save_draft(store, cell_id, draft)
+
+    assert store.cell(cell_id)["draft"] == stored

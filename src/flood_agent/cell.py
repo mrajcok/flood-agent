@@ -11,7 +11,7 @@ Each AI and SQL Cell answers what its Draft would run as: its prompt or statemen
 from dataclasses import dataclass
 
 from flood_agent.cell_kinds import AI, MARKDOWN, SQL
-from flood_agent.notebooks import DEFAULT_MAX_ROWS
+from flood_agent.notebooks import DEFAULT_MAX_ROWS, NotebookStore
 from flood_agent.show_commands import statement_of
 
 
@@ -34,6 +34,10 @@ class AiDraft:
     model: str
     effort: str | None
     max_rows: int
+
+    def stored(self) -> dict:
+        """As Notebook storage keeps it (a stored format: keep its keys)."""
+        return {"prompt": self.prompt, "model": self.model, "effort": self.effort, "max_rows": self.max_rows}
 
 
 @dataclass(frozen=True)
@@ -84,6 +88,10 @@ class SqlDraft:
     command: str
     table: str
 
+    def stored(self) -> dict:
+        """As Notebook storage keeps it (a stored format: keep its keys)."""
+        return {"sql": self.sql, "max_rows": self.max_rows, "command": self.command, "table": self.table}
+
 
 @dataclass(frozen=True)
 class LatestSqlRun:
@@ -119,6 +127,10 @@ class MarkdownDraft:
     text: str
     send_to_ai: bool
     displays: tuple[dict, ...]
+
+    def stored(self) -> dict:
+        """As Notebook storage keeps it (a stored format: keep its keys)."""
+        return {"text": self.text, "send_to_ai": self.send_to_ai, "displays": list(self.displays)}
 
 
 @dataclass(frozen=True)
@@ -159,3 +171,19 @@ def typed_cell(row: dict, default_model: str) -> Cell:
         return MarkdownCell(row["id"], row["notebook_id"], MarkdownDraft(
             draft.get("text", ""), bool(draft.get("send_to_ai")), tuple(draft.get("displays") or ())))
     raise ValueError(f"unknown Cell kind {row['kind']!r}")
+
+
+# --- saving a Draft ---------------------------------------------------------------------------------------------
+
+Draft = AiDraft | SqlDraft | MarkdownDraft
+
+_KIND_OF_DRAFT = {AiDraft: AI, SqlDraft: SQL, MarkdownDraft: MARKDOWN}
+
+
+def save_draft(notebooks: NotebookStore, cell_id: str, draft: Draft) -> None:
+    """Save `draft` as the Cell's Draft, whole, replacing the stored one (even when it cannot be Run). The latest Run
+    is untouched. ValueError if the Draft is not of the Cell's kind; KeyError if the Cell is unknown."""
+    kind = notebooks.cell(cell_id)["kind"]
+    if _KIND_OF_DRAFT[type(draft)] != kind:
+        raise ValueError(f"a {type(draft).__name__} is not the Draft of a {kind} Cell")
+    notebooks.replace_draft(cell_id, draft.stored())

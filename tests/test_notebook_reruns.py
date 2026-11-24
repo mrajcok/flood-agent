@@ -1,9 +1,12 @@
 """Drafts, AI Cell re-runs, Runs that did not finish as cells below see them, and tables from earlier Runs."""
 
 
+from dataclasses import replace
+
 from conftest import ScriptedLLM, tool_call
 from test_notebooks import SQL, Slow
 
+from flood_agent.cell import save_draft
 from flood_agent.events import TextDelta, TurnError
 from flood_agent.llm import LLMError, TextChunk
 
@@ -18,7 +21,7 @@ async def test_a_cell_below_is_sent_the_prompt_that_ran_not_the_edited_draft(mak
     nb = agent.create_notebook()
     a, b = agent.add_ai_cell(nb, prompt="ask A"), agent.add_ai_cell(nb, prompt="ask B")
     await run(agent, nb, a)
-    agent.notebooks.edit_ai_cell(a, prompt="something else entirely")
+    save_draft(agent.notebooks, a, replace(agent.cell(a).draft, prompt="something else entirely"))
     await run(agent, nb, b)
 
     assert [m["content"] for m in llm.calls[1][1:]] == ["ask A", "Answer A.", "ask B"]

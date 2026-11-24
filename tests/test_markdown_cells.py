@@ -1,10 +1,12 @@
 """Markdown Cells: storage, and what reaches the AI Cells below (only text whose Send to AI is ticked)."""
 
 import re
+from dataclasses import replace
 
 from conftest import ScriptedLLM
 from test_notebook_page import new_notebook
 
+from flood_agent.cell import save_draft
 from flood_agent.events import FlagEvent
 from flood_agent.llm import TextChunk
 from flood_agent.semantic_layer import SYSTEM_INSTRUCTIONS
@@ -39,7 +41,7 @@ async def test_ticking_send_to_ai_changes_the_context_fingerprint(make_agent):
     cell = agent.add_ai_cell(nb, prompt="ask")
     await run(agent, nb, cell)
     before = agent.notebooks.cell(cell)["run"]["context_fingerprint"]
-    agent.notebooks.edit_ai_cell(note, send_to_ai=True)
+    save_draft(agent.notebooks, note, replace(agent.cell(note).draft, send_to_ai=True))
     await run(agent, nb, cell)
     assert agent.notebooks.cell(cell)["run"]["context_fingerprint"] != before
 
@@ -91,12 +93,12 @@ def test_saving_a_markdown_cell_keeps_its_text_and_tick_and_shows_them_escaped_f
 
     r = client.post(f"/n/{nb}/cells/{md}/markdown", data={"text": "## Plan <b>x</b>", "send_to_ai": "1"})
     assert r.status_code == 204
-    assert agent.notebooks.cell(md)["draft"] == {"text": "## Plan <b>x</b>", "send_to_ai": True}
+    assert agent.notebooks.cell(md)["draft"] == {"text": "## Plan <b>x</b>", "send_to_ai": True, "displays": []}
     shown = client.get(f"/n/{nb}/cells/{md}").text
     assert "## Plan &lt;b&gt;x&lt;/b&gt;" in shown and "<b>x</b>" not in shown
 
     client.post(f"/n/{nb}/cells/{md}/markdown", data={"text": "again"})
-    assert agent.notebooks.cell(md)["draft"] == {"text": "again", "send_to_ai": False}
+    assert agent.notebooks.cell(md)["draft"] == {"text": "again", "send_to_ai": False, "displays": []}
 
 
 def test_markdown_endpoint_rejects_an_ai_cell_and_unknown_kinds(build_agent, web_client):

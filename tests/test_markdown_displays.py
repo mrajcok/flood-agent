@@ -3,12 +3,14 @@
 
 import json
 import re
+from dataclasses import replace
 
 import pytest
 from conftest import ScriptedLLM, last_tool_result, tool_call
 from test_notebook_page import new_notebook
 from test_notebooks import run
 
+from flood_agent.cell import save_draft
 from flood_agent.llm import TextChunk
 
 SQL = "SELECT dport, bytes FROM flows WHERE bytes = 987654"
@@ -83,7 +85,7 @@ async def test_a_rename_elsewhere_updates_an_embedded_display_including_its_char
 async def test_a_ticked_copy_sends_the_text_and_table_names_but_no_rows(make_agent):
     agent, llm, nb, cell, table = await ran_cell(make_agent, extra=[[TextChunk("ok")]])
     new = agent.copy_to_markdown_cell(nb, cell)
-    agent.notebooks.edit_cell(new, send_to_ai=True)
+    save_draft(agent.notebooks, new, replace(agent.cell(new).draft, send_to_ai=True))
     below = agent.add_ai_cell(nb, prompt="next")
     await run(agent, nb, below)
     note = [m["content"] for m in llm.calls[-1] if str(m.get("content")).startswith("[Markdown note]")]

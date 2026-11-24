@@ -228,17 +228,13 @@ class NotebookStore:
             con.execute("DELETE FROM cells WHERE id=?", (cell_id,))
             self._touch(con, row["notebook_id"])
 
-    def edit_ai_cell(self, cell_id: str, **changes) -> None:
-        self.edit_cell(cell_id, **changes)
-
-    def edit_cell(self, cell_id: str, **changes) -> None:
-        """Change fields of a cell's Draft (an AI Cell's prompt, model, effort, max_rows; a SQL Cell's sql,
-        max_rows; a Markdown Cell's text, send_to_ai). The latest Run is untouched."""
+    def replace_draft(self, cell_id: str, draft: dict) -> None:
+        """Replace a cell's stored Draft with `draft` (see `cell.save_draft`, which saves a typed one). The latest Run
+        is untouched. KeyError if unknown."""
         with closing(self._connect()) as con, con:
-            row = con.execute("SELECT notebook_id, draft FROM cells WHERE id=?", (cell_id,)).fetchone()
+            row = con.execute("SELECT notebook_id FROM cells WHERE id=?", (cell_id,)).fetchone()
             if row is None:
                 raise KeyError(cell_id)
-            draft = {**json.loads(row["draft"]), **changes}
             con.execute("UPDATE cells SET draft=? WHERE id=?", (json.dumps(draft), cell_id))
             self._touch(con, row["notebook_id"])
 

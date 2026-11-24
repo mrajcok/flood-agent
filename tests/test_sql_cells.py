@@ -9,12 +9,14 @@ import contextlib
 import logging
 import sqlite3
 import threading
+from dataclasses import replace
 
 import pytest
 from conftest import DAY, Clock, ScriptedLLM
 
 from flood_agent import queries
 from flood_agent.catalog import CellRun
+from flood_agent.cell import save_draft
 from flood_agent.events import CountEvent, DisplayEvent, TurnEnd
 from flood_agent.llm import TextChunk
 from flood_agent.notebooks import DEFAULT_MAX_ROWS
@@ -143,7 +145,7 @@ async def test_re_running_replaces_the_table_under_the_same_name(build_agent):
     cell = agent.add_sql_cell(nb, sql="SELECT dport FROM flows", max_rows=2)
     await run_sql(agent, nb, cell)
     first = table_of(agent, nb, 0)
-    agent.notebooks.edit_cell(cell, sql="SELECT sip, dport FROM flows", max_rows=3)
+    save_draft(agent.notebooks, cell, replace(agent.cell(cell).draft, sql="SELECT sip, dport FROM flows", max_rows=3))
     await run_sql(agent, nb, cell)
 
     second = table_of(agent, nb, 0)
@@ -162,7 +164,7 @@ async def test_a_failing_re_run_leaves_the_old_table_and_rows_untouched(build_ag
     before_run = run_of(agent, nb, 0)["id"]
     old = agent.tables[table_of(agent, nb, 0).name]
     old_rows = rows_of(agent, old.name)
-    agent.notebooks.edit_cell(cell, sql="SELECT nosuchcolumn FROM flows")
+    save_draft(agent.notebooks, cell, replace(agent.cell(cell).draft, sql="SELECT nosuchcolumn FROM flows"))
     await run_sql(agent, nb, cell)
 
     assert run_of(agent, nb, 0)["status"] == "failed"
@@ -186,7 +188,7 @@ async def test_stop_ends_a_running_sql_cell_and_leaves_the_old_table_untouched(b
     await run_sql(agent, nb, cell)
     old = table_of(agent, nb, 0)
     old_rows = rows_of(agent, old.name)
-    agent.notebooks.edit_cell(cell, sql=SLOW)
+    save_draft(agent.notebooks, cell, replace(agent.cell(cell).draft, sql=SLOW))
 
     task = asyncio.create_task(run_sql(agent, nb, cell))
     await until_running(agent, nb, 0)
@@ -330,7 +332,7 @@ async def test_a_re_run_never_overwrites_a_saved_table_it_makes_a_new_one(build_
     first = table_of(agent, nb, 0)
     agent.tables.update(first.name, new_name="my_ports")  # saved: no longer a Result Table
     saved_rows = rows_of(agent, "my_ports")
-    agent.notebooks.edit_cell(cell, sql="SELECT sip FROM flows", max_rows=3)
+    save_draft(agent.notebooks, cell, replace(agent.cell(cell).draft, sql="SELECT sip FROM flows", max_rows=3))
     await run_sql(agent, nb, cell)
 
     saved = agent.tables["my_ports"]
@@ -345,9 +347,9 @@ async def test_a_re_run_after_a_run_that_made_no_table_creates_a_new_table(build
     cell = agent.add_sql_cell(nb, sql="SELECT dport FROM flows", max_rows=2)
     await run_sql(agent, nb, cell)
     old = table_of(agent, nb, 0)
-    agent.notebooks.edit_cell(cell, sql="SELECT nosuchcolumn FROM flows")
+    save_draft(agent.notebooks, cell, replace(agent.cell(cell).draft, sql="SELECT nosuchcolumn FROM flows"))
     await run_sql(agent, nb, cell)  # failed: the latest Run made no table
-    agent.notebooks.edit_cell(cell, sql="SELECT sip FROM flows")
+    save_draft(agent.notebooks, cell, replace(agent.cell(cell).draft, sql="SELECT sip FROM flows"))
     await run_sql(agent, nb, cell)
 
     new = table_of(agent, nb, 0)

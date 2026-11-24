@@ -8,14 +8,17 @@ defaults again.
 Each AI and SQL Cell answers what its Draft would run as: its prompt or statement, and its Run settings.
 
 Each AI and SQL Cell answers whether it is edited: whether its Draft differs from its latest Run.
+
+`cannot_run` says why a Cell cannot be Run (a plain, value-free reason), or None if it can.
 """
 
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from flood_agent import queries
 from flood_agent.cell_kinds import AI, MARKDOWN, SQL
 from flood_agent.notebooks import DEFAULT_MAX_ROWS, NotebookStore
-from flood_agent.show_commands import statement_of
+from flood_agent.show_commands import DESCRIBE_TABLE, SHOW_IN_TEXTBOX, is_show_statement, statement_of
 
 
 def _squash(text: str) -> str:
@@ -209,6 +212,32 @@ def save_draft(notebooks: NotebookStore, cell_id: str, draft: Draft) -> None:
     if _KIND_OF_DRAFT[type(draft)] != kind:
         raise ValueError(f"a {type(draft).__name__} is not the Draft of a {kind} Cell")
     notebooks.replace_draft(cell_id, draft.stored())
+
+
+# --- Can run ---------------------------------------------------------------------------------------------------
+# The SQL Cell's Alpine `runnable` getter (cell_sql.html) mirrors some of these rules as the user types.
+
+NEVER_RUN = "A Markdown Cell is never Run."
+
+
+class CannotRun(Exception):
+    """The Cell cannot be Run; the message is the plain, value-free reason (see `cannot_run`)."""
+
+
+def cannot_run(cell: Cell) -> str | None:
+    """Why its Draft cannot be Run, plainly and with no values in it, or None if it can be."""
+    if isinstance(cell, MarkdownCell):
+        return NEVER_RUN
+    if isinstance(cell, AiCell):
+        return None if cell.draft.prompt.strip() else "Write a prompt to run"
+    draft = cell.draft
+    if draft.command:
+        return "Pick a table to describe" if draft.command == DESCRIBE_TABLE and not draft.table.strip() else None
+    if is_show_statement(draft.sql):
+        return SHOW_IN_TEXTBOX
+    if queries.ends_with_limit(draft.sql):
+        return queries.LIMIT_IN_SQL_CELL
+    return None if draft.sql.strip() else "Write some SQL to run"
 
 
 # --- Starting Drafts --------------------------------------------------------------------------------------------

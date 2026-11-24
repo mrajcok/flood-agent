@@ -27,7 +27,7 @@ from flood_agent.catalog import Catalog, CellRun, Table, TableExpired
 from flood_agent.cell import SqlCell
 from flood_agent.events import CountEvent, DisplayEvent, Event, TurnEnd, TurnError
 from flood_agent.notebooks import COUNT_KIND, NotebookStore, RunStatus
-from flood_agent.show_commands import SHOW_IN_TEXTBOX, ShowFailed, is_show_statement, run_show
+from flood_agent.show_commands import ShowFailed, run_show
 from flood_agent.table_replacement import RefreshInProgress, ReplacementFailed, Rerun, TableReplacement
 
 log = logging.getLogger("uvicorn.error")  # the app's terminal log
@@ -230,10 +230,6 @@ class SqlCellRuns:
                 log.warning("SQL Cell %s failed: %s", owner.cell_id, e)
                 return _refused(str(e))
             return _ShowRows(names, rows, command)
-        if is_show_statement(sql):
-            return _refused(SHOW_IN_TEXTBOX)
-        if queries.ends_with_limit(sql):
-            return _refused(queries.LIMIT_IN_SQL_CELL)
 
         def failure(error: str, raw_error: str | None = None, stopped: bool = False) -> _Outcome:
             if stopped:

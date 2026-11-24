@@ -172,6 +172,51 @@ def test_a_draft_of_the_wrong_kind_is_refused_and_the_stored_draft_kept(tmp_path
     assert store.cell(cell_id)["draft"] == stored
 
 
+# --- Can run ---------------------------------------------------------------------------------------------------
+
+from flood_agent.cell import cannot_run  # noqa: E402
+
+
+def test_ai_cells_and_sql_cells_with_something_to_run_can_run():
+    for row in (_row("ai", {"prompt": "top ports"}), _row("sql", {"sql": "SELECT 1"}),
+                _row("sql", {"sql": "", "command": "SHOW TABLES"}),
+                _row("sql", {"sql": "SHOW TABLES", "command": "DESCRIBE TABLE", "table": "flows"}),
+                _row("sql", {"sql": "SELECT dport FROM flows WHERE dport IN (SELECT dport FROM flows LIMIT 5)"})):
+        assert cannot_run(typed_cell(row, DEFAULT_MODEL)) is None, row
+
+
+def test_an_ai_cell_with_an_empty_prompt_cannot_run():
+    for prompt in ("", "  \n\t"):
+        assert cannot_run(typed_cell(_row("ai", {"prompt": prompt}), DEFAULT_MODEL)) == "Write a prompt to run"
+
+
+def test_a_sql_cell_with_empty_sql_cannot_run():
+    for sql in ("", "  \n"):
+        assert cannot_run(typed_cell(_row("sql", {"sql": sql}), DEFAULT_MODEL)) == "Write some SQL to run"
+
+
+def test_a_describe_table_cell_with_no_table_cannot_run():
+    cell = typed_cell(_row("sql", {"sql": "", "command": "DESCRIBE TABLE", "table": " "}), DEFAULT_MODEL)
+
+    assert cannot_run(cell) == "Pick a table to describe"
+
+
+def test_show_or_describe_typed_in_the_sql_box_cannot_run():
+    for sql in ("SHOW TABLES", "describe flows", "-- note\nDESC flows"):
+        reason = cannot_run(typed_cell(_row("sql", {"sql": sql}), DEFAULT_MODEL))
+        assert reason == "SHOW and DESCRIBE are not run from the SQL box: pick one in the Command drop-down instead."
+
+
+def test_a_query_ending_in_limit_cannot_run_and_is_pointed_to_the_rows_drop_down():
+    reason = cannot_run(typed_cell(_row("sql", {"sql": "SELECT dport FROM flows LIMIT 5"}), DEFAULT_MODEL))
+
+    assert reason is not None and reason.startswith("End the query without LIMIT") and "row cap" in reason
+
+
+def test_a_markdown_cell_is_never_run():
+    assert cannot_run(typed_cell(_row("markdown", {"text": "# Notes"}), DEFAULT_MODEL)) == "A Markdown Cell is never Run."
+
+
 # --- Starting Drafts ----------------------------------------------------------------------------------------
 
 USABLE = {DEFAULT_MODEL: UsableModel(("low", "high"), "low"), "m/other": UsableModel(("medium", "max"), "medium")}

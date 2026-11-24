@@ -25,7 +25,8 @@ from flood_agent.agent import NO_MODEL, Agent, NotebookBusy, NotRefreshable, Ref
 from flood_agent.ai_cell_context import without_stop_note
 from flood_agent.ai_cell_run import resolve_chart_data
 from flood_agent.catalog import TableExpired
-from flood_agent.cell_kinds import MARKDOWN
+from flood_agent.cell import UsableModel, starting_ai_draft, starting_sql_draft
+from flood_agent.cell_kinds import AI, MARKDOWN, SQL
 from flood_agent.context_usage import context_usage
 from flood_agent.events import CountEvent, DisplayEvent, FlagEvent, LlmCallStarted, TextDelta, TraceLive, TurnEnd
 from flood_agent.lookup_tables import InvalidLookupTable
@@ -215,23 +216,19 @@ def create_app(
         label = next((m["label"] for m in models if m["id"] == model), model)
         return f"{label} · {effort or 'no effort'} · ≤ {max_rows:,} rows"
 
-    def new_cell_settings() -> dict:
-        """What a new AI Cell starts with: the settings last run (if that model is still usable), else the defaults."""
-        last = agent.notebooks.last_settings()
-        if last is None or not any(m["id"] == last["model"] and not m["disabled"] for m in models):
-            last = {"model": default_model, "effort": None, "max_rows": DEFAULT_MAX_ROWS}
-        spec = agent.config.spec_of(last["model"])
-        effort = last["effort"] if spec and last["effort"] in spec.efforts else (spec.default_effort if spec else None)
-        return {"model": last["model"], "effort": effort, "max_rows": last["max_rows"]}
+    def usable_model(model_id: str) -> UsableModel | None:
+        """A model's Efforts, or None when it cannot be used here (not in the list, or no API key)."""
+        m = next((m for m in models if m["id"] == model_id and not m["disabled"]), None)
+        return UsableModel(tuple(m["efforts"]), m["default_effort"]) if m else None
 
     def add_ai_cell(notebook_id: str, after: str | None = None, before: str | None = None) -> str:
-        s = new_cell_settings()
-        return agent.add_ai_cell(notebook_id, model=s["model"], effort=s["effort"], max_rows=s["max_rows"], after=after, before=before)
+        d = starting_ai_draft(agent.notebooks.last_settings(AI), usable_model, default_model)
+        return agent.add_ai_cell(notebook_id, d.prompt, model=d.model, effort=d.effort, max_rows=d.max_rows,
+                                 after=after, before=before)
 
     def add_sql_cell(notebook_id: str, after: str | None = None, before: str | None = None, sql: str = "") -> str:
-        last = agent.notebooks.last_settings("sql")
-        return agent.add_sql_cell(
-            notebook_id, sql, max_rows=last["max_rows"] if last else DEFAULT_MAX_ROWS, after=after, before=before)
+        d = starting_sql_draft(agent.notebooks.last_settings(SQL))
+        return agent.add_sql_cell(notebook_id, sql, max_rows=d.max_rows, after=after, before=before)
 
     def output_items(run: dict, refreshable_counts: bool = True) -> list[dict]:
         """What a finished (or stopped) Run shows under its prompt: the answer's text and its Displays, in order.

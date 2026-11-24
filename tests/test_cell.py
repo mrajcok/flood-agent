@@ -11,6 +11,9 @@ from flood_agent.cell import (
     SqlCell,
     SqlDraft,
     SqlRunSettings,
+    UsableModel,
+    starting_ai_draft,
+    starting_sql_draft,
     typed_cell,
 )
 from flood_agent.notebooks import DEFAULT_MAX_ROWS
@@ -94,3 +97,44 @@ def test_a_markdown_cell_without_displays_or_send_to_ai_has_none_and_is_not_sent
     cell = typed_cell(_row("markdown", {"text": "x"}), DEFAULT_MODEL)
 
     assert cell.draft == MarkdownDraft("x", False, ())
+
+
+# --- Starting Drafts ----------------------------------------------------------------------------------------
+
+USABLE = {DEFAULT_MODEL: UsableModel(("low", "high"), "low"), "m/other": UsableModel(("medium", "max"), "medium")}
+
+
+def test_a_new_ai_cell_with_no_earlier_run_starts_with_the_defaults():
+    assert starting_ai_draft(None, USABLE.get, DEFAULT_MODEL) == AiDraft("", DEFAULT_MODEL, "low", DEFAULT_MAX_ROWS)
+
+
+def test_a_new_ai_cell_starts_with_the_last_settings_run_when_that_model_can_be_used():
+    last = {"model": "m/other", "effort": "max", "max_rows": 50}
+
+    assert starting_ai_draft(last, USABLE.get, DEFAULT_MODEL) == AiDraft("", "m/other", "max", 50)
+
+
+def test_a_new_ai_cell_falls_back_to_the_default_model_when_the_last_model_cannot_be_used():
+    last = {"model": "m/keyless", "effort": "max", "max_rows": 50}
+
+    assert starting_ai_draft(last, USABLE.get, DEFAULT_MODEL) == AiDraft("", DEFAULT_MODEL, "low", 50)
+
+
+def test_a_new_ai_cell_falls_back_to_the_models_default_effort_when_the_last_effort_is_not_offered():
+    last = {"model": "m/other", "effort": "low", "max_rows": 50}
+
+    assert starting_ai_draft(last, USABLE.get, DEFAULT_MODEL) == AiDraft("", "m/other", "medium", 50)
+
+
+def test_a_new_ai_cell_with_a_model_without_effort_control_has_no_effort():
+    usable = {DEFAULT_MODEL: UsableModel((), None)}.get
+
+    assert starting_ai_draft(None, usable, DEFAULT_MODEL) == AiDraft("", DEFAULT_MODEL, None, DEFAULT_MAX_ROWS)
+
+
+def test_a_new_sql_cell_starts_with_the_last_row_cap_run():
+    assert starting_sql_draft({"max_rows": 50, "command": "SHOW TABLES"}) == SqlDraft("", 50, "", "")
+
+
+def test_a_new_sql_cell_with_no_earlier_run_starts_with_the_default_row_cap():
+    assert starting_sql_draft(None) == SqlDraft("", DEFAULT_MAX_ROWS, "", "")

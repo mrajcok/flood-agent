@@ -8,6 +8,7 @@ defaults again.
 Each AI and SQL Cell answers what its Draft would run as: its prompt or statement, and its Run settings.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from flood_agent.cell_kinds import AI, MARKDOWN, SQL
@@ -159,3 +160,34 @@ def typed_cell(row: dict, default_model: str) -> Cell:
         return MarkdownCell(row["id"], row["notebook_id"], MarkdownDraft(
             draft.get("text", ""), bool(draft.get("send_to_ai")), tuple(draft.get("displays") or ())))
     raise ValueError(f"unknown Cell kind {row['kind']!r}")
+
+
+# --- Starting Drafts --------------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class UsableModel:
+    """What a new AI Cell needs of a model that can be used: the Efforts it offers and its default Effort."""
+
+    efforts: tuple[str, ...]
+    default_effort: str | None
+
+
+def starting_ai_draft(
+    last: dict | None, usable_model: Callable[[str], UsableModel | None], default_model: str,
+) -> AiDraft:
+    """What a new AI Cell starts with, given the settings last Run for an AI Cell (None: no earlier Run).
+    `usable_model` gives a model's Efforts, or None when it cannot be used (e.g. no API key)."""
+    last = last or {"model": default_model, "effort": None, "max_rows": DEFAULT_MAX_ROWS}
+    model, effort, spec = last["model"], last["effort"], usable_model(last["model"])
+    if spec is None:
+        model, effort, spec = default_model, None, usable_model(default_model)
+    if spec is None:  # nothing known of the default model's Efforts
+        return AiDraft("", model, None, last["max_rows"])
+    return AiDraft("", model, effort if effort in spec.efforts else spec.default_effort, last["max_rows"])
+
+
+def starting_sql_draft(last: dict | None) -> SqlDraft:
+    """What a new SQL Cell starts with, given the settings last Run for a SQL Cell (None: no earlier Run): an empty
+    query with that Run's row cap."""
+    return SqlDraft("", last["max_rows"] if last else DEFAULT_MAX_ROWS, "", "")

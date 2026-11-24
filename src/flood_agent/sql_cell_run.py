@@ -25,7 +25,7 @@ from flood_agent import queries, table_names
 from flood_agent.ai_cell_context import SHOW_CELL_LABEL, SQL_CELL_LABEL, STOPPED_BELOW
 from flood_agent.catalog import Catalog, CellRun, Table, TableExpired
 from flood_agent.events import CountEvent, DisplayEvent, Event, TurnEnd, TurnError
-from flood_agent.notebooks import COUNT_KIND, DEFAULT_MAX_ROWS, NotebookStore
+from flood_agent.notebooks import COUNT_KIND, DEFAULT_MAX_ROWS, NotebookStore, RunStatus
 from flood_agent.show_commands import SHOW_IN_TEXTBOX, ShowFailed, is_show_statement, run_show, statement_of
 from flood_agent.table_replacement import RefreshInProgress, ReplacementFailed, Rerun, TableReplacement
 
@@ -47,7 +47,8 @@ class _ShowRows:
     columns: list[str]
     rows: list[list]
     command: str
-    status = "ok"
+    status: RunStatus = "ok"
+    error = None
 
     def saved(self) -> dict:
         return {"columns": self.columns, "rows": self.rows, "row_count": len(self.rows),
@@ -68,7 +69,8 @@ class _ShowRows:
 @dataclass
 class _Count:
     value: int
-    status = "ok"
+    status: RunStatus = "ok"
+    error = None
 
     def saved(self) -> dict:
         return {"count": self.value}
@@ -88,7 +90,8 @@ class _TableMade:
     columns: list[dict]
     row_count: int
     truncated_to: int | None
-    status = "ok"
+    status: RunStatus = "ok"
+    error = None
 
     def saved(self) -> dict:  # the columns are the table's, not the Run's
         return {"table": self.name, "row_count": self.row_count, "truncated_to": self.truncated_to}
@@ -113,7 +116,7 @@ def _refused(text: str) -> "_Failed":
 class _Failed:
     error: str  # value-free: stored on the Run, and what the AI Cells below are sent
     raw_error: str  # for the user, and logged
-    status = "failed"
+    status: RunStatus = "failed"
 
     def saved(self) -> dict:  # the value-free error is the Run's
         return {"raw_error": self.raw_error}
@@ -127,7 +130,8 @@ class _Failed:
 
 @dataclass
 class _Stopped:
-    status = "stopped"
+    status: RunStatus = "stopped"
+    error = None
 
     def saved(self) -> dict:
         return {}
@@ -151,11 +155,15 @@ class SqlCellRuns:
         self.notebooks, self.tables, self.replacement = notebooks, tables, replacement
         self.telemetry_db, self.results_db, self.timeout_s, self.clock = telemetry_db, results_db, timeout_s, clock
         self._running: dict[str, tuple[threading.Event, asyncio.Future]] = {}  # SQL Cell id -> its query's stop flag and thread
+        self._closed = False
 
     async def run(self, cell: dict) -> AsyncIterator[Event]:
         """Run a SQL Cell with what its Draft holds and stream its events: a table or Count Display, an error,
         then the end. Its Run replaces the Cell's earlier one. If the stream is abandoned (the client left, or
-        the app is closing), the query is stopped and waited for, and the Run is recorded as stopped."""
+        the app is closing), the query is stopped and waited for, and the Run is recorded as stopped.
+        RuntimeError after `aclose`."""
+        if self._closed:
+            raise RuntimeError("SQL Cell Runs are closed")
         cell_id, draft = cell["id"], cell["draft"]
         sql, max_rows = draft.get("sql", ""), draft.get("max_rows") or DEFAULT_MAX_ROWS
         command, table = draft.get("command") or "", draft.get("table") or ""
@@ -189,7 +197,7 @@ class SqlCellRuns:
         # The message is stored once, so what AI Cells below are sent is frozen at this Run.
         self.notebooks.add_step(run_id, [({"role": "user", "content": f"{label}\n{outcome.detail()}"}, displays)])
         self.notebooks.save_result(run_id, outcome.saved() | {"elapsed_s": elapsed_s})
-        self.notebooks.finish_run(run_id, outcome.status, outcome.error if isinstance(outcome, _Failed) else None)
+        self.notebooks.finish_run(run_id, outcome.status, outcome.error)
         for event in events:
             yield event
         yield TurnEnd()
@@ -204,7 +212,9 @@ class SqlCellRuns:
         return True
 
     async def aclose(self) -> None:
-        """Stop every running SQL Cell's query and wait for its thread, so none is left using the databases."""
+        """Stop every running SQL Cell's query and wait for its thread, so none is left using the databases. No Run
+        starts after this."""
+        self._closed = True
         running = list(self._running.values())
         for stop, _ in running:
             stop.set()

@@ -2,7 +2,8 @@
 
 from collections.abc import AsyncIterator
 
-from flood_agent.agent import Agent, Event
+from flood_agent.agent import Agent
+from flood_agent.events import Event
 
 
 async def add_cells_above(agent: Agent, notebook_id: str, above: list[dict] | None) -> None:

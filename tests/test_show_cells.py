@@ -4,7 +4,7 @@ from conftest import ScriptedLLM
 from test_sql_cells import SELECT, run, run_of, run_sql
 
 from flood_agent import sql_cell_run
-from flood_agent.agent import TurnEnd, TurnError
+from flood_agent.events import TurnEnd, TurnError
 from flood_agent.llm import TextChunk
 from flood_agent.show_commands import SHOW_COMMANDS
 

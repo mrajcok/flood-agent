@@ -5,7 +5,7 @@ import json
 from conftest import ScriptedLLM, collect, last_tool_result, tool_call
 from test_charts import CHART_SQL, chart_spec
 
-from flood_agent.agent import DisplayEvent
+from flood_agent.events import DisplayEvent
 from flood_agent.llm import TextChunk, ToolCallChunk
 
 

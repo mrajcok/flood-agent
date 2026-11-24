@@ -6,8 +6,8 @@ import re
 import pytest
 from conftest import ScriptedLLM, ask, collect, post_run
 
-from flood_agent.agent import TraceReady
 from flood_agent.config import Settings
+from flood_agent.events import TraceReady
 from flood_agent.llm import OpenRouterClient, TextChunk
 
 SONNET, GLM = "anthropic/claude-sonnet-5.5", "z-ai/glm-5.3"

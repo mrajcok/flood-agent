@@ -7,7 +7,7 @@ import pytest
 from conftest import ScriptedLLM, all_telemetry_values, collect, last_tool_result, query_limits, tool_call
 
 from flood_agent import queries
-from flood_agent.agent import TextDelta, TraceEntry, TurnEnd
+from flood_agent.events import TextDelta, TraceEntry, TurnEnd
 from flood_agent.llm import TextChunk, ToolCallChunk
 
 

@@ -43,7 +43,7 @@ async def test_no_tool_schema_mentions_an_exchange_id_or_a_chat(make_agent):
 async def _raw_calls(agent, calls):
     """Call the MCP server directly: [(tool, args, meta)] -> parsed results (Query Metadata)."""
     out = []
-    async with in_process_transport(agent._server_settings()) as (r, w), ClientSession(r, w) as session:
+    async with in_process_transport(agent.server_settings()) as (r, w), ClientSession(r, w) as session:
         await session.initialize()
         for name, args, meta in calls:
             res = await session.call_tool(name, args, meta=meta)
@@ -80,7 +80,7 @@ async def test_reads_and_displays_are_not_scoped_to_any_notebook(make_agent):
 
 async def test_run_query_without_a_row_cap_in_meta_is_refused(make_agent):
     agent = await make_agent(ScriptedLLM())
-    async with in_process_transport(agent._server_settings()) as (r, w), ClientSession(r, w) as session:
+    async with in_process_transport(agent.server_settings()) as (r, w), ClientSession(r, w) as session:
         await session.initialize()
         for meta in ({}, {CAP_KEY: 0}, {CAP_KEY: "10"}):
             res = await session.call_tool("run_query", {"sql": "SELECT 1", "title": "t"}, meta=meta)

@@ -2,11 +2,13 @@
 
 import asyncio
 
+import pytest
 from conftest import ScriptedLLM, collect, run_of, tables_in, text_of, tool_call
 
-from flood_agent.agent import LlmCallStarted, TextDelta, TraceLive, TraceReady, TurnEnd
 from flood_agent.catalog import CellRun
+from flood_agent.events import LlmCallStarted, TextDelta, TraceLive, TraceReady, TurnEnd
 from flood_agent.llm import TextChunk
+from flood_agent.mcp_connection import McpConnection
 
 SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
 
@@ -27,7 +29,7 @@ class HangingLLM:
         await asyncio.Event().wait()
 
 
-async def stopped_turn(agent, notebook, prompt="q"):
+async def stopped_run(agent, notebook, prompt="q"):
     """Run a cell until it has streamed some text, stop it, and return all its events."""
     cell = agent.add_ai_cell(notebook, prompt=prompt)
     events = []
@@ -41,7 +43,7 @@ async def stopped_turn(agent, notebook, prompt="q"):
 async def test_stopping_mid_stream_keeps_the_text_and_ends_with_a_stopped_trace(make_agent):
     agent = await make_agent(HangingLLM())
     nb = agent.create_notebook()
-    events = await stopped_turn(agent, nb)
+    events = await stopped_run(agent, nb)
 
     assert isinstance(events[-1], TurnEnd)
     trace = next(e.trace for e in events if isinstance(e, TraceReady))
@@ -57,7 +59,7 @@ async def test_stopping_after_earlier_calls_keeps_them_and_a_valid_history(make_
     llm = HangingLLM([TextChunk("Looking."), tool_call("run_query", sql=SQL, title="t")])
     agent = await make_agent(llm)
     nb = agent.create_notebook()
-    events = await stopped_turn(agent, nb)
+    events = await stopped_run(agent, nb)
 
     messages = run_of(agent, nb)["messages"]
     assert [m["role"] for m in messages] == ["user", "assistant", "tool", "assistant"]  # the finished call, its result, then the stop note
@@ -90,7 +92,7 @@ async def test_a_run_announces_each_llm_call_and_each_trace_entry_as_it_happens(
 async def test_a_stopped_run_keeps_the_table_its_query_registered_with_that_run(make_agent):
     agent = await make_agent(HangingLLM([tool_call("run_query", sql=SQL, title="Ports")]))
     nb = agent.create_notebook()
-    await stopped_turn(agent, nb, "ports please")
+    await stopped_run(agent, nb, "ports please")
 
     (table,) = tables_in(agent, nb)
     cell = agent.notebooks.cells(nb)[0]
@@ -98,19 +100,18 @@ async def test_a_stopped_run_keeps_the_table_its_query_registered_with_that_run(
     assert (table.title, table.request) == ("Ports", "ports please")
 
 
-async def test_a_run_stopped_the_instant_its_tool_call_returns_still_registers_the_table(make_agent):
+async def test_a_run_stopped_the_instant_its_tool_call_returns_still_registers_the_table(make_agent, monkeypatch):
     agent = await make_agent(HangingLLM([tool_call("run_query", sql=SQL, title="Ports")]))
-    connection = agent._connection
-    real_call_tool = connection.call_tool
+    real_call_tool = McpConnection.call_tool
     nb = agent.create_notebook()
     cell = agent.add_ai_cell(nb, prompt="ports please")
 
-    async def stop_after_the_call(*args, **kwargs):
-        result = await real_call_tool(*args, **kwargs)
+    async def stop_after_the_call(self, *args, **kwargs):
+        result = await real_call_tool(self, *args, **kwargs)
         assert agent.stop_cell(cell)  # cancellation lands at the next await after the tool call returns
         return result
 
-    connection.call_tool = stop_after_the_call
+    monkeypatch.setattr(McpConnection, "call_tool", stop_after_the_call)
     async for _ in agent.run_cell(nb, cell):
         pass
 
@@ -126,7 +127,7 @@ async def test_a_registration_failure_is_not_reported_as_the_tool_failing(make_a
 
     agent.tables.register_for = broken
     nb = agent.create_notebook()
-    await stopped_turn(agent, nb, "ports please")
+    await stopped_run(agent, nb, "ports please")
 
     tool_messages = [m["content"] for m in run_of(agent, nb)["messages"] if m["role"] == "tool"]
     assert tool_messages and "could not be recorded" in tool_messages[0]
@@ -178,3 +179,33 @@ async def test_closing_the_page_before_any_text_stops_the_run_with_no_answer_tex
     run = run_of(agent, nb)
     assert run["status"] == "stopped"
     assert run["messages"] == [{"role": "user", "content": "q"}, {"role": "assistant", "content": "*Stopped by user.*"}]
+
+
+async def test_closing_the_app_before_a_run_takes_its_first_step_stops_it(make_agent):
+    agent = await make_agent(HangingLLM())
+    nb = agent.create_notebook()
+    cell = agent.add_ai_cell(nb, prompt="q")
+    events = agent.run_cell(nb, cell)
+
+    async def first_event():
+        return await anext(events)
+
+    first = asyncio.create_task(first_event())
+    await asyncio.sleep(0)  # the stream has started the Run; the Run's own task is scheduled but has not run yet
+    await agent.aclose()  # cancels the Run before it has done anything
+
+    assert isinstance(await asyncio.wait_for(first, 5), TurnEnd)  # the stream ends; it is not left waiting
+    await events.aclose()
+    run = run_of(agent, nb)
+    assert run["status"] == "stopped" and run["error"] is None
+
+
+async def test_an_ai_cell_cannot_run_once_its_runs_are_closed(make_agent):
+    agent = await make_agent(ScriptedLLM([TextChunk("hi")]))
+    nb = agent.create_notebook()
+    cell = agent.add_ai_cell(nb, prompt="q")
+    await agent.ai_cells.aclose()
+
+    with pytest.raises(RuntimeError, match="closed"):
+        [e async for e in agent.ai_cells.run(agent.notebooks.cell(cell))]
+    assert agent.notebooks.cell(cell)["run"] is None

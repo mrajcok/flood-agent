@@ -12,11 +12,17 @@ import time
 import uuid
 from contextlib import closing
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal, get_args
 
 from flood_agent.cell_kinds import AI, MARKDOWN
 
 COUNT_KIND = "count"  # the kind of a Count Display, among table and chart Displays
+
+RunStatus = Literal["ok", "failed", "stopped"]
+"""How a Run ended."""
+
+StoredRunStatus = RunStatus | Literal["running"]
+"""A Run's status as stored: how it ended, or running while it runs."""
 
 
 def rename_data_source(node: Any, old: str, new: str) -> Any:
@@ -307,10 +313,10 @@ class NotebookStore:
         with closing(self._connect()) as con, con:
             con.execute("UPDATE runs SET result=? WHERE id=?", (json.dumps(result), run_id))
 
-    def finish_run(self, run_id: str, status: str, error: str | None = None) -> None:
+    def finish_run(self, run_id: str, status: RunStatus, error: str | None = None) -> None:
         """End a Run as ok, failed or stopped. A failed Run needs its value-free reason (what AI Cells below are
         told); no other status may have one."""
-        if status not in ("ok", "failed", "stopped"):
+        if status not in get_args(RunStatus):
             raise ValueError(f"a Run cannot finish as {status!r}")
         if (status == "failed") != (error is not None):
             raise ValueError("a failed Run needs an error, and only a failed Run may have one")
@@ -323,7 +329,7 @@ class NotebookStore:
         with closing(self._connect()) as con:
             return [r[0] for r in con.execute("SELECT id FROM runs WHERE status='running'")]
 
-    def status_of(self, run_id: str) -> str | None:
+    def status_of(self, run_id: str) -> StoredRunStatus | None:
         with closing(self._connect()) as con:
             row = con.execute("SELECT status FROM runs WHERE id=?", (run_id,)).fetchone()
         return row[0] if row else None

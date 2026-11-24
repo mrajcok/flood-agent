@@ -26,10 +26,11 @@ from pathlib import Path
 import httpx
 from pydantic import ValidationError
 
-from flood_agent.agent import Agent, TextDelta, TurnError
+from flood_agent.agent import Agent
 from flood_agent.config import Settings
 from flood_agent.evalset.golden import Question, load_golden
 from flood_agent.evalset.notebook import add_cells_above, run_ai_cell
+from flood_agent.events import TextDelta, TurnError
 from flood_agent.llm import OpenRouterClient, UsageChunk
 
 DEFAULT_MODEL = "anthropic/claude-sonnet-5.5"

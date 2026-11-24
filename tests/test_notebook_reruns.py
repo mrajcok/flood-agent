@@ -4,7 +4,7 @@
 from conftest import ScriptedLLM, tool_call
 from test_notebooks import SQL, Slow
 
-from flood_agent.agent import TextDelta, TurnError
+from flood_agent.events import TextDelta, TurnError
 from flood_agent.llm import LLMError, TextChunk
 
 

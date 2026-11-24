@@ -6,7 +6,7 @@
 - more eval. In particular, there were eval errors with (I think) GLM-5.3. Can we adjust the prompts/semantic layer to get better ressults, or do we need to use a better model?
 - can the system prompt be made more lean?
 - how can we do some kind of progressive disclosure for the semantic layer? E.g. if an analyst is asking about IPFIX data, I don't want to include diameter schema information in the semantic layer part of the system prompt. Maybe Ocient's Defender already does this.
-- certain tables shouldn't be allowed to be downloaded because they may contain data that needs to be encrypted at rest. How do we handle this. Probably deterministically with a list of tables and specific fields that cannot be downloaded.
+- certain tables shouldn't be allowed to be downloaded because they may contain data that needs to be encrypted at rest. Handle this deterministically with a list of tables and specific fields that cannot be downloaded. If a user tries to download a table with a restricted field, the download is denied.
 
 # periodically
 - run /improve-codebase-architecture with Opus high

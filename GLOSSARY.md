@@ -93,7 +93,7 @@ Executing a SQL Cell or an AI Cell. A Cell keeps only its latest Run, which is w
 _Avoid_: Turn, execution, exchange
 
 **Draft**:
-A Cell's edited prompt, SQL or settings that have not been Run. A Cell with a Draft that differs from its latest Run shows its last output marked "edited, not run". The LLM never sees a Draft.
+A Cell's edited prompt, SQL or settings that have not been Run. A Cell with a Draft that differs from its latest Run shows its last output marked "edited, not run". It differs when its prompt or statement does once runs of whitespace are collapsed, or when any setting does: spacing alone is not an edit. A Draft is saved even when it cannot be Run. The LLM never sees a Draft.
 _Avoid_: Unsaved edit
 
 **Stale**:

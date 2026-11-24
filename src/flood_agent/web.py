@@ -25,13 +25,14 @@ from flood_agent.agent import NO_MODEL, Agent, NotebookBusy, NotRefreshable, Ref
 from flood_agent.ai_cell_context import without_stop_note
 from flood_agent.ai_cell_run import resolve_chart_data
 from flood_agent.catalog import TableExpired
+from flood_agent.cell import CannotRun, cannot_run
 from flood_agent.cell_kinds import MARKDOWN
 from flood_agent.context_usage import context_usage
 from flood_agent.events import CountEvent, DisplayEvent, FlagEvent, LlmCallStarted, TextDelta, TraceLive, TurnEnd
 from flood_agent.lookup_tables import InvalidLookupTable
 from flood_agent.notebooks import COUNT_KIND, DEFAULT_MAX_ROWS
 from flood_agent.queries import InvalidSort
-from flood_agent.show_commands import DESCRIBE_TABLE, SHOW_COMMANDS, SHOW_IN_TEXTBOX, is_show_statement, statement_of
+from flood_agent.show_commands import SHOW_COMMANDS, statement_of
 from flood_agent.table_replacement import RefreshInProgress
 from flood_agent.trace import short_model, split_system_prompt
 
@@ -522,26 +523,20 @@ def create_app(
     def run_cell(notebook_id: str, cell_id: str, prompt: str = Form(""), model: str = Form(""),
                  effort: str = Form(""), max_rows: str = Form(""), sql: str = Form(""),
                  command: str = Form(""), table: str = Form("")):
-        """Save the cell's prompt (or SQL) and settings as its Draft and return the cell, running; its stream starts the Run."""
+        """Save the cell's prompt (or SQL) and settings as its Draft and return the cell, running; its stream starts the
+        Run. 422 with the reason if the Draft cannot be Run (it stays saved)."""
         cell = known_cell(notebook_id, cell_id)
         if cell["kind"] not in ("ai", "sql"):
             raise HTTPException(422, "only AI and SQL Cells run")
-        is_sql = cell["kind"] == "sql"
-        if is_sql and command:
-            if command == DESCRIBE_TABLE and not table.strip():
-                raise HTTPException(422, "Pick a table to describe")
-        elif is_sql and is_show_statement(sql):
-            raise HTTPException(422, SHOW_IN_TEXTBOX)
-        elif is_sql and queries.ends_with_limit(sql):
-            raise HTTPException(422, queries.LIMIT_IN_SQL_CELL)
-        elif not (sql if is_sql else prompt).strip():
-            raise HTTPException(422, "Write some SQL to run" if is_sql else "Write a prompt to run")
-        if agent.running_cell(notebook_id):
-            raise HTTPException(409, "A cell in this notebook is already running")
-        if is_sql:
+        if cell["kind"] == "sql":
             agent.notebooks.edit_cell(cell_id, sql=sql, max_rows=_parse_max_rows(max_rows), **posted_command(command, table))
         else:
             agent.notebooks.edit_ai_cell(cell_id, **posted_settings(prompt, model, effort, max_rows))
+        reason = cannot_run(agent.cell(cell_id))
+        if reason is not None:
+            raise HTTPException(422, reason)
+        if agent.running_cell(notebook_id):
+            raise HTTPException(409, "A cell in this notebook is already running")
         return cell_html(notebook_id, cell_id, "notebook_cell.html", starting=True)
 
     @app.get("/n/{notebook_id}/cells/{cell_id}/stream")
@@ -560,6 +555,8 @@ def create_app(
                             break
             except NotebookBusy:
                 yield _sse("text", '<span class="md-delta">A cell in this notebook is already running.</span>')
+            except CannotRun as e:  # its Draft changed after the Run route accepted it
+                yield _sse("text", f'<span class="md-delta">{escape(str(e))}</span>')
             except Exception as e:  # keep the stream well-formed for the browser
                 yield _sse("text", f'<span class="md-delta">{escape(f" [error: {type(e).__name__}]")}</span>')
             yield _sse("end", "done")

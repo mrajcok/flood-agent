@@ -19,7 +19,7 @@ from mcp import StdioServerParameters
 from flood_agent import ai_cell_context, queries, table_names
 from flood_agent.ai_cell_run import AiCellRuns, ClientFactory
 from flood_agent.catalog import Catalog, Table, canonical
-from flood_agent.cell import AiCell, Cell, MarkdownCell, SqlCell, typed_cell
+from flood_agent.cell import AiCell, CannotRun, Cell, MarkdownCell, SqlCell, cannot_run, typed_cell
 from flood_agent.cell_kinds import AI, MARKDOWN, SQL
 from flood_agent.events import Event
 from flood_agent.llm import ModelSpec
@@ -345,13 +345,16 @@ class Agent:
     async def run_cell(self, notebook_id: str, cell_id: str) -> AsyncIterator[Event]:
         """Run a cell, with what its Draft holds, and stream its events. A SQL Cell runs without the LLM, through
         the SQL Cell Run module, and needs no `start()`; an AI Cell runs through the AI Cell Run module, and needs
-        `start()` first. Its Run replaces the cell's earlier one. `NotebookBusy` if a cell of this notebook is
+        `start()` first. Its Run replaces the cell's earlier one. `CannotRun` (with its reason) if its Draft cannot
+        be Run (see `cell.cannot_run`), before any Run is recorded. `NotebookBusy` if a cell of this notebook is
         already running, KeyError if the cell is not in the notebook."""
         cell = self.cell(cell_id)
         if cell.notebook_id != notebook_id:
             raise KeyError(cell_id)
-        if isinstance(cell, MarkdownCell):
-            raise ValueError("A Markdown Cell is never Run.")
+        reason = cannot_run(cell)
+        if reason is not None:  # refused before a Run starts: the latest Run and its output stay
+            raise CannotRun(reason)
+        assert not isinstance(cell, MarkdownCell)  # never Run: refused just above
         if isinstance(cell, AiCell) and self._connection is None:
             raise RuntimeError("Agent not started: call `await agent.start()` or use `async with agent`")
         if notebook_id in self._running_cells:

@@ -99,7 +99,7 @@ async def test_statements_that_are_not_one_readable_select_are_refused(build_age
     with sqlite3.connect(tmp_path / "results.db") as con:
         con.execute("CREATE TABLE secret(v)")
     nb = agent.create_notebook()
-    for sql in ("DELETE FROM flows", "SELECT 1; SELECT 2", "SELECT * FROM results.secret", "SHOW TABLES"):
+    for sql in ("DELETE FROM flows", "SELECT 1; SELECT 2", "SELECT * FROM results.secret"):
         cell = agent.add_sql_cell(nb, sql=sql)
         await run_sql(agent, nb, cell)
         r = agent.notebooks.cell(cell)["run"]
@@ -115,16 +115,6 @@ def test_a_query_ending_in_limit_is_recognised_but_a_limit_in_a_subquery_is_not(
     for sql in ("SELECT dport FROM flows", "SELECT dport FROM flows WHERE dport IN (SELECT dport FROM flows LIMIT 5)",
                 "SELECT 'limit 5' AS note FROM flows"):
         assert not queries.ends_with_limit(sql), sql
-
-
-async def test_a_query_ending_in_limit_is_refused_with_a_pointer_to_the_row_cap(build_agent):
-    agent = build_agent(ScriptedLLM())
-    nb = agent.create_notebook()
-    cell = agent.add_sql_cell(nb, sql="SELECT dport FROM flows LIMIT 5")
-    await run_sql(agent, nb, cell)
-    r = agent.notebooks.cell(cell)["run"]
-    assert r["status"] == "failed" and "row cap" in r["error"]
-    assert agent.tables.tables_of_run(cell, r["id"]) == []
 
 
 async def test_an_old_sql_cell_saved_without_a_row_cap_runs_with_the_default_row_cap(build_agent):
@@ -481,10 +471,10 @@ async def test_the_frozen_message_for_a_count_a_failure_and_a_stop(build_agent):
     agent = build_agent(ScriptedLLM(), query_timeout_s=60)
     nb = agent.create_notebook()
     count = agent.add_sql_cell(nb, sql="SELECT COUNT(*) FROM flows")
-    limited = agent.add_sql_cell(nb, sql="SELECT dport FROM flows LIMIT 5")
+    rejected = agent.add_sql_cell(nb, sql="SELECT 1; SELECT 2")
     slow = agent.add_sql_cell(nb, sql=SLOW)
     await run_sql(agent, nb, count)
-    await run_sql(agent, nb, limited)
+    await run_sql(agent, nb, rejected)
     task = asyncio.create_task(run_sql(agent, nb, slow))
     await until_running(agent, nb, 2)
     agent.sql_cells.stop(slow)
@@ -495,7 +485,7 @@ async def test_the_frozen_message_for_a_count_a_failure_and_a_stop(build_agent):
 
     value = run_of(agent, nb, 0)["result"]["count"]
     assert message(0) == f"[SQL Cell, run by the user] SELECT COUNT(*) FROM flows\nCount: {value}"
-    assert message(1) == f"[SQL Cell, run by the user] SELECT dport FROM flows LIMIT 5\nFailed: {queries.LIMIT_IN_SQL_CELL}"
+    assert message(1) == "[SQL Cell, run by the user] SELECT 1; SELECT 2\nFailed: Only a single read-only SELECT statement is allowed."
     assert message(2) == f"[SQL Cell, run by the user] {SLOW}\n(stopped by the user)"
 
 

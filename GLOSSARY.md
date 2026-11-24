@@ -89,7 +89,7 @@ A Cell with a prompt and its own model, Effort and row cap. Running it asks the 
 _Avoid_: Prompt cell, chat cell
 
 **Run**:
-Executing a SQL Cell or an AI Cell. A Cell keeps only its latest Run, which is what it shows and what AI Cells below it see; a new Run replaces the old one. A Run is stopped, failed or ok, and records the settings it ran with. Retires "turn".
+Executing a SQL Cell or an AI Cell. A Cell keeps only its latest Run, which is what it shows and what AI Cells below it see; a new Run replaces the old one. A Run is stopped, failed or ok, and records the settings it ran with. A failed Run keeps a value-free reason, which is what AI Cells below are told. A Run the app was killed during is failed when the app next starts. Retires "turn".
 _Avoid_: Turn, execution, exchange
 
 **Draft**:

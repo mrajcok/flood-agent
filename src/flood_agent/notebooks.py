@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS runs (
   finished_at INTEGER,
   context_tokens INTEGER,
   trace BLOB,
-  result TEXT
+  result TEXT,
+  error TEXT
 );
 CREATE TABLE IF NOT EXISTS run_messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -266,7 +267,7 @@ class NotebookStore:
             "settings": json.loads(run["settings"]), "context_fingerprint": run["context_fingerprint"],
             "number": run["number"], "started_at": run["started_at"], "finished_at": run["finished_at"],
             "context_tokens": run["context_tokens"], "messages": messages,
-            "result": json.loads(run["result"]) if run["result"] else None,
+            "error": run["error"], "result": json.loads(run["result"]) if run["result"] else None,
             "trace": json.loads(run["trace"]) if run["trace"] else None,
         }
 
@@ -302,13 +303,20 @@ class NotebookStore:
         return json.loads(row[0]) if row else None
 
     def save_result(self, run_id: str, result: dict) -> None:
-        """A SQL Cell Run's outcome: what the status line, the error and the page need."""
+        """A SQL Cell Run's outcome as the page shows it: its rows, count or table, and its raw error."""
         with closing(self._connect()) as con, con:
             con.execute("UPDATE runs SET result=? WHERE id=?", (json.dumps(result), run_id))
 
-    def finish_run(self, run_id: str, status: str) -> None:
+    def finish_run(self, run_id: str, status: str, error: str | None = None) -> None:
+        """End a Run as ok, failed or stopped. A failed Run needs its value-free reason (what AI Cells below are
+        told); no other status may have one."""
+        if status not in ("ok", "failed", "stopped"):
+            raise ValueError(f"a Run cannot finish as {status!r}")
+        if (status == "failed") != (error is not None):
+            raise ValueError("a failed Run needs an error, and only a failed Run may have one")
         with closing(self._connect()) as con, con:
-            con.execute("UPDATE runs SET status=?, finished_at=? WHERE id=?", (status, self._now(), run_id))
+            con.execute("UPDATE runs SET status=?, error=?, finished_at=? WHERE id=?",
+                        (status, error, self._now(), run_id))
 
     def status_of(self, run_id: str) -> str | None:
         with closing(self._connect()) as con:

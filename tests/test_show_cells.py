@@ -1,8 +1,8 @@
 """SHOW / DESCRIBE SQL Cells (the Command drop-down), through the SQL Cell Run module; the AI Cell below through the Agent."""
 
 import pytest
-from conftest import ScriptedLLM
-from test_sql_cells import SELECT, run, run_of, run_sql
+from conftest import ScriptedLLM, add_ai_cell, add_sql_cell
+from test_sql_cells import SELECT, run, run_of
 
 from flood_agent import sql_cell_run
 from flood_agent.cell import CannotRun
@@ -15,9 +15,9 @@ NOT_AVAILABLE = "not available on the development database"
 
 async def ran_show(build_agent, command, table=""):
     agent = build_agent(ScriptedLLM())
-    nb = agent.create_notebook()
-    cell = agent.add_sql_cell(nb, command=command, table=table)
-    events = await run_sql(agent, nb, cell)
+    nb = agent.notebooks.create_notebook()
+    cell = add_sql_cell(agent, nb, command=command, table=table)
+    events = await run(agent, nb, cell)
     return agent, nb, cell, events
 
 
@@ -27,11 +27,11 @@ def column(result, name):
 
 async def test_show_tables_lists_the_readable_tables_with_no_table_made(build_agent):
     agent = build_agent(ScriptedLLM())
-    nb = agent.create_notebook()
-    await run_sql(agent, nb, agent.add_sql_cell(nb, sql=SELECT))
+    nb = agent.notebooks.create_notebook()
+    await run(agent, nb, add_sql_cell(agent, nb, sql=SELECT))
     made = agent.tables.names()
-    show = agent.add_sql_cell(nb, command="SHOW TABLES")
-    events = await run_sql(agent, nb, show)
+    show = add_sql_cell(agent, nb, command="SHOW TABLES")
+    events = await run(agent, nb, show)
 
     r = run_of(agent, nb, 1)
     assert r["status"] == "ok" and isinstance(events[-1], TurnEnd)
@@ -69,8 +69,8 @@ async def test_the_other_commands_are_not_available_on_the_development_database(
 
 async def test_there_is_no_row_cap_and_rows_are_kept_with_the_run(build_agent):
     agent = build_agent(ScriptedLLM())
-    nb = agent.create_notebook()
-    await run_sql(agent, nb, agent.add_sql_cell(nb, command="SHOW COLUMNS", max_rows=1))
+    nb = agent.notebooks.create_notebook()
+    await run(agent, nb, add_sql_cell(agent, nb, command="SHOW COLUMNS", max_rows=1))
     res = run_of(agent, nb, 0)["result"]
     assert res["row_count"] > 1 and len(res["rows"]) == res["row_count"] and not res.get("truncated_to")
 
@@ -78,9 +78,9 @@ async def test_there_is_no_row_cap_and_rows_are_kept_with_the_run(build_agent):
 async def test_show_or_describe_typed_into_the_textbox_is_refused_with_a_pointer_and_no_run(build_agent):
     for sql in ("SHOW TABLES", "  describe table flows", "show\ncolumns"):
         agent = build_agent(ScriptedLLM())
-        nb = agent.create_notebook()
+        nb = agent.notebooks.create_notebook()
         with pytest.raises(CannotRun, match="Command drop-down"):
-            await run(agent, nb, agent.add_sql_cell(nb, sql=sql))
+            await run(agent, nb, add_sql_cell(agent, nb, sql=sql))
         assert run_of(agent, nb, 0) is None
 
 
@@ -88,9 +88,9 @@ async def test_an_ai_cell_below_sees_the_statement_and_only_some_rows_with_a_not
     monkeypatch.setattr(sql_cell_run, "SHOW_ROWS_TO_AI", 3)
     llm = ScriptedLLM([TextChunk("ok")])
     agent = await make_agent(llm)
-    nb = agent.create_notebook()
-    show = agent.add_sql_cell(nb, command="SHOW COLUMNS")
-    ai = agent.add_ai_cell(nb, prompt="q")
+    nb = agent.notebooks.create_notebook()
+    show = add_sql_cell(agent, nb, command="SHOW COLUMNS")
+    ai = add_ai_cell(agent, nb, prompt="q")
     await run(agent, nb, show)
     total = run_of(agent, nb, 0)["result"]["row_count"]
     await run(agent, nb, ai)
@@ -103,9 +103,9 @@ async def test_an_ai_cell_below_sees_the_statement_and_only_some_rows_with_a_not
 async def test_a_small_result_is_sent_whole_with_no_note(make_agent):
     llm = ScriptedLLM([TextChunk("ok")])
     agent = await make_agent(llm)
-    nb = agent.create_notebook()
-    show = agent.add_sql_cell(nb, command="DESCRIBE TABLE", table="flows")
-    ai = agent.add_ai_cell(nb, prompt="q")
+    nb = agent.notebooks.create_notebook()
+    show = add_sql_cell(agent, nb, command="DESCRIBE TABLE", table="flows")
+    ai = add_ai_cell(agent, nb, prompt="q")
     await run(agent, nb, show)
     await run(agent, nb, ai)
     user = llm.calls[0][1]["content"]

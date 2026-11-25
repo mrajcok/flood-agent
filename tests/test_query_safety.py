@@ -130,7 +130,7 @@ async def test_two_failures_then_success_is_fine(make_agent):
 async def test_failure_budget_resets_each_turn(make_agent):
     llm = ScriptedLLM(bad_call(1), bad_call(2), [TextChunk("a")], bad_call(3), bad_call(4), [TextChunk("b")])
     agent = await make_agent(llm)
-    nb = agent.create_notebook()
+    nb = agent.notebooks.create_notebook()
     for expected in ("a", "b"):
         events = await collect(agent, "q", nb)
         assert text_of(events) == expected

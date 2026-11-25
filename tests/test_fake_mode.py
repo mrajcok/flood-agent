@@ -14,6 +14,7 @@ from flood_agent.config import Settings
 from flood_agent.events import DisplayEvent, TraceReady, TurnError
 from flood_agent.fake_llm import CannedPrompt, FakeClient, Step, load_canned_prompts, parent_of
 from flood_agent.llm import TextChunk, ToolCallChunk
+from flood_agent.model_choices import NO_MODEL
 
 CANNED = load_canned_prompts()
 PICKER = picker_entries(CANNED)
@@ -36,7 +37,7 @@ class Recorder:
 
 
 async def test_the_too_many_rows_prompt_shows_a_table_truncated_to_the_row_cap(make_agent):
-    agent = await make_agent(fake_client(), model="fake")
+    agent = await make_agent(fake_client(), api_key=False)
     canned = next(c for c in CANNED if c.id == "too-many-rows")
 
     events = await collect(agent, canned.prompt, max_result_rows=FAKE_CAP)
@@ -51,8 +52,8 @@ async def test_the_too_many_rows_prompt_shows_a_table_truncated_to_the_row_cap(m
 @pytest.mark.parametrize("canned", canned_params(CANNED))
 async def test_every_canned_prompt_produces_its_declared_outcome(canned, make_agent, telemetry_db):
     llm = Recorder(fake_client())
-    agent = await make_agent(llm, model="fake")
-    notebook = agent.create_notebook()
+    agent = await make_agent(llm, api_key=False)
+    notebook = agent.notebooks.create_notebook()
     parent = parent_of(canned, CANNED)
     if parent:
         await collect(agent, parent.prompt, notebook, max_result_rows=FAKE_CAP)
@@ -61,7 +62,7 @@ async def test_every_canned_prompt_produces_its_declared_outcome(canned, make_ag
 
     assert [e.kind for e in events if isinstance(e, DisplayEvent)] == list(canned.expect.displays)
     trace = next(e.trace for e in events if isinstance(e, TraceReady))
-    assert trace["model"] == "fake"
+    assert trace["model"] == NO_MODEL
     totals = trace["totals"]
     assert (totals["prompt_tokens"], totals["completion_tokens"]) == (0, 0)
     # an errored stream reports no usage, so its Trace honestly shows cost n/a
@@ -80,7 +81,7 @@ async def test_every_canned_prompt_produces_its_declared_outcome(canned, make_ag
 
 
 async def test_an_unmatched_message_gets_a_reply_naming_fake_mode_without_relisting_the_prompts(make_agent):
-    agent = await make_agent(fake_client(), model="fake")
+    agent = await make_agent(fake_client(), api_key=False)
 
     events = await collect(agent, "what is the weather?")
 
@@ -95,7 +96,7 @@ async def test_a_failed_query_without_telemetry_data_says_so_instead_of_asking_f
 ):
     with sqlite3.connect(telemetry_db) as con:  # this test's own copy: as if the data was never generated
         con.execute("DROP TABLE flows")
-    agent = await make_agent(fake_client(), model="fake")
+    agent = await make_agent(fake_client(), api_key=False)
     top_dest = next(c for c in CANNED if c.id == "top-destinations")
 
     events = await collect(agent, top_dest.prompt)
@@ -110,9 +111,9 @@ async def test_a_failed_query_without_telemetry_data_says_so_instead_of_asking_f
 async def test_a_failed_query_after_an_earlier_success_does_not_show_the_earlier_result_table(
     make_agent, telemetry_db
 ):
-    agent = await make_agent(fake_client(), model="fake")
+    agent = await make_agent(fake_client(), api_key=False)
     top_dest = next(c for c in CANNED if c.id == "top-destinations")
-    notebook = agent.create_notebook()
+    notebook = agent.notebooks.create_notebook()
     await collect(agent, top_dest.prompt, notebook)
     with sqlite3.connect(telemetry_db) as con:
         con.execute("DROP TABLE flows")
@@ -128,11 +129,11 @@ async def test_a_follow_up_whose_parent_query_failed_says_the_query_failed_not_r
 ):
     with sqlite3.connect(telemetry_db) as con:
         con.execute("DROP TABLE flows")
-    agent = await make_agent(fake_client(), model="fake")
+    agent = await make_agent(fake_client(), api_key=False)
     follow_up = next(c for c in CANNED if c.after)
     parent = parent_of(follow_up, CANNED)
     assert parent
-    notebook = agent.create_notebook()
+    notebook = agent.notebooks.create_notebook()
     await collect(agent, parent.prompt, notebook, max_result_rows=FAKE_CAP)
 
     events = await collect(agent, follow_up.prompt, notebook)
@@ -191,7 +192,7 @@ async def test_a_follow_up_picked_first_replies_to_run_its_parent_and_makes_no_t
     follow_up = next(c for c in CANNED if c.after)
     parent = parent_of(follow_up, CANNED)
     assert parent
-    agent = await make_agent(fake_client(), model="fake")
+    agent = await make_agent(fake_client(), api_key=False)
 
     events = await collect(agent, follow_up.prompt)
 
@@ -204,8 +205,8 @@ async def test_a_follow_up_after_an_unrelated_prompt_replies_parent_first_and_ma
     parent = parent_of(follow_up, CANNED)
     unrelated = next(c for c in CANNED if c.id == "flow-count")
     assert parent and parent is not unrelated
-    agent = await make_agent(fake_client(), model="fake")
-    notebook = agent.create_notebook()
+    agent = await make_agent(fake_client(), api_key=False)
+    notebook = agent.notebooks.create_notebook()
     await collect(agent, unrelated.prompt, notebook)
 
     events = await collect(agent, follow_up.prompt, notebook)
@@ -247,7 +248,7 @@ async def test_a_script_that_runs_out_of_steps_ends_the_turn_with_no_more_text()
 
 @pytest.mark.parametrize("canned_id", ["bytes-over-time", "bytes-by-port", "top-destinations"])
 async def test_a_canned_display_is_introduced_before_it_appears(canned_id, make_agent, telemetry_db):
-    agent = await make_agent(fake_client(), model="fake")
+    agent = await make_agent(fake_client(), api_key=False)
     canned = next(c for c in CANNED if c.id == canned_id)
 
     events = await collect(agent, canned.prompt, max_result_rows=FAKE_CAP)
@@ -304,7 +305,7 @@ def test_picker_marks_prompts_that_fail_on_purpose(build_agent, web_client):
 
 async def test_the_total_flow_count_prompt_uses_run_count_query_and_makes_no_result_table(make_agent):
     canned = next(c for c in CANNED if c.id == "flow-count")
-    agent = await make_agent(fake_client(), model="fake")
+    agent = await make_agent(fake_client(), api_key=False)
 
     events = await collect(agent, canned.prompt)
 
@@ -319,7 +320,7 @@ async def test_the_total_flow_count_reply_states_the_number_without_flagging_it(
     canned = next(c for c in CANNED if c.id == "flow-count")
     with sqlite3.connect(telemetry_db) as con:
         (n,) = con.execute("SELECT COUNT(*) FROM flows").fetchone()
-    agent = await make_agent(fake_client(), model="fake")
+    agent = await make_agent(fake_client(), api_key=False)
 
     events = await collect(agent, canned.prompt)
 
@@ -332,7 +333,7 @@ async def test_a_failed_count_query_says_so_instead_of_stating_a_number(make_age
     canned = next(c for c in CANNED if c.id == "flow-count")
     with sqlite3.connect(telemetry_db) as con:
         con.execute("DROP TABLE flows")
-    agent = await make_agent(fake_client(), model="fake")
+    agent = await make_agent(fake_client(), api_key=False)
 
     events = await collect(agent, canned.prompt)
 
@@ -371,7 +372,7 @@ def test_the_lookup_table_prompt_is_offered_in_fake_mode():
 async def test_with_the_lookup_table_present_the_turn_describes_it_joins_it_and_shows_a_display(
     make_agent, telemetry_db
 ):
-    agent = await make_agent(fake_client(), model="fake")
+    agent = await make_agent(fake_client(), api_key=False)
     with sqlite3.connect(telemetry_db) as db:
         watched = db.execute("SELECT dip FROM flows LIMIT 1").fetchone()[0]
     agent.tables.add_lookup("watchlist", f"ip\n{watched}")
@@ -386,7 +387,7 @@ async def test_with_the_lookup_table_present_the_turn_describes_it_joins_it_and_
 
 
 async def test_with_the_lookup_table_absent_the_reply_explains_how_to_create_it_and_the_turn_does_not_fail(make_agent):
-    agent = await make_agent(fake_client(), model="fake")
+    agent = await make_agent(fake_client(), api_key=False)
 
     events = await collect(agent, WATCHLIST_PROMPT)
 
@@ -396,7 +397,7 @@ async def test_with_the_lookup_table_absent_the_reply_explains_how_to_create_it_
 
 
 async def test_a_stream_that_breaks_partway_starts_its_error_on_a_new_paragraph(make_agent):
-    agent = await make_agent(fake_client(), model="fake")
+    agent = await make_agent(fake_client(), api_key=False)
     canned = next(c for c in CANNED if c.id == "llm-stream-error")
 
     events = await collect(agent, canned.prompt)
@@ -408,7 +409,7 @@ async def test_a_stream_that_breaks_partway_starts_its_error_on_a_new_paragraph(
 
 
 async def test_a_canned_prompt_matches_despite_a_trailing_period_and_spaces(make_agent):
-    agent = await make_agent(fake_client(), model="fake")
+    agent = await make_agent(fake_client(), api_key=False)
     canned = next(c for c in CANNED if c.id == "llm-stream-error")
 
     events = await collect(agent, f"  {canned.prompt}. ")
@@ -418,7 +419,7 @@ async def test_a_canned_prompt_matches_despite_a_trailing_period_and_spaces(make
 
 @pytest.mark.generated_data
 async def test_the_dns_amplification_prompt_puts_the_abused_name_first(make_agent):
-    agent = await make_agent(fake_client(), model="fake")
+    agent = await make_agent(fake_client(), api_key=False)
     canned = next(c for c in CANNED if c.id == "dns-amplification-names")
 
     events = await collect(agent, canned.prompt)

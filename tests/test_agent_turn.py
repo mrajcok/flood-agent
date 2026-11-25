@@ -111,7 +111,7 @@ async def test_system_prompt_contains_semantic_layer_and_the_now_function(make_a
 async def test_a_second_cell_in_a_notebook_keeps_the_earlier_cells_history(make_agent):
     llm = ScriptedLLM([TextChunk("one")], [TextChunk("two")])
     agent = await make_agent(llm)
-    nb = agent.create_notebook()
+    nb = agent.notebooks.create_notebook()
     await collect(agent, "first", nb)
     await collect(agent, "second", nb)
     roles = [m["role"] for m in llm.calls[1]]

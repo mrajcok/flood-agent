@@ -1,7 +1,7 @@
-"""The Agent: the Notebook operations, Refresh, and MCP connection supervision. It runs one Cell per Notebook at a
-time, handing each Run to the SQL Cell Run or AI Cell Run module, and streams its events.
+"""The Agent: builds the app's parts (Notebook storage, the Table Catalog, Table Replacement, the Run modules and the
+Notebook module, `notebooks`), supervises the MCP connection, and does Refresh and row reads.
 
-The HTTP/SSE layer is a thin adapter over `Agent.run_cell`. The LLM client is injected.
+The LLM client is injected.
 """
 
 import asyncio
@@ -9,23 +9,21 @@ import logging
 import sys
 import threading
 import time
-from contextlib import aclosing, contextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import AsyncGenerator, AsyncIterator, Callable, Iterator, Literal, cast
+from typing import Callable, Iterator
 
 from mcp import StdioServerParameters
 
-from flood_agent import ai_cell_context, queries, table_names
-from flood_agent.ai_cell_run import AiCellRuns, ClientFactory
-from flood_agent.catalog import Catalog, Table, canonical
-from flood_agent.cell import AiCell, CannotRun, Cell, MarkdownCell, SqlCell, typed_cell
-from flood_agent.cell_kinds import AI, MARKDOWN, SQL
-from flood_agent.events import Event
-from flood_agent.llm import ModelSpec
+from flood_agent import queries
+from flood_agent.ai_cell_run import AiCellRuns, ClientFactory, ConnectionProvider
+from flood_agent.catalog import Catalog, Table
 from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
 from flood_agent.mcp_server import ServerSettings
-from flood_agent.notebooks import DEFAULT_MAX_ROWS, NotebookStore
+from flood_agent.model_choices import ModelChoices
+from flood_agent.notebook import Notebooks
+from flood_agent.notebook_store import NotebookStore
 from flood_agent.semantic_layer import SemanticLayer
 from flood_agent.sql_cell_run import SqlCellRuns
 from flood_agent.table_replacement import RefreshInProgress, ReplacementFailed, TableReplacement
@@ -38,17 +36,8 @@ class NotRefreshable(Exception):
     """The table has no stored query, so Refresh cannot run it."""
 
 
-class NotebookBusy(Exception):
-    """A cell in this notebook is already running; only one runs at a time."""
-
-
 class RefreshFailed(Exception):
     """A Refresh did not complete; the message is plain text safe to show the user."""
-
-
-# Whether deleting a Notebook or Cell also drops its live Result Tables (those still named
-# rt_*). Its Saved Tables are always kept (ADR 0004).
-TablesChoice = Literal["keep", "delete_rt"]
 
 
 @dataclass
@@ -59,8 +48,7 @@ class AgentConfig:
     results_db: Path
     app_db: Path
     semantic_layer: Path
-    model: str  # the default model: runs a turn that names none
-    models: tuple[ModelSpec, ...]  # the curated list; window_of looks a model's window up here
+    choices: ModelChoices  # the models that can be used here and the default model
     result_ttl_ms: int  # Result Tables expire this long after they are made
     query_timeout_s: float
     chart_row_cap: int
@@ -69,21 +57,40 @@ class AgentConfig:
     clock: Callable[[], int] = lambda: int(time.time() * 1000)  # epoch ms; injectable for tests
     fixed_now_ms: int | None = None  # pins SQL now() in the MCP server process (evals); None is the wall clock
 
-    def spec_of(self, model_id: str) -> ModelSpec | None:
-        """The curated model with this id; None for an id outside the list (NO_MODEL included)."""
-        return next((m for m in self.models if m.id == model_id), None)
-
-    def window_of(self, model: str) -> int:
-        """The context window of a curated model; 0 for an id outside the list (NO_MODEL: no context window)."""
-        spec = self.spec_of(model)
-        return spec.context_window if spec else 0
-
 
 APP_STOPPED = "The app stopped during this Run."
 """The value-free reason a Run left running by a killed app is failed with when the app next starts."""
 
-NO_MODEL = "no-model"
-"""The Model Choice id for Fake Mode: a prompt sent with it is answered by the scripted stand-in."""
+
+@dataclass(frozen=True)
+class Parts:
+    """The app's parts over one app database. Notebook storage (`store`) is for the Agent's startup cleanup only;
+    everything else uses the Notebook module."""
+
+    store: NotebookStore
+    tables: Catalog
+    replacement: TableReplacement
+    sql_cells: SqlCellRuns
+    ai_cells: AiCellRuns
+    notebooks: Notebooks
+
+
+def build_parts(config: AgentConfig, semantic_layer: SemanticLayer, client_for: ClientFactory,
+                connection: ConnectionProvider, started: Callable[[], bool]) -> Parts:
+    """Build Notebook storage, the Table Catalog, Table Replacement, the Run modules and the Notebook module, wired
+    together. `connection` and `started` are the MCP connection the AI Cell Runs use and whether it is up."""
+    store = NotebookStore(config.app_db, config.clock)
+    tables = Catalog(
+        config.app_db, config.clock, config.result_ttl_ms, telemetry_tables=semantic_layer.table_names(),
+        results_db=config.results_db, on_rename=store.follow_rename,  # Displays follow a table's new name
+    )
+    replacement = TableReplacement(tables, config.telemetry_db, config.results_db, config.query_timeout_s)
+    sql_cells = SqlCellRuns(store, tables, replacement, config.telemetry_db, config.results_db,
+                            config.query_timeout_s, config.clock)
+    ai_cells = AiCellRuns(store, tables, semantic_layer, client_for, connection, started, config.choices.spec_of,
+                          config.max_llm_steps, config.max_failed_attempts, config.clock)
+    return Parts(store, tables, replacement, sql_cells, ai_cells, Notebooks(store, tables, sql_cells, ai_cells,
+                                                                             config.choices))
 
 
 class Agent:
@@ -92,28 +99,20 @@ class Agent:
         self.client_for = client_for
         self.semantic_layer = SemanticLayer(config.semantic_layer)
         drop_pre_notebook_data(config.app_db, config.results_db)  # before anything creates the new schema
-        self.notebooks = NotebookStore(config.app_db, config.clock)
-        self.tables = Catalog(
-            config.app_db, config.clock, config.result_ttl_ms, telemetry_tables=self.semantic_layer.table_names(),
-            results_db=config.results_db, on_rename=self._follow_rename,
-        )
-        self.replacement = TableReplacement(self.tables, config.telemetry_db, config.results_db, config.query_timeout_s)
-        self.sql_cells = SqlCellRuns(self.notebooks, self.tables, self.replacement, config.telemetry_db,
-                                     config.results_db, config.query_timeout_s, config.clock)
         # `client_for` is looked up on each Run, so a client swapped in later is the one used.
-        self.ai_cells = AiCellRuns(self.notebooks, self.tables, self.semantic_layer, lambda model: self.client_for(model),
-                                   self._ensure_connection, config.spec_of, config.max_llm_steps,
-                                   config.max_failed_attempts, config.clock)
+        parts = build_parts(config, self.semantic_layer, lambda model: self.client_for(model), self._ensure_connection,
+                            lambda: self._connection is not None)
+        self.tables, self.replacement, self.notebooks = parts.tables, parts.replacement, parts.notebooks
+        self._sql_cells, self._ai_cells = parts.sql_cells, parts.ai_cells
         self._connection: McpConnection | None = None
         self._restart_lock = asyncio.Lock()
-        self._running_cells: dict[str, str] = {}  # notebook id -> the cell running in it now
         self._refreshing: set[tuple[str, str | int]] = set()  # ("count", id) being refreshed now (tables: see table_replacement)
         self._refreshing_lock = threading.Lock()
         self.tables.sweep()
         # A Run still running now was cut off by the app being killed. One app process per app database, so
         # none of these is really in progress (eval runs and the caching smoke test use their own app database).
-        for run_id in self.notebooks.running_runs():
-            self.notebooks.finish_run(run_id, "failed", APP_STOPPED)
+        for run_id in parts.store.running_runs():
+            parts.store.finish_run(run_id, "failed", APP_STOPPED)
 
     async def start(self) -> None:
         """Launch the long-lived MCP server. Needed before `run_cell`, not for row fetches
@@ -146,10 +145,10 @@ class Agent:
 
     async def aclose(self) -> None:
         """Stop running Cells and the MCP server, and reap its process."""
-        await self.sql_cells.aclose()  # SQL Cell queries are stopped and waited for
+        await self._sql_cells.aclose()  # SQL Cell queries are stopped and waited for
         # AI Cell Runs before the connection (this also cancels a restart in progress), so none is left
         # talking to a closing connection.
-        await self.ai_cells.aclose()
+        await self._ai_cells.aclose()
         async with self._restart_lock:
             connection, self._connection = self._connection, None
             if connection is not None:
@@ -185,207 +184,6 @@ class Agent:
         """How each new MCP connection reaches its server: a stdio subprocess. The seam where tests run the server
         in-process instead."""
         return stdio_transport(self._server_params())
-
-    # --- Notebooks (AI Cells only so far) ---------------------------------------------------------------
-
-    def create_notebook(self, title: str | None = None) -> str:
-        """Persist a new, empty Notebook ("Notebook N" by default) and return its id."""
-        self.tables.sweep()
-        return self.notebooks.create_notebook(title)
-
-    def add_ai_cell(
-        self, notebook_id: str, prompt: str = "", model: str | None = None, effort: str | None = None,
-        max_rows: int = DEFAULT_MAX_ROWS, after: str | None = None, before: str | None = None,
-    ) -> str:
-        """Add an AI Cell (after cell `after`, or at the end) whose Draft holds its prompt and settings."""
-        return self.notebooks.add_ai_cell(
-            notebook_id, {"prompt": prompt, "model": model, "effort": effort, "max_rows": max_rows}, after, before)
-
-    def add_sql_cell(
-        self, notebook_id: str, sql: str = "", max_rows: int = DEFAULT_MAX_ROWS, after: str | None = None,
-        before: str | None = None, command: str = "", table: str = "",
-    ) -> str:
-        """Add a SQL Cell (after cell `after`, or at the end) whose Draft holds its SQL and row cap. A `command`
-        (a SHOW statement or DESCRIBE TABLE, with its `table`) makes it a SHOW Cell: the SQL is not used."""
-        return self.notebooks.add_cell(
-            notebook_id, SQL, {"sql": sql, "max_rows": max_rows, "command": command, "table": table}, after, before)
-
-    def _follow_rename(self, con, old: str, new: str) -> None:
-        """Every Display, in a Run or a Markdown Cell, follows a table's new name."""
-        self.notebooks.follow_rename(con, old, new)
-
-    def _copyable_run(self, notebook_id: str, cell_id: str) -> tuple[str, list[dict]]:
-        """An AI Cell's latest answer as a Markdown Cell would hold it: the text and the embedded Displays (a
-        table or chart of a table that is still live, each with its own definition). Count Displays are not
-        embedded: their number is already in the text. ValueError if the cell has not run."""
-        cell = self._idle_cell(notebook_id, cell_id)
-        if cell["kind"] != AI or cell["run"] is None:
-            raise ValueError("Only an AI Cell that has run can be copied to a Markdown Cell.")
-        texts: list[str] = []
-        displays: list[dict] = []
-        for item in self.notebooks.transcript(cell["run"]["id"]):
-            if item["type"] == "message":
-                m = item["message"]
-                if m["role"] == "assistant" and m.get("content"):
-                    text = ai_cell_context.without_stop_note(m["content"])
-                    if text:
-                        texts.append(text)
-            elif item["kind"] in ("table", "chart") and item["result_table"] in self.tables:
-                d = {"kind": item["kind"], "table": item["result_table"]}
-                if item["kind"] == "chart":
-                    d["spec"] = item["spec"]
-                displays.append(d)
-        return "\n\n".join(texts), displays
-
-    def markdown_copy_tables(self, notebook_id: str, cell_id: str) -> list[str]:
-        """The `rt_` tables a Copy to Markdown Cell would embed, which the user may save first (so the copy does
-        not expire with them)."""
-        _, displays = self._copyable_run(notebook_id, cell_id)
-        return list(dict.fromkeys(d["table"] for d in displays if table_names.is_result_table_name(d["table"])))
-
-    def copy_to_markdown_cell(self, notebook_id: str, cell_id: str, save: dict[str, str] | None = None) -> str:
-        """Insert a Markdown Cell below an AI Cell holding its answer text and one embedded Display per table or
-        chart, and return its id. Send to AI starts unticked. `save` maps `rt_` tables of the answer to the names
-        to rename them to (Saved Tables); every name is checked first, so a ValueError changes nothing."""
-        save = save or {}
-        usable = self.markdown_copy_tables(notebook_id, cell_id)
-        if not set(save) <= set(usable):
-            raise ValueError("Only the answer's rt_ tables can be saved.")
-        for new in save.values():
-            self.tables.check_new_name(new)
-        if len({canonical(n) for n in save.values()}) != len(save):
-            raise ValueError("Each saved table needs its own name.")
-        for old, new in save.items():
-            self.tables.update(old, new_name=new)
-        text, displays = self._copyable_run(notebook_id, cell_id)
-        return self.notebooks.add_cell(
-            notebook_id, MARKDOWN, {"text": text, "send_to_ai": False, "displays": displays}, after=cell_id)
-
-    def add_markdown_cell(self, notebook_id: str, text: str = "", send_to_ai: bool = False,
-                          after: str | None = None, before: str | None = None) -> str:
-        """Add a Markdown Cell. Its text reaches the AI Cells below only while `send_to_ai` is ticked."""
-        return self.notebooks.add_cell(notebook_id, MARKDOWN, {"text": text, "send_to_ai": send_to_ai}, after, before)
-
-    def _idle_cell(self, notebook_id: str, cell_id: str) -> dict:
-        """The cell, for an operation that cannot touch a running one: KeyError if it is not in the notebook,
-        `NotebookBusy` if it is running."""
-        cell = self.notebooks.cell(cell_id)
-        if cell["notebook_id"] != notebook_id:
-            raise KeyError(cell_id)
-        if self.running_cell(notebook_id) == cell_id:
-            raise NotebookBusy("This cell is running; stop it first")
-        return cell
-
-    def rename_notebook(self, notebook_id: str, title: str) -> None:
-        """Retitle a notebook (at most 60 characters). ValueError if the title is blank, KeyError if unknown."""
-        title = title.strip()[:60]
-        if not title:
-            raise ValueError("a notebook name cannot be blank")
-        self.notebooks.rename_notebook(notebook_id, title)
-
-    def _idle_notebook(self, notebook_id: str) -> list[dict]:
-        """The notebook's cells, for an operation that cannot touch a running one: KeyError if unknown,
-        `NotebookBusy` if a cell is running."""
-        if not self.notebooks.exists(notebook_id):
-            raise KeyError(notebook_id)
-        if self.running_cell(notebook_id):
-            raise NotebookBusy("A cell in this notebook is running; stop it first")
-        return self.notebooks.cells(notebook_id)
-
-    def notebook_delete_preview(self, notebook_id: str) -> dict:
-        """Counts for the delete dialog: the live Result Tables `delete_rt` would drop (any cell's, any Run's)
-        and the live Saved Tables that are always kept."""
-        tables = [t for c in self._idle_notebook(notebook_id) for t in self.tables.tables_of_cell(c["id"])]
-        return {"result": sum(t.kind == "result" for t in tables), "saved": sum(t.kind == "saved" for t in tables)}
-
-    def delete_notebook(self, notebook_id: str, tables: TablesChoice = "keep") -> None:
-        """Delete a notebook with its cells. `tables` (keep or delete_rt) says whether to drop the `rt_` tables its
-        Runs made; Saved Tables are always kept. The tables go first, so a failure leaves the notebook in place."""
-        cells = self._idle_notebook(notebook_id)
-        if tables == "delete_rt":
-            for cell in cells:
-                self.tables.drop_of_cell(cell["id"])
-        self.notebooks.delete_notebook(notebook_id)
-
-    def move_cell(self, notebook_id: str, cell_id: str, direction: Literal["up", "down"]) -> None:
-        """Swap a cell with the one above or below it (nothing at either end). Staleness follows from the new order."""
-        self._idle_cell(notebook_id, cell_id)
-        self.notebooks.move_cell(cell_id, direction)
-
-    def copy_cell(self, notebook_id: str, cell_id: str) -> str:
-        """Insert a copy of a cell's Draft just below it and return its id: an AI Cell's prompt and settings, a SQL
-        Cell's SQL and row cap, a Markdown Cell's text and Send to AI. The copy has no Run."""
-        cell = self._idle_cell(notebook_id, cell_id)
-        return self.notebooks.add_cell(notebook_id, cell["kind"], dict(cell["draft"]), after=cell_id)
-
-    def cell_delete_preview(self, notebook_id: str, cell_id: str) -> dict:
-        """Counts for the delete dialog: the live Result Tables `delete_rt` would drop (any Run's) and the live
-        Saved Tables that are always kept."""
-        self._idle_cell(notebook_id, cell_id)
-        tables = self.tables.tables_of_cell(cell_id)
-        return {"result": sum(t.kind == "result" for t in tables), "saved": sum(t.kind == "saved" for t in tables)}
-
-    def delete_cell(self, notebook_id: str, cell_id: str, tables: TablesChoice = "keep") -> None:
-        """Delete a cell. `tables` (keep or delete_rt) says whether to drop the `rt_` tables its Runs made; kept
-        ones expire per their Retention. Saved Tables are always kept. The tables go first, so a failure leaves
-        the cell in place and the delete can be retried."""
-        self._idle_cell(notebook_id, cell_id)
-        if tables == "delete_rt":
-            self.tables.drop_of_cell(cell_id)
-        self.notebooks.delete_cell(cell_id)
-
-    def delete_earlier_tables(self, notebook_id: str, cell_id: str) -> list[str]:
-        """Drop the `rt_` tables of the cell's earlier Runs (never Saved Tables, never its latest Run's) and return
-        their names. `NotebookBusy` if the cell is running."""
-        cell = self._idle_cell(notebook_id, cell_id)
-        if cell["run"] is None:
-            return []
-        return self.tables.drop_earlier_of_cell(cell_id, cell["run"]["id"])
-
-    async def run_cell(self, notebook_id: str, cell_id: str) -> AsyncIterator[Event]:
-        """Run a cell, with what its Draft holds, and stream its events. A SQL Cell runs without the LLM, through
-        the SQL Cell Run module, and needs no `start()`; an AI Cell runs through the AI Cell Run module, and needs
-        `start()` first. Its Run replaces the cell's earlier one. `CannotRun` (with its reason) if its Draft cannot
-        be Run (see the Cell's `cannot_run`), before any Run is recorded. `NotebookBusy` if a cell of this notebook is
-        already running, KeyError if the cell is not in the notebook."""
-        cell = self.cell(cell_id)
-        if cell.notebook_id != notebook_id:
-            raise KeyError(cell_id)
-        reason = cell.cannot_run()
-        if reason is not None:  # refused before a Run starts: the latest Run and its output stay
-            raise CannotRun(reason)
-        assert not isinstance(cell, MarkdownCell)  # never Run: refused just above
-        if isinstance(cell, AiCell) and self._connection is None:
-            raise RuntimeError("Agent not started: call `await agent.start()` or use `async with agent`")
-        if notebook_id in self._running_cells:
-            raise NotebookBusy("A cell in this notebook is already running.")
-        self._running_cells[notebook_id] = cell_id
-        run = self.sql_cells.run(cell) if isinstance(cell, SqlCell) else self.ai_cells.run(cell)
-        try:
-            # Closed with this stream, so that an abandoned stream (the page was closed) stops the Run now.
-            async with aclosing(cast(AsyncGenerator, run)) as events:
-                async for item in events:
-                    yield item
-        finally:
-            if self._running_cells.get(notebook_id) == cell_id:
-                del self._running_cells[notebook_id]
-
-    def cell(self, cell_id: str) -> Cell:
-        """The Cell, typed, with the configured default model standing in for a missing one. KeyError if unknown."""
-        return typed_cell(self.notebooks.cell(cell_id), self.config.model)
-
-    def stale_cells(self, notebook_id: str) -> set[str]:
-        """The ids of the notebook's AI Cells that are Stale (see `ai_cell_context.stale_cells`)."""
-        return ai_cell_context.stale_cells(self.notebooks.cells(notebook_id))
-
-    def running_cell(self, notebook_id: str) -> str | None:
-        """The id of the cell running in this notebook now, or None."""
-        return self._running_cells.get(notebook_id)
-
-    def stop_cell(self, cell_id: str) -> bool:
-        """Stop a running cell now. What it had streamed is kept and its Run is recorded as stopped.
-        False if the cell is not running."""
-        return self.sql_cells.stop(cell_id) or self.ai_cells.stop(cell_id)
 
     def fetch_rows(self, result_table: str, columns: list[str] | None = None, **page_args) -> dict:
         """Internal data path used by the row-JSON endpoint. Not an LLM tool.

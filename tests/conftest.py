@@ -14,8 +14,9 @@ import sys
 import threading
 import time
 from contextlib import ExitStack, asynccontextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
 import anyio
 import pytest
@@ -25,13 +26,20 @@ from mcp.shared.memory import create_client_server_memory_streams
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
 
-from flood_agent.agent import Agent, AgentConfig
-from flood_agent.catalog import CellRun
+from flood_agent.agent import Agent, AgentConfig, build_parts
+from flood_agent.catalog import Catalog, CellRun
+from flood_agent.cell import AiDraft, AiRunSettings, MarkdownDraft, SqlDraft, SqlRunSettings
+from flood_agent.cell_kinds import AI, MARKDOWN
+from flood_agent.cell_kinds import SQL as SQL_KIND
 from flood_agent.config import Settings
 from flood_agent.events import TextDelta
 from flood_agent.generator import generate
 from flood_agent.llm import TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_server import ServerSettings, create_server
+from flood_agent.model_choices import ModelChoices
+from flood_agent.notebook import Notebooks, Position
+from flood_agent.notebook_store import DEFAULT_MAX_ROWS, NotebookStore
+from flood_agent.semantic_layer import SemanticLayer
 from flood_agent.web import create_app
 
 # SQLite fsyncs on every commit, and on a disk filesystem (WSL's ext4 especially) that was over
@@ -268,15 +276,28 @@ def isolated_settings(monkeypatch):
 
 
 @functools.cache
+def default_settings() -> Settings:
+    """Built once per worker: constructing Settings costs about 3 ms."""
+    return Settings.from_defaults()
+
+
+@functools.cache
 def default_agent_config() -> AgentConfig:
-    """Built once per worker: constructing Settings costs about 3 ms. Callers get copies (`replace`)."""
-    return Settings.from_defaults().agent_config()
+    """Callers get copies (`replace`)."""
+    return default_settings().agent_config()
 
 
-def config_for_test(tmp_path, telemetry_db, semantic_layer, **overrides) -> AgentConfig:
-    """The defaults.toml settings, pointed at this test's files."""
+@functools.cache
+def model_choices_for_test(api_key: bool = True) -> ModelChoices:
+    """The defaults.toml model choices, as if an API key were set (or not, with `api_key=False`)."""
+    return default_settings().model_choices(has_api_key=api_key)
+
+
+def config_for_test(tmp_path, telemetry_db, semantic_layer, api_key: bool = True, **overrides) -> AgentConfig:
+    """The defaults.toml settings, pointed at this test's files, with an API key set unless `api_key=False`."""
     return replace(
         default_agent_config(),
+        choices=model_choices_for_test(api_key),
         telemetry_db=telemetry_db,
         results_db=tmp_path / "results.db",
         app_db=tmp_path / "app.db",
@@ -293,10 +314,12 @@ def query_limits() -> dict:
 
 @pytest.fixture
 def build_agent(tmp_path, telemetry_db, semantic_layer_path):
-    """Factory for an Agent that is NOT started (web tests: the app lifespan starts it)."""
+    """Factory for an Agent that is NOT started (web tests: the app lifespan starts it). `api_key=False`: as if no
+    API key were set, so only No model can be used."""
 
-    def _build(llm, **overrides) -> Agent:
-        return Agent(config_for_test(tmp_path, telemetry_db, semantic_layer_path, **overrides), lambda model: llm)
+    def _build(llm, api_key: bool = True, **overrides) -> Agent:
+        return Agent(config_for_test(tmp_path, telemetry_db, semantic_layer_path, api_key, **overrides),
+                     lambda model: llm)
 
     return _build
 
@@ -315,6 +338,69 @@ async def make_agent(build_agent):
     yield _make
     for agent in agents:
         await agent.aclose()
+
+
+@pytest.fixture
+def notebook_store(tmp_path) -> NotebookStore:
+    """Notebook storage on the app database this test's Agents use (`build_agent`, `make_agent`), for storage-level
+    setup and checks the Notebook module does not offer: starting or finishing a Run by hand, adding messages or an
+    older Cell, a Run's Displays and settings. Its clock is the wall clock, like the Agents'."""
+    return NotebookStore(config_for_test(tmp_path, None, None).app_db)
+
+
+@dataclass
+class NotebookParts:
+    """The Notebook module on real Notebook storage and a real Table Catalog, with what a test sets up through."""
+
+    notebooks: Notebooks
+    store: NotebookStore
+    tables: Catalog
+    results_db: Path
+    clock: "Clock"
+
+
+@pytest.fixture
+def notebook_parts(tmp_path, telemetry_db, semantic_layer_path):
+    """`notebook_parts(api_key=True)` -> NotebookParts on a temporary database: no HTTP client, no MCP server (an AI
+    Cell cannot be Run). `api_key=False`: as if no API key were set, so only No model can be used."""
+    def _build(api_key: bool = True) -> NotebookParts:
+        clock = Clock()
+        cfg = config_for_test(tmp_path, telemetry_db, semantic_layer_path, api_key, clock=clock)
+
+        async def no_connection():
+            raise RuntimeError("no MCP server here")
+
+        parts = build_parts(cfg, SemanticLayer(cfg.semantic_layer), lambda model: ScriptedLLM(), no_connection,
+                            lambda: False)
+        return NotebookParts(parts.notebooks, parts.store, parts.tables, cfg.results_db, clock)
+
+    return _build
+
+
+def add_ai_cell(agent: Agent, notebook_id: str, prompt: str = "", model: str | None = None,
+                effort: str | None = None, max_rows: int = DEFAULT_MAX_ROWS, after: str | None = None,
+                position: Position | None = None) -> str:
+    """Add an AI Cell (after `after`, else at `position`, else at the end) whose Draft holds this prompt and these
+    settings (the default model when `model` is None)."""
+    settings = AiRunSettings(model or agent.config.choices.default_model, effort, max_rows)
+    return agent.notebooks.add_cell(notebook_id, AI, position or ("after" if after else "end"), after,
+                                    draft=AiDraft(prompt, settings))
+
+
+def add_sql_cell(agent: Agent, notebook_id: str, sql: str = "", max_rows: int = DEFAULT_MAX_ROWS,
+                 after: str | None = None, command: str = "", table: str = "",
+                 position: Position | None = None) -> str:
+    """Add a SQL Cell (after `after`, else at `position`, else at the end) whose Draft holds this SQL, row cap and
+    command (with its table)."""
+    return agent.notebooks.add_cell(notebook_id, SQL_KIND, position or ("after" if after else "end"), after,
+                                    draft=SqlDraft(sql, SqlRunSettings(max_rows, command), table))
+
+
+def add_markdown_cell(agent: Agent, notebook_id: str, text: str = "", send_to_ai: bool = False,
+                      after: str | None = None, position: Position | None = None) -> str:
+    """Add a Markdown Cell (after `after`, else at `position`, else at the end) with this text and Send to AI."""
+    return agent.notebooks.add_cell(notebook_id, MARKDOWN, position or ("after" if after else "end"), after,
+                                    draft=MarkdownDraft(text, send_to_ai, ()))
 
 
 @pytest.fixture
@@ -432,10 +518,10 @@ async def collect(
     model: str | None = None, effort: str | None = None,
 ):
     """Run `message` as a new AI Cell at the end of `notebook` (a new notebook if None) and return its events.
-    The cell's id is `agent.notebooks.cells(notebook)[-1]["id"]` afterwards."""
-    notebook = notebook or agent.create_notebook()
-    cell = agent.add_ai_cell(notebook, prompt=message, model=model, effort=effort, max_rows=max_result_rows)
-    return [e async for e in agent.run_cell(notebook, cell)]
+    The cell is the notebook's last afterwards."""
+    notebook = notebook or agent.notebooks.create_notebook()
+    cell = add_ai_cell(agent, notebook, prompt=message, model=model, effort=effort, max_rows=max_result_rows)
+    return [e async for e in agent.notebooks.run_cell(notebook, cell)]
 
 
 SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
@@ -482,14 +568,35 @@ def register_table(catalog, name: str, cell_id: str = "cell-1", run: int = 1, *a
     catalog.register_for(CellRun(cell_id, f"run-{run}"), name, *args, **kwargs)
 
 
-def run_of(agent: Agent, notebook: str, index: int = -1) -> dict:
-    """The latest Run of the notebook's `index`th cell (default: the last), with its `messages`, `trace`, `status`."""
-    return agent.notebooks.cells(notebook)[index]["run"]
+def run_of(agent: Agent, notebook: str, index: int = -1) -> Any:
+    """The latest Run of the notebook's `index`th cell (default: the last), with its `messages`, `trace`, `status`;
+    None if it has not run."""
+    return agent.notebooks.notebook_page(notebook).cells[index].run
+
+
+def cell_ids(agent: Agent, notebook: str) -> list[str]:
+    """The ids of the notebook's cells, in order."""
+    return [c.cell.id for c in agent.notebooks.notebook_page(notebook).cells]
+
+
+def latest_run(agent: Agent, notebook: str, cell: str) -> Any:
+    """The record of the cell's latest Run (number, status, settings, fingerprint, result...), or None."""
+    return agent.notebooks.page_cell(notebook, cell).run
+
+
+def draft_of(agent: Agent, notebook: str, cell: str) -> dict:
+    """The cell's Draft, as stored."""
+    return agent.notebooks.cell(notebook, cell).draft.stored()
+
+
+def displays_of(agent: Agent, notebook: str, cell: str) -> list[dict]:
+    """The Displays of the cell's latest Run, in order: {display_id, kind, result_table, **definition}."""
+    return [i for i in agent.notebooks.run_transcript(notebook, cell) if i["type"] == "display"]
 
 
 def tables_in(agent: Agent, notebook: str) -> list:
     """The live Result and Saved Tables any cell of the notebook made, oldest first."""
-    tables = [t for c in agent.notebooks.cells(notebook) for t in agent.tables.tables_of_cell(c["id"])]
+    tables = [t for c in cell_ids(agent, notebook) for t in agent.tables.tables_of_cell(c)]
     return sorted(tables, key=lambda t: (t.created_at_ms, t.name))
 
 

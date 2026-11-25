@@ -59,7 +59,7 @@ async def test_expired_table_is_denied_to_other_notebooks_without_leaking(make_a
 
 async def test_the_querying_notebook_owns_the_new_table_not_the_source(make_agent):
     agent, llm, _, name = await run_first(make_agent)
-    other = agent.create_notebook()
+    other = agent.notebooks.create_notebook()
     llm.steps = [
         [tool_call("run_query", sql=f"SELECT dport FROM {name}", title="derived")],
         [TextChunk("ok")],

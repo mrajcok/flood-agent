@@ -18,10 +18,11 @@ from pydantic_settings import (
     TomlConfigSettingsSource,
 )
 
-from flood_agent.agent import NO_MODEL, AgentConfig
+from flood_agent.agent import AgentConfig
 from flood_agent.ai_cell_run import ClientFactory
 from flood_agent.fake_llm import FakeClient, load_canned_prompts
 from flood_agent.llm import LLMClient, ModelSpec, OpenRouterClient
+from flood_agent.model_choices import NO_MODEL, ModelChoices
 
 DEFAULTS_FILE = Path(__file__).with_name("defaults.toml")
 
@@ -125,15 +126,20 @@ class Settings(BaseSettings):
 
         return client_for
 
-    def agent_config(self, model: str | None = None) -> AgentConfig:
-        """`model` is the default model for a turn that names none; it defaults to `default_model`."""
+    def model_choices(self, default_model: str | None = None, has_api_key: bool | None = None) -> ModelChoices:
+        """The models that can be used here: the curated list, usable with an API key. The default model is
+        `default_model`, or No model when there is no API key. Either can be given instead of the settings' own (an
+        eval brings its own client; tests)."""
+        key = self.openrouter_api_key is not None if has_api_key is None else has_api_key
+        return ModelChoices.build(tuple(self.models), default_model or self.default_model, key)
+
+    def agent_config(self) -> AgentConfig:
         return AgentConfig(
             telemetry_db=self.telemetry_db.resolve(),
             results_db=self.results_db.resolve(),
             semantic_layer=self.semantic_layer.resolve(),
             app_db=self.app_db.resolve(),
-            model=model or self.default_model,
-            models=tuple(self.models),
+            choices=self.model_choices(),
             result_ttl_ms=int(self.result_ttl_hours * 3600 * 1000),
             query_timeout_s=self.query_timeout_s,
             chart_row_cap=self.chart_row_cap,

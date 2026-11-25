@@ -40,8 +40,7 @@ def build_app(settings: Settings | None = None, dev: bool = False):
     config = settings.agent_config()
     config.results_db.parent.mkdir(parents=True, exist_ok=True)
     picker = picker_entries(load_canned_prompts())
-    has_api_key = settings.openrouter_api_key is not None
-    return create_app(Agent(config, settings.client_factory()), picker=picker, has_api_key=has_api_key, dev=dev)
+    return create_app(Agent(config, settings.client_factory()), picker=picker, dev=dev)
 
 
 def main(dev: bool = False) -> None:

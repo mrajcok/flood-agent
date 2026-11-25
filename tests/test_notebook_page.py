@@ -7,8 +7,8 @@ import time
 from conftest import ScriptedLLM, ask, main_pane, table_script, tool_call
 from test_notebooks import SQL, Slow
 
-from flood_agent.agent import NO_MODEL
 from flood_agent.llm import TextChunk
+from flood_agent.model_choices import NO_MODEL
 
 SONNET = "anthropic/claude-sonnet-5.5"
 
@@ -244,22 +244,22 @@ def test_stopping_a_cell_that_is_not_running_is_harmless(build_agent, web_client
 POLLS = 'hx-trigger="every 2s"'  # a Cell shown as running re-fetches itself
 
 
-def test_the_stored_status_alone_says_whether_a_cell_is_running(build_agent, web_client):
+def test_the_stored_status_alone_says_whether_a_cell_is_running(build_agent, web_client, notebook_store):
     agent = build_agent(ScriptedLLM())
     client = web_client(agent)
     nb, cell = new_notebook(client)
-    run = agent.notebooks.start_run(cell, "p", {"model": SONNET, "effort": None, "max_rows": 1000}, "f")
+    run = notebook_store.start_run(cell, "p", {"model": SONNET, "effort": None, "max_rows": 1000}, "f")
     assert POLLS in client.get(f"/n/{nb}/cells/{cell}").text
 
-    agent.notebooks.finish_run(run, "ok")
+    notebook_store.finish_run(run, "ok")
     assert POLLS not in client.get(f"/n/{nb}/cells/{cell}").text
 
 
-def test_a_cell_cut_off_by_a_killed_app_shows_as_failed_after_a_restart(build_agent, web_client):
+def test_a_cell_cut_off_by_a_killed_app_shows_as_failed_after_a_restart(build_agent, web_client, notebook_store):
     killed = build_agent(ScriptedLLM())
     client = web_client(killed)
     nb, cell = new_notebook(client)
-    killed.notebooks.start_run(cell, "p", {"model": SONNET, "effort": None, "max_rows": 1000}, "f")  # never finished
+    notebook_store.start_run(cell, "p", {"model": SONNET, "effort": None, "max_rows": 1000}, "f")  # never finished
 
     page = web_client(build_agent(ScriptedLLM())).get(f"/n/{nb}/cells/{cell}").text
     assert POLLS not in page
@@ -303,3 +303,34 @@ def test_no_notebook_text_says_session(build_agent, web_client):
     page = client.get(f"/n/{nb}").text
     assert 'aria-label="New notebook"' in page
     assert "session" not in re.sub(r"<script.*?</script>", "", page, flags=re.S).lower()
+
+
+def test_an_unknown_notebook_is_404(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM()))
+    refused = client.post("/n/nope/cells", data={"kind": "ai"})
+    assert refused.status_code == 404 and refused.json()["detail"] == "unknown notebook"
+
+
+def test_a_cell_of_another_notebook_is_404(build_agent, web_client):
+    client = web_client(build_agent(ScriptedLLM()))
+    nb, _ = new_notebook(client)
+    _, theirs = new_notebook(client)
+    refused = client.post(f"/n/{nb}/cells/{theirs}/move", data={"direction": "up"})
+    assert refused.status_code == 404 and refused.json()["detail"] == "unknown cell"
+
+
+def test_deleting_a_notebook_while_a_cell_runs_is_409(build_agent, web_client):
+    client = web_client(build_agent(Slow()))
+    nb, cell = new_notebook(client)
+    reader = threading.Thread(target=lambda: client.get(f"/n/{nb}/cells/{cell}/stream"))
+    client.post(f"/n/{nb}/cells/{cell}/run", data={"prompt": "p", "model": SONNET, "effort": "", "max_rows": "5"})
+    reader.start()
+    for _ in range(100):
+        if "[*]" in client.get(f"/n/{nb}/cells/{cell}").text:
+            break
+        time.sleep(0.05)
+    refused = client.post(f"/n/{nb}/delete")
+    assert refused.status_code == 409 and "running" in refused.json()["detail"]
+    client.post(f"/n/{nb}/cells/{cell}/stop")
+    reader.join(5)
+    assert client.get(f"/n/{nb}").status_code == 200  # still there

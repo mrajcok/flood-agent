@@ -4,7 +4,7 @@ with its AI Cell's Run, shown in reply order, with no Retention (ADR 0006)."""
 import sqlite3
 from contextlib import closing
 
-from conftest import Clock, ScriptedLLM, collect, last_tool_result, run_of, tool_call
+from conftest import Clock, ScriptedLLM, cell_ids, collect, displays_of, last_tool_result, tool_call
 from conftest import ask as run_in_notebook
 
 from flood_agent.events import CountEvent, DisplayEvent, TextDelta
@@ -72,7 +72,7 @@ def test_a_count_display_never_expires(build_agent, web_client):
 def test_deleting_the_notebook_deletes_its_count_displays(build_agent, web_client):
     client, agent, _, nb, _ = ask(build_agent, web_client)
     client.post(f"/n/{nb}/delete", data={"tables": "delete_rt"}, follow_redirects=False)
-    with closing(sqlite3.connect(agent.notebooks.path)) as con:
+    with closing(sqlite3.connect(agent.config.app_db)) as con:
         assert con.execute("SELECT COUNT(*) FROM run_displays WHERE kind='count'").fetchone() == (0,)
 
 
@@ -90,6 +90,6 @@ async def test_a_mixed_step_shows_its_displays_in_call_order_live_and_after_a_re
 
     live = ["count" if isinstance(e, CountEvent) else e.kind for e in events if isinstance(e, (CountEvent, DisplayEvent))]
     (nb,) = [n["id"] for n in agent.notebooks.list_notebooks()]
-    reloaded = [i["kind"] for i in agent.notebooks.transcript(run_of(agent, nb)["id"]) if i["type"] == "display"]
+    reloaded = [d["kind"] for d in displays_of(agent, nb, cell_ids(agent, nb)[-1])]
     assert reloaded == ["count", "table", "count"]
     assert live == reloaded

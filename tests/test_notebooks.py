@@ -1,28 +1,29 @@
-"""The Agent's Notebook API (AI Cells only): storage, running a cell, stopping it."""
+"""The Notebook module with AI Cells: storage, running a cell, stopping it."""
 
 import asyncio
 import sqlite3
 from dataclasses import replace
 
 import pytest
-from conftest import ScriptedLLM, tool_call
+from conftest import ScriptedLLM, add_ai_cell, tool_call
 
-from flood_agent.agent import Agent, NotebookBusy
+from flood_agent.agent import Agent
 from flood_agent.catalog import CellRun
-from flood_agent.cell import save_draft
+from flood_agent.cell import AiCell
 from flood_agent.events import TextDelta, TraceReady
 from flood_agent.llm import TextChunk
-from flood_agent.notebooks import NotebookStore
+from flood_agent.notebook import NotebookBusy
+from flood_agent.notebook_store import NotebookStore
 
 SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
 
 
 async def run(agent, notebook_id, cell_id):
-    return [ev async for ev in agent.run_cell(notebook_id, cell_id)]
+    return [ev async for ev in agent.notebooks.run_cell(notebook_id, cell_id)]
 
 
 def run_of(agent, notebook_id, index):
-    return agent.notebooks.cells(notebook_id)[index]["run"]
+    return agent.notebooks.notebook_page(notebook_id).cells[index].run
 
 
 class Slow:
@@ -35,26 +36,26 @@ class Slow:
 
 async def test_a_notebook_keeps_its_ai_cells_in_order_with_their_drafts(make_agent):
     agent = await make_agent(ScriptedLLM())
-    nb = agent.create_notebook()
-    first = agent.add_ai_cell(nb, prompt="one", model="m1", effort="high", max_rows=50)
-    third = agent.add_ai_cell(nb, prompt="three")
-    second = agent.add_ai_cell(nb, prompt="two", after=first)
+    nb = agent.notebooks.create_notebook()
+    first = add_ai_cell(agent, nb, prompt="one", model="m1", effort="high", max_rows=50)
+    third = add_ai_cell(agent, nb, prompt="three")
+    second = add_ai_cell(agent, nb, prompt="two", after=first)
 
-    cells = agent.notebooks.cells(nb)
-    assert [c["id"] for c in cells] == [first, second, third]
-    assert cells[0]["kind"] == "ai"
-    assert cells[0]["draft"] == {"prompt": "one", "model": "m1", "effort": "high", "max_rows": 50}
-    assert cells[0]["run"] is None
+    cells = agent.notebooks.notebook_page(nb).cells
+    assert [c.cell.id for c in cells] == [first, second, third]
+    assert isinstance(cells[0].cell, AiCell)
+    assert cells[0].cell.draft.stored() == {"prompt": "one", "model": "m1", "effort": "high", "max_rows": 50}
+    assert cells[0].run is None
     assert [n["title"] for n in agent.notebooks.list_notebooks()] == ["Notebook 1"]
     assert agent.notebooks.list_notebooks()[0]["id"] == nb
-    assert agent.notebooks.title_of(agent.create_notebook()) == "Notebook 2"
+    assert agent.notebooks.notebook_page(agent.notebooks.create_notebook()).title == "Notebook 2"
 
 
 async def test_a_cell_sends_the_ai_cells_above_in_order_then_its_prompt_never_those_below(make_agent):
     llm = ScriptedLLM([TextChunk("Answer A.")], [TextChunk("Answer B.")], [TextChunk("Answer C.")])
     agent = await make_agent(llm)
-    nb = agent.create_notebook()
-    a, b, c = (agent.add_ai_cell(nb, prompt=f"ask {p}") for p in "ABC")
+    nb = agent.notebooks.create_notebook()
+    a, b, c = (add_ai_cell(agent, nb, prompt=f"ask {p}") for p in "ABC")
     for cell in (a, b, c):
         await run(agent, nb, cell)
     llm.steps.append([TextChunk("Answer B2.")])
@@ -70,8 +71,8 @@ async def test_a_cell_sends_the_ai_cells_above_in_order_then_its_prompt_never_th
 
 async def test_a_run_records_what_ran_settings_status_answer_and_trace(make_agent):
     agent = await make_agent(ScriptedLLM([TextChunk("Hello.")]))
-    nb = agent.create_notebook()
-    cell = agent.add_ai_cell(nb, prompt="hi", model="no-model", effort=None, max_rows=77)
+    nb = agent.notebooks.create_notebook()
+    cell = add_ai_cell(agent, nb, prompt="hi", model="no-model", effort=None, max_rows=77)
     events = await run(agent, nb, cell)
 
     assert any(isinstance(e, TextDelta) and e.text == "Hello." for e in events)
@@ -85,7 +86,7 @@ async def test_a_run_records_what_ran_settings_status_answer_and_trace(make_agen
     assert r["context_tokens"] == 100
 
     # editing the Draft does not touch the Run; a new Run replaces it, under a new id
-    save_draft(agent.notebooks, cell, replace(agent.cell(cell).draft, prompt="again"))
+    agent.notebooks.save_draft(nb, cell, replace(agent.notebooks.cell(nb, cell).draft, prompt="again"))
     assert run_of(agent, nb, 0)["prompt"] == "hi"
     agent.client_for = lambda model: ScriptedLLM([TextChunk("Second.")])
     await run(agent, nb, cell)
@@ -101,8 +102,8 @@ async def test_the_system_prompt_lists_tables_from_cells_above_and_the_cells_own
         [TextChunk("C done.")],                                                         # cell C
     )
     agent = await make_agent(llm)
-    nb = agent.create_notebook()
-    a, b, c = (agent.add_ai_cell(nb, prompt=p) for p in "abc")
+    nb = agent.notebooks.create_notebook()
+    a, b, c = (add_ai_cell(agent, nb, prompt=p) for p in "abc")
     for cell in (a, b, c):
         await run(agent, nb, cell)
 
@@ -120,17 +121,17 @@ async def test_the_system_prompt_lists_tables_from_cells_above_and_the_cells_own
 
 async def test_a_second_cell_cannot_run_while_one_runs_in_the_notebook(make_agent):
     agent = await make_agent(Slow())
-    nb, other = agent.create_notebook(), agent.create_notebook()
-    a, b = agent.add_ai_cell(nb, prompt="a"), agent.add_ai_cell(nb, prompt="b")
-    c = agent.add_ai_cell(other, prompt="c")
+    nb, other = agent.notebooks.create_notebook(), agent.notebooks.create_notebook()
+    a, b = add_ai_cell(agent, nb, prompt="a"), add_ai_cell(agent, nb, prompt="b")
+    c = add_ai_cell(agent, other, prompt="c")
 
-    first = agent.run_cell(nb, a)
+    first = agent.notebooks.run_cell(nb, a)
     await anext(first)
     with pytest.raises(NotebookBusy):
-        await anext(agent.run_cell(nb, b))
+        await anext(agent.notebooks.run_cell(nb, b))
     agent.client_for = lambda model: ScriptedLLM([TextChunk("fine")])
     await run(agent, other, c)  # a different notebook is free to run meanwhile
-    assert agent.stop_cell(a)
+    assert agent.notebooks.stop_cell(nb, a)
     assert any(isinstance(e, TraceReady) for e in [ev async for ev in first])
     agent.client_for = lambda model: ScriptedLLM([TextChunk("fine")])
     await run(agent, nb, b)  # and once it ended, so is this one
@@ -138,20 +139,20 @@ async def test_a_second_cell_cannot_run_while_one_runs_in_the_notebook(make_agen
 
 async def test_stopping_a_cell_keeps_what_it_streamed_and_records_the_run_as_stopped(make_agent):
     agent = await make_agent(Slow())
-    nb = agent.create_notebook()
-    a = agent.add_ai_cell(nb, prompt="a")
-    async for ev in agent.run_cell(nb, a):
+    nb = agent.notebooks.create_notebook()
+    a = add_ai_cell(agent, nb, prompt="a")
+    async for ev in agent.notebooks.run_cell(nb, a):
         if isinstance(ev, TextDelta) and "Partial" in ev.text:
-            assert agent.stop_cell(a)
+            assert agent.notebooks.stop_cell(nb, a)
 
     r = run_of(agent, nb, 0)
     assert r["status"] == "stopped"
     assert r["messages"][-1]["content"] == "Partial answer\n\n*Stopped by user.*"
-    assert agent.stop_cell(a) is False
+    assert agent.notebooks.stop_cell(nb, a) is False
 
     scripted = ScriptedLLM([TextChunk("ok")])  # a cell below sees the stopped run
     agent.client_for = lambda model: scripted
-    await run(agent, nb, agent.add_ai_cell(nb, prompt="b"))
+    await run(agent, nb, add_ai_cell(agent, nb, prompt="b"))
     assert "Partial answer" in scripted.all_sent_text()
 
 
@@ -193,7 +194,7 @@ async def test_a_pre_notebook_database_is_upgraded_by_dropping_its_old_data(buil
         con.execute("CREATE TABLE lookup_old (x)")
 
     upgraded = Agent(config, agent.client_for)
-    cell = upgraded.add_ai_cell(upgraded.create_notebook(), prompt="p")
+    cell = add_ai_cell(upgraded, upgraded.notebooks.create_notebook(), prompt="p")
     upgraded.tables.register_for(CellRun(cell, "r1"), "rt_new")  # the owner is a Cell Run now
     assert upgraded.tables.names() == ["rt_new"] and upgraded.tables.lookup_names() == set()
     assert not {"conversations", "turns", "messages", "displays"} & tables_of_db(config.app_db)
@@ -203,14 +204,14 @@ async def test_a_pre_notebook_database_is_upgraded_by_dropping_its_old_data(buil
 
     again = Agent(config, agent.client_for)  # a second start changes nothing
     assert again.tables.names() == ["rt_new"] and len(again.notebooks.list_notebooks()) == 1
-    assert again.notebooks.cells(again.notebooks.list_notebooks()[0]["id"])[0]["id"] == cell
+    assert again.notebooks.notebook_page(again.notebooks.list_notebooks()[0]["id"]).cells[0].cell.id == cell
 
 
 async def test_runs_are_numbered_in_the_order_they_start_within_a_notebook(make_agent):
     agent = await make_agent(ScriptedLLM([TextChunk("a")], [TextChunk("b")], [TextChunk("c")], [TextChunk("d")]))
-    nb, other = agent.create_notebook(), agent.create_notebook()
-    first, second = agent.add_ai_cell(nb, prompt="one"), agent.add_ai_cell(nb, prompt="two")
-    elsewhere = agent.add_ai_cell(other, prompt="three")
+    nb, other = agent.notebooks.create_notebook(), agent.notebooks.create_notebook()
+    first, second = add_ai_cell(agent, nb, prompt="one"), add_ai_cell(agent, nb, prompt="two")
+    elsewhere = add_ai_cell(agent, other, prompt="three")
     await run(agent, nb, first)
     await run(agent, other, elsewhere)
     await run(agent, nb, second)
@@ -220,16 +221,16 @@ async def test_runs_are_numbered_in_the_order_they_start_within_a_notebook(make_
     assert run_of(agent, other, 0)["number"] == 1
 
 
-async def test_the_last_settings_run_are_those_of_the_most_recently_started_run(make_agent):
+async def test_the_last_settings_run_are_those_of_the_most_recently_started_run(make_agent, notebook_store):
     agent = await make_agent(ScriptedLLM([TextChunk("a")], [TextChunk("b")]))
-    assert agent.notebooks.last_settings() is None
-    nb = agent.create_notebook()
-    one = agent.add_ai_cell(nb, prompt="one", effort="high", max_rows=50)
-    two = agent.add_ai_cell(nb, prompt="two", effort="low", max_rows=7)
+    assert notebook_store.last_settings() is None
+    nb = agent.notebooks.create_notebook()
+    one = add_ai_cell(agent, nb, prompt="one", effort="high", max_rows=50)
+    two = add_ai_cell(agent, nb, prompt="two", effort="low", max_rows=7)
     await run(agent, nb, one)
     await run(agent, nb, two)
-    assert agent.notebooks.last_settings() == run_of(agent, nb, 1)["settings"]
-    assert agent.notebooks.last_settings()["max_rows"] == 7
+    assert notebook_store.last_settings() == run_of(agent, nb, 1)["settings"]
+    assert notebook_store.last_settings()["max_rows"] == 7
 
 
 def test_finishing_a_run_as_failed_needs_an_error_and_no_other_status_may_have_one(tmp_path):

@@ -12,6 +12,7 @@ from flood_agent.ai_cell_run import STEP_LIMIT_MESSAGE
 from flood_agent.config import DEFAULTS_FILE, Settings, render_env_example
 from flood_agent.events import TextDelta
 from flood_agent.llm import TextChunk
+from flood_agent.model_choices import NO_MODEL
 
 ENV_EXAMPLE = Path(__file__).parent.parent / ".env.example"
 
@@ -52,7 +53,7 @@ def test_values_from_the_env_file_override_the_toml_defaults(tmp_path):
     cfg = settings.agent_config()
 
     assert settings.require_api_key() == "sk-from-the-file"
-    assert cfg.model == "qwen/qwen3.8-27b"
+    assert cfg.choices.default_model == "qwen/qwen3.8-27b"
     assert cfg.telemetry_db == tmp_path / "t.db"
     assert cfg.results_db == tmp_path / "r.db"
     assert cfg.app_db == tmp_path / "a.db"
@@ -133,12 +134,19 @@ def test_the_curated_model_list_parses_in_the_specs_order():
     assert (qwen.efforts[0], qwen.context_window) == ("xhigh", 1_024_000)
 
 
-def test_the_default_model_is_one_of_the_list_and_sets_the_agents_default():
-    settings = Settings()
+def test_the_default_model_is_one_of_the_list_and_sets_the_agents_default_when_there_is_an_api_key():
+    settings = Settings(openrouter_api_key="sk-test")
 
     assert settings.default_model == "z-ai/glm-5.3"
-    assert settings.agent_config().model == "z-ai/glm-5.3"
-    assert {m.id: m.context_window for m in settings.agent_config().models}["z-ai/glm-5.3"] == 1_048_576
+    assert settings.agent_config().choices.default_model == "z-ai/glm-5.3"
+    assert settings.agent_config().choices.window_of("z-ai/glm-5.3") == 1_048_576
+
+
+def test_without_an_api_key_the_agents_default_is_no_model_and_only_no_model_can_be_used():
+    choices = Settings(openrouter_api_key=None).agent_config().choices
+
+    assert choices.default_model == NO_MODEL
+    assert choices.can_use(NO_MODEL) and not choices.can_use("z-ai/glm-5.3")
 
 
 def test_a_default_model_outside_the_list_is_refused(tmp_path):

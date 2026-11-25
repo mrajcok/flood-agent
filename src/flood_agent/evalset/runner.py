@@ -32,7 +32,7 @@ from flood_agent.config import Settings
 from flood_agent.evalset.client import UsageMeter
 from flood_agent.evalset.compare import DEFAULT_TOLERANCE, Comparison, compare
 from flood_agent.evalset.golden import Question, load_golden, run_reference
-from flood_agent.evalset.notebook import add_cells_above, run_ai_cell
+from flood_agent.evalset.notebook import add_cells_above, eval_model_choices, run_ai_cell
 from flood_agent.events import TraceEntry, TraceReady, TurnError
 from flood_agent.generator import END_MS
 from flood_agent.llm import OpenRouterClient
@@ -115,18 +115,19 @@ async def _run_question(model, q, ref, telemetry_db, semantic_layer, client_fact
     for p in (results_db, app_db):
         p.unlink(missing_ok=True)
     llm = UsageMeter(client_factory(model, q.id))
+    defaults = Settings.from_defaults()
     agent = Agent(
-        replace(Settings.from_defaults().agent_config(), telemetry_db=telemetry_db, results_db=results_db,
-                semantic_layer=semantic_layer, model=model, app_db=app_db,
+        replace(defaults.agent_config(), telemetry_db=telemetry_db, results_db=results_db,
+                semantic_layer=semantic_layer, choices=eval_model_choices(defaults, model), app_db=app_db,
                 fixed_now_ms=END_MS),  # now() is the end of the data, so "the last hour" has one answer
         lambda _model: llm,
     )
     retries, error, trace = 0, None, None
-    cell_id = None
+    notebook_id = cell_id = None
     start = time.perf_counter()
     try:
         async with agent:
-            notebook_id = agent.create_notebook(q.id)  # each question is a new notebook
+            notebook_id = agent.notebooks.create_notebook(q.id)  # each question is a new notebook
             await add_cells_above(agent, notebook_id, q.above)
             cell_id, events = await run_ai_cell(agent, notebook_id, q.question, EVAL_MAX_RESULT_ROWS)
             async for event in events:
@@ -144,7 +145,7 @@ async def _run_question(model, q, ref, telemetry_db, semantic_layer, client_fact
     if error:
         ok, reason, extra, matched, n = False, "turn failed", 0, None, 0
     else:
-        run = agent.notebooks.cell(cell_id)["run"] if cell_id else None  # the judge reads the cell's current-Run tables
+        run = agent.notebooks.page_cell(notebook_id, cell_id).run if notebook_id and cell_id else None  # its current Run
         names = [t.name for t in agent.tables.tables_of_run(cell_id, run["id"])] if cell_id and run else []
         ok, reason, extra, matched, n = _judge(q, ref, results_db, names, counts)
     return QuestionResult(

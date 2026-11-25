@@ -60,7 +60,7 @@ async def test_reads_and_displays_are_not_scoped_to_any_notebook(make_agent):
         lambda m: results.append(last_tool_result(m)) or [TextChunk("done")],
     )
     agent = await make_agent(llm)
-    notebook = agent.create_notebook()
+    notebook = agent.notebooks.create_notebook()
     await collect(agent, "q", notebook)
     table = results[0]["result_table"]
     q = {"sql": f"SELECT * FROM {table}", "title": "again"}

@@ -11,12 +11,14 @@ end: the records of the sources before it stay as they were. An attack draws fro
 - `records`: the Record (one row) and the World, which records each request and its answer
 - `s6a`: the baseline MME-HSS traffic
 - `sessions`: the Gx and Gy data sessions, which hold some of the `flows` client IPs
+- `clr_spoof`: the spoofed Cancel-Location DoS
+- `hss_flood`: the HSS signaling flood attack
 """
 
 import sqlite3
 from collections.abc import Collection
 
-from flood_agent.diameter_generator import s6a, sessions
+from flood_agent.diameter_generator import clr_spoof, hss_flood, s6a, sessions
 from flood_agent.diameter_generator.records import COLUMNS, INDEXES, SCHEMA, World
 
 __all__ = ["INDEXES", "SCHEMA", "generate_diameter"]
@@ -24,6 +26,8 @@ __all__ = ["INDEXES", "SCHEMA", "generate_diameter"]
 SOURCES = (
     s6a.baseline,
     sessions.data_sessions,
+    clr_spoof.attack,
+    hss_flood.hss_flood,
 )
 
 

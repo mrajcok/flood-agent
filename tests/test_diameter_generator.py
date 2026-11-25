@@ -1,7 +1,9 @@
 """The generator's `diameter` table and its S6a signaling, seen through `generate()` and the database."""
 
 import hashlib
+import json
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -74,7 +76,9 @@ def records(db, where="1"):
 
 def test_timeouts_have_no_answer_and_are_declared_after_five_seconds(db):
     timeouts = records(db, "status = 'Timeout'")
-    assert 0.001 < len(timeouts) / len(records(db)) < 0.008  # about 0.3% of requests
+    baseline = outside_attacks(db)
+    rate = len(records(db, f"status = 'Timeout' AND {baseline}")) / len(records(db, baseline))
+    assert 0.001 < rate < 0.008  # about 0.3% of requests
     for r in timeouts:
         assert r["etime"] == r["stime"] + 5000
         assert (r["latency_ms"], r["result_code"], r["experimental_result_code"]) == (None,) * 3
@@ -102,7 +106,7 @@ def test_an_answered_record_has_exactly_one_result_code_and_its_answer_delay(db)
 
 
 def test_about_two_percent_of_s6a_records_fail_with_a_3gpp_experimental_result(db):
-    s6a = records(db, "application_id = 16777251")
+    s6a = records(db, f"application_id = 16777251 AND {outside_attacks(db)}")
     failed = [r for r in s6a if r["experimental_result_code"] is not None]
     assert 0.01 < len(failed) / len(s6a) < 0.035
     assert {r["experimental_result_code"] for r in failed} == {5001, 5004, 5420}
@@ -117,6 +121,14 @@ def test_a_destination_host_is_missing_only_when_a_timed_out_request_named_none(
     assert records(db, "status <> 'Timeout' AND destination_host IS NULL") == []
     unnamed = {r["command_code"] for r in records(db, "status = 'Timeout' AND destination_host IS NULL")}
     assert unnamed and unnamed <= {316, 318}  # an MME's AIR or ULR names no Destination-Host
+
+
+def outside_attacks(db):
+    """A condition selecting the records outside every Diameter attack window: the baseline's."""
+    attacks = json.loads(Path(f"{db}.attacks.json").read_text())
+    return " AND ".join(
+        f"stime NOT BETWEEN {a['start']} AND {a['end']}" for a in attacks if a["type"].startswith("diameter_")
+    )
 
 
 HOME = "00101"
@@ -143,7 +155,7 @@ def realm_of(plmn):
 
 
 def test_every_s6a_record_crosses_between_an_mme_and_the_subscribers_hss(db):
-    for r in records(db, S6A):
+    for r in records(db, f"{S6A} AND {outside_attacks(db)}"):
         from_hss = r["command_code"] in (317, 319, 320)  # CLR, IDR, DSR
         hss_realm = r["origin_realm"] if from_hss else r["destination_realm"]
         mme_realm = r["destination_realm"] if from_hss else r["origin_realm"]
@@ -184,7 +196,7 @@ def test_columns_that_do_not_apply_are_null(db):
 
 
 def test_normal_cancellations_follow_a_move_to_another_mme(db):
-    clrs = records(db, "command_code = 317")
+    clrs = records(db, f"command_code = 317 AND {outside_attacks(db)}")
     assert clrs
     for c in clrs:
         assert (c["cancellation_type"], c["origin_realm"], c["home_plmn_id"]) == (0, HOME_REALM, HOME)

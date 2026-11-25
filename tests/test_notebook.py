@@ -33,9 +33,7 @@ def ids(parts, nb) -> list[str]:
 
 
 def sql_cell(parts, nb, sql: str = "SELECT dport FROM flows", max_rows: int = 1000) -> str:
-    cell = parts.notebooks.add_cell(nb, SQL)
-    parts.notebooks.save_draft(nb, cell, SqlDraft(sql, SqlRunSettings(max_rows, ""), ""))
-    return cell
+    return parts.notebooks.add_cell(nb, SQL, draft=SqlDraft(sql, SqlRunSettings(max_rows, ""), ""))
 
 
 async def run(parts, nb, cell) -> list:
@@ -50,7 +48,7 @@ def test_an_unknown_notebook_is_a_key_error_for_every_operation(notebook_parts):
     for operation in (
         lambda: notebooks.rename_notebook("nope", "x"), lambda: notebooks.delete_notebook("nope"),
         lambda: notebooks.notebook_delete_preview("nope"), lambda: notebooks.add_cell("nope", AI),
-        lambda: notebooks.stale_cells("nope"), lambda: notebooks.cell("nope", "c"),
+        lambda: notebooks.stale_ids("nope"), lambda: notebooks.cell("nope", "c"),
     ):
         with pytest.raises(UnknownNotebook):
             operation()
@@ -187,6 +185,18 @@ def test_a_cell_is_added_after_a_cell_at_the_top_or_at_the_end(notebook_parts):
     assert ids(parts, nb) == [top, a, mid, b]
     with pytest.raises(ValueError):
         nbs.add_cell(nb, "chart")
+
+
+def test_a_cell_can_be_added_holding_a_given_draft_of_its_kind(notebook_parts):
+    parts = notebook_parts()
+    nbs = parts.notebooks
+    nb = nbs.create_notebook()
+    draft = SqlDraft("SELECT 1", SqlRunSettings(5, ""), "")
+    cell = nbs.add_cell(nb, SQL, draft=draft)
+    assert nbs.cell(nb, cell).draft == draft
+    with pytest.raises(ValueError):
+        nbs.add_cell(nb, AI, draft=draft)
+    assert ids(parts, nb) == [cell]
 
 
 def finish(parts, cell, prompt: str, settings: dict) -> str:
@@ -452,7 +462,7 @@ def test_the_notebook_page_has_its_title_its_typed_cells_in_order_and_which_are_
     assert [c.cell.id for c in page.cells] == [fresh, stale, sql, note]
     assert [type(c.cell) for c in page.cells] == [AiCell, AiCell, SqlCell, MarkdownCell]
     assert [c.stale for c in page.cells] == [False, True, False, False]
-    assert page.stale_ids == [stale]
+    assert page.stale_ids == parts.notebooks.stale_ids(nb) == [stale]
     assert page.cells[1].run is not None and page.cells[1].run["status"] == "ok" and page.cells[2].run is None
     with pytest.raises(UnknownNotebook):
         parts.notebooks.notebook_page("nope")
@@ -462,10 +472,10 @@ def test_one_cell_read_is_typed_and_its_stale_agrees_with_the_notebook_page(note
     parts = notebook_parts()
     nbs = parts.notebooks
     nb, cells = notebook_with_a_stale_cell(parts)
-    note = nbs.add_cell(nb, MARKDOWN, "start")  # a ticked note above makes the first Cell Stale too
-    nbs.save_draft(nb, note, MarkdownDraft("Focus on UDP.", True, ()))
+    # a ticked note above makes the first Cell Stale too
+    nbs.add_cell(nb, MARKDOWN, "start", draft=MarkdownDraft("Focus on UDP.", True, ()))
     page = nbs.notebook_page(nb)
-    assert page.stale_ids == cells[:2]
+    assert page.stale_ids == nbs.stale_ids(nb) == cells[:2]
     for shown in page.cells:
         one = nbs.page_cell(nb, shown.cell.id)
         assert (one.cell, one.run, one.stale) == (shown.cell, shown.run, shown.stale)

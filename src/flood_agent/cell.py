@@ -234,10 +234,15 @@ Draft = AiDraft | SqlDraft | MarkdownDraft
 _KIND_OF_DRAFT = {AiDraft: AI, SqlDraft: SQL, MarkdownDraft: MARKDOWN}
 
 
+def kind_of(draft: Draft) -> str:
+    """The Cell kind a Draft is for."""
+    return _KIND_OF_DRAFT[type(draft)]
+
+
 def save_draft(notebooks: NotebookStore, cell_id: str, draft: Draft) -> None:
     """Save `draft` as the Cell's Draft, whole, replacing the stored one (even when it cannot be Run). The latest Run
     is untouched. ValueError if the Draft is not of the Cell's kind; KeyError if the Cell is unknown."""
-    notebooks.replace_draft(cell_id, _KIND_OF_DRAFT[type(draft)], draft.stored())
+    notebooks.replace_draft(cell_id, kind_of(draft), draft.stored())
 
 
 # --- Can run ---------------------------------------------------------------------------------------------------

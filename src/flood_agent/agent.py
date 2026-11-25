@@ -17,7 +17,7 @@ from typing import Callable, Iterator
 from mcp import StdioServerParameters
 
 from flood_agent import queries
-from flood_agent.ai_cell_run import AiCellRuns, ClientFactory
+from flood_agent.ai_cell_run import AiCellRuns, ClientFactory, ConnectionProvider
 from flood_agent.catalog import Catalog, Table
 from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
 from flood_agent.mcp_server import ServerSettings
@@ -62,26 +62,48 @@ APP_STOPPED = "The app stopped during this Run."
 """The value-free reason a Run left running by a killed app is failed with when the app next starts."""
 
 
+@dataclass(frozen=True)
+class Parts:
+    """The app's parts over one app database. Notebook storage (`store`) is for the Agent's startup cleanup only;
+    everything else uses the Notebook module."""
+
+    store: NotebookStore
+    tables: Catalog
+    replacement: TableReplacement
+    sql_cells: SqlCellRuns
+    ai_cells: AiCellRuns
+    notebooks: Notebooks
+
+
+def build_parts(config: AgentConfig, semantic_layer: SemanticLayer, client_for: ClientFactory,
+                connection: ConnectionProvider, started: Callable[[], bool]) -> Parts:
+    """Build Notebook storage, the Table Catalog, Table Replacement, the Run modules and the Notebook module, wired
+    together. `connection` and `started` are the MCP connection the AI Cell Runs use and whether it is up."""
+    store = NotebookStore(config.app_db, config.clock)
+    tables = Catalog(
+        config.app_db, config.clock, config.result_ttl_ms, telemetry_tables=semantic_layer.table_names(),
+        results_db=config.results_db, on_rename=store.follow_rename,  # Displays follow a table's new name
+    )
+    replacement = TableReplacement(tables, config.telemetry_db, config.results_db, config.query_timeout_s)
+    sql_cells = SqlCellRuns(store, tables, replacement, config.telemetry_db, config.results_db,
+                            config.query_timeout_s, config.clock)
+    ai_cells = AiCellRuns(store, tables, semantic_layer, client_for, connection, started, config.choices.spec_of,
+                          config.max_llm_steps, config.max_failed_attempts, config.clock)
+    return Parts(store, tables, replacement, sql_cells, ai_cells, Notebooks(store, tables, sql_cells, ai_cells,
+                                                                             config.choices))
+
+
 class Agent:
     def __init__(self, config: AgentConfig, client_for: ClientFactory):
         self.config = config
         self.client_for = client_for
         self.semantic_layer = SemanticLayer(config.semantic_layer)
         drop_pre_notebook_data(config.app_db, config.results_db)  # before anything creates the new schema
-        # Notebook storage is handed to the Notebook module and the Run modules only; the Agent keeps no hold of it.
-        store = NotebookStore(config.app_db, config.clock)
-        self.tables = Catalog(
-            config.app_db, config.clock, config.result_ttl_ms, telemetry_tables=self.semantic_layer.table_names(),
-            results_db=config.results_db, on_rename=store.follow_rename,  # Displays follow a table's new name
-        )
-        self.replacement = TableReplacement(self.tables, config.telemetry_db, config.results_db, config.query_timeout_s)
-        self.sql_cells = SqlCellRuns(store, self.tables, self.replacement, config.telemetry_db,
-                                     config.results_db, config.query_timeout_s, config.clock)
         # `client_for` is looked up on each Run, so a client swapped in later is the one used.
-        self.ai_cells = AiCellRuns(store, self.tables, self.semantic_layer, lambda model: self.client_for(model),
-                                   self._ensure_connection, lambda: self._connection is not None, config.choices.spec_of, config.max_llm_steps,
-                                   config.max_failed_attempts, config.clock)
-        self.notebooks = Notebooks(store, self.tables, self.sql_cells, self.ai_cells, config.choices)
+        parts = build_parts(config, self.semantic_layer, lambda model: self.client_for(model), self._ensure_connection,
+                            lambda: self._connection is not None)
+        self.tables, self.replacement, self.notebooks = parts.tables, parts.replacement, parts.notebooks
+        self._sql_cells, self._ai_cells = parts.sql_cells, parts.ai_cells
         self._connection: McpConnection | None = None
         self._restart_lock = asyncio.Lock()
         self._refreshing: set[tuple[str, str | int]] = set()  # ("count", id) being refreshed now (tables: see table_replacement)
@@ -89,8 +111,8 @@ class Agent:
         self.tables.sweep()
         # A Run still running now was cut off by the app being killed. One app process per app database, so
         # none of these is really in progress (eval runs and the caching smoke test use their own app database).
-        for run_id in store.running_runs():
-            store.finish_run(run_id, "failed", APP_STOPPED)
+        for run_id in parts.store.running_runs():
+            parts.store.finish_run(run_id, "failed", APP_STOPPED)
 
     async def start(self) -> None:
         """Launch the long-lived MCP server. Needed before `run_cell`, not for row fetches
@@ -123,10 +145,10 @@ class Agent:
 
     async def aclose(self) -> None:
         """Stop running Cells and the MCP server, and reap its process."""
-        await self.sql_cells.aclose()  # SQL Cell queries are stopped and waited for
+        await self._sql_cells.aclose()  # SQL Cell queries are stopped and waited for
         # AI Cell Runs before the connection (this also cancels a restart in progress), so none is left
         # talking to a closing connection.
-        await self.ai_cells.aclose()
+        await self._ai_cells.aclose()
         async with self._restart_lock:
             connection, self._connection = self._connection, None
             if connection is not None:

@@ -126,10 +126,12 @@ class Settings(BaseSettings):
 
         return client_for
 
-    def model_choices(self) -> ModelChoices:
+    def model_choices(self, default_model: str | None = None, has_api_key: bool | None = None) -> ModelChoices:
         """The models that can be used here: the curated list, usable with an API key. The default model is
-        `default_model`, or No model when there is no API key."""
-        return ModelChoices.build(tuple(self.models), self.default_model, self.openrouter_api_key is not None)
+        `default_model`, or No model when there is no API key. Either can be given instead of the settings' own (an
+        eval brings its own client; tests)."""
+        key = self.openrouter_api_key is not None if has_api_key is None else has_api_key
+        return ModelChoices.build(tuple(self.models), default_model or self.default_model, key)
 
     def agent_config(self) -> AgentConfig:
         return AgentConfig(

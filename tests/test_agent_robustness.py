@@ -6,7 +6,17 @@ import asyncio
 import json
 
 import pytest
-from conftest import ScriptedLLM, add_ai_cell, collect, last_tool_result, mcp_children, run_of, tables_in, tool_call
+from conftest import (
+    ScriptedLLM,
+    add_ai_cell,
+    collect,
+    last_tool_result,
+    latest_run,
+    mcp_children,
+    run_of,
+    tables_in,
+    tool_call,
+)
 
 from flood_agent import ai_cell_run
 from flood_agent.events import DisplayEvent, TextDelta, TraceReady, TurnEnd, TurnError
@@ -452,7 +462,7 @@ async def test_connection_start_after_aclose_or_twice_fails_clearly(build_agent)
         await conn.start()
 
 
-async def test_agent_aclose_cancels_and_awaits_in_flight_turns(build_agent):
+async def test_agent_aclose_cancels_and_awaits_in_flight_runs(build_agent):
     started = asyncio.Event()
 
     def hang(messages):
@@ -462,13 +472,13 @@ async def test_agent_aclose_cancels_and_awaits_in_flight_turns(build_agent):
     agent = build_agent(ScriptedLLM(hang))
     await agent.start()
     nb = agent.notebooks.create_notebook()
-    gen = agent.notebooks.run_cell(nb, add_ai_cell(agent, nb, prompt="q"))
+    cell = add_ai_cell(agent, nb, prompt="q")
+    gen = agent.notebooks.run_cell(nb, cell)
     first = asyncio.create_task(gen.__anext__())
     await asyncio.wait_for(started.wait(), 10)
-    producers = set(agent.ai_cells.tasks)
-    assert producers
+    assert latest_run(agent, nb, cell)["status"] == "running"
     await agent.aclose()
-    assert all(t.done() for t in producers)
+    assert latest_run(agent, nb, cell)["status"] != "running"  # its Run was ended before aclose returned
     first.cancel()
     await asyncio.gather(first, return_exceptions=True)
 

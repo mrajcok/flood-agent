@@ -24,6 +24,7 @@ from flood_agent.cell import (
     MarkdownDraft,
     SqlCell,
     SqlRunSettings,
+    kind_of,
     save_draft,
     starting_ai_draft,
     starting_sql_draft,
@@ -104,7 +105,7 @@ class Notebooks:
         title = title.strip()[:TITLE_LENGTH]
         if not title:
             raise ValueError("a notebook name cannot be blank")
-        self._known_notebook(notebook_id)
+        self._check_notebook(notebook_id)
         self._store.rename_notebook(notebook_id, title)
 
     def notebook_delete_preview(self, notebook_id: str) -> dict:
@@ -123,10 +124,6 @@ class Notebooks:
                 self._tables.drop_of_cell(cell["id"])
         self._store.delete_notebook(notebook_id)
 
-    def stale_cells(self, notebook_id: str) -> set[str]:
-        """The ids of the Notebook's AI Cells that are Stale (see `ai_cell_context.stale_cells`)."""
-        return ai_cell_context.stale_cells(self._known_notebook(notebook_id))
-
     def list_notebooks(self, query: str = "") -> list[dict]:
         """The Notebooks ({id, title, created_at, last_activity_at}), most recent activity first. A non-blank `query`
         keeps those whose title or any Cell's Draft text contains it, ignoring case."""
@@ -139,7 +136,11 @@ class Notebooks:
         whether it is Stale."""
         cells = self._known_notebook(notebook_id)
         return NotebookPage(notebook_id, self._store.title_of(notebook_id),
-                            tuple(self._page_cell(c, cells[:i]) for i, c in enumerate(cells)))
+                            tuple(PageCell(self._typed(c), c["run"], stale) for c, stale in _with_stale(cells)))
+
+    def stale_ids(self, notebook_id: str) -> list[str]:
+        """The ids of the Notebook's Stale Cells, in order: `notebook_page(...).stale_ids`, without typing the Cells."""
+        return [c["id"] for c, stale in _with_stale(self._known_notebook(notebook_id)) if stale]
 
     def page_cell(self, notebook_id: str, cell_id: str) -> "PageCell":
         """One Cell as the page shows it: typed, with its latest Run and whether it is Stale. Stale is worked out from
@@ -148,31 +149,30 @@ class Notebooks:
         index = next((i for i, c in enumerate(cells) if c["id"] == cell_id), None)
         if index is None:
             raise UnknownCell(cell_id)
-        return self._page_cell(cells[index], cells[:index])
+        row = cells[index]
+        return PageCell(self._typed(row), row["run"], ai_cell_context.is_stale(row, cells[:index]))
 
     def run_transcript(self, notebook_id: str, cell_id: str) -> list[dict]:
         """The transcript of the Cell's latest Run (its messages and Displays, in order); empty if it has not run."""
         run = self._row(notebook_id, cell_id)["run"]
         return self._store.transcript(run["id"]) if run else []
 
-    def _page_cell(self, row: dict, above: list[dict]) -> "PageCell":
-        return PageCell(typed_cell(row, self._choices.default_model), row["run"],
-                        ai_cell_context.is_stale(row, above))
+    def _typed(self, row: dict) -> Cell:
+        return typed_cell(row, self._choices.default_model)
 
     # --- Cells --------------------------------------------------------------------------------------------------
 
     def cell(self, notebook_id: str, cell_id: str) -> Cell:
         """The Cell, typed: the default model (No model without an API key) stands in for a missing one."""
-        return typed_cell(self._row(notebook_id, cell_id), self._choices.default_model)
+        return self._typed(self._row(notebook_id, cell_id))
 
     def add_cell(self, notebook_id: str, kind: str, position: Position = "end", after: str | None = None,
-                 sql: str = "") -> str:
+                 sql: str = "", draft: Draft | None = None) -> str:
         """Add a Cell of `kind` just after Cell `after` (`position` "after"), at the very top ("start") or at the
-        end; returns its id. It starts with the settings last Run for its kind: an AI Cell with that model and
-        Effort if the model can still be used here (else the default model), a SQL Cell with that row cap and
-        `sql` (Open as SQL Cell). ValueError for an unknown kind."""
-        if kind not in (AI, SQL, MARKDOWN):
-            raise ValueError(f"unknown cell kind {kind!r}")
+        end; returns its id. It starts with `draft` if given, else with the settings last Run for its kind: an AI
+        Cell with that model and Effort if the model can still be used here (else the default model), a SQL Cell
+        with that row cap and `sql` (Open as SQL Cell). ValueError for an unknown kind or a Draft of another kind."""
+        starting = self._starting_draft(kind, sql, draft)
         cells = self._known_notebook(notebook_id)
         before = None
         if position == "after":
@@ -182,17 +182,25 @@ class Notebooks:
             after, before = None, cells[0]["id"] if cells else None
         else:
             after = None
-        return self._store.add_cell(notebook_id, kind, self._starting_draft(kind, sql).stored(), after, before)
+        return self._store.add_cell(notebook_id, kind, starting.stored(), after, before)
 
-    def _starting_draft(self, kind: str, sql: str) -> Draft:
-        last = self._store.last_settings(kind) if kind != MARKDOWN else None
+    def _starting_draft(self, kind: str, sql: str, draft: Draft | None) -> Draft:
+        """`draft` if it is of `kind`, else the Draft a new Cell of `kind` starts with. ValueError for an unknown
+        kind or a Draft of another kind."""
+        if draft is not None:
+            if kind_of(draft) != kind:
+                raise ValueError(f"a {kind_of(draft)} Draft cannot start a {kind} Cell")
+            return draft
         if kind == AI:
-            c = self._choices
+            last, c = self._store.last_settings(AI), self._choices
             return starting_ai_draft(AiRunSettings.from_stored(last) if last else None, c.can_use, c.efforts_of,
                                      c.default_model)
         if kind == SQL:
+            last = self._store.last_settings(SQL)
             return replace(starting_sql_draft(SqlRunSettings.from_stored(last) if last else None), sql=sql)
-        return MarkdownDraft("", False, ())
+        if kind == MARKDOWN:
+            return MarkdownDraft("", False, ())
+        raise ValueError(f"unknown cell kind {kind!r}")
 
     def save_draft(self, notebook_id: str, cell_id: str, draft: Draft) -> None:
         """Save `draft` as the Cell's Draft, whole (even when it cannot be Run); its latest Run is untouched.
@@ -330,16 +338,19 @@ class Notebooks:
 
     # --- checks -------------------------------------------------------------------------------------------------
 
-    def _known_notebook(self, notebook_id: str) -> list[dict]:
-        """The Notebook's Cells as stored; `UnknownNotebook` if there is no such Notebook."""
+    def _check_notebook(self, notebook_id: str) -> None:
+        """`UnknownNotebook` if there is no such Notebook."""
         if not self._store.exists(notebook_id):
             raise UnknownNotebook(notebook_id)
+
+    def _known_notebook(self, notebook_id: str) -> list[dict]:
+        """The Notebook's Cells as stored; `UnknownNotebook` if there is no such Notebook."""
+        self._check_notebook(notebook_id)
         return self._store.cells(notebook_id)
 
     def _row(self, notebook_id: str, cell_id: str) -> dict:
         """The Cell as stored, if it is in the Notebook: `UnknownNotebook` or `UnknownCell` otherwise."""
-        if not self._store.exists(notebook_id):
-            raise UnknownNotebook(notebook_id)
+        self._check_notebook(notebook_id)
         try:
             row = self._store.cell(cell_id)
         except KeyError:
@@ -361,6 +372,11 @@ class Notebooks:
         if notebook_id in self._running:
             raise NotebookBusy("A cell in this notebook is running; stop it first")
         return cells
+
+
+def _with_stale(cells: list[dict]) -> list[tuple[dict, bool]]:
+    """Each stored Cell with whether it is Stale, worked out from it and the Cells above it."""
+    return [(c, ai_cell_context.is_stale(c, cells[:i])) for i, c in enumerate(cells)]
 
 
 def _counts(tables: list) -> dict:

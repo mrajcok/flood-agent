@@ -14,7 +14,7 @@ from flood_agent.notebook_store import DEFAULT_MAX_ROWS
 def eval_model_choices(settings: Settings, model: str) -> ModelChoices:
     """An eval brings its own client for `model`, so `model` is the default (for its Cells, which name none) and can
     be used, whether or not an API key is set."""
-    return ModelChoices.build(tuple(settings.models), model, has_api_key=True)
+    return settings.model_choices(model, has_api_key=True)
 
 
 async def add_cells_above(agent: Agent, notebook_id: str, above: list[dict] | None) -> None:
@@ -24,8 +24,7 @@ async def add_cells_above(agent: Agent, notebook_id: str, above: list[dict] | No
     for spec in above or []:
         kind = spec["kind"]
         if kind == "markdown":
-            cell_id = notebooks.add_cell(notebook_id, MARKDOWN)
-            notebooks.save_draft(notebook_id, cell_id, MarkdownDraft(spec["text"], bool(spec.get("send_to_ai")), ()))
+            notebooks.add_cell(notebook_id, MARKDOWN, draft=MarkdownDraft(spec["text"], bool(spec.get("send_to_ai")), ()))
             continue
         if kind == "sql":
             draft = SqlDraft(spec["sql"], SqlRunSettings(DEFAULT_MAX_ROWS, ""), "")
@@ -33,8 +32,7 @@ async def add_cells_above(agent: Agent, notebook_id: str, above: list[dict] | No
             draft = SqlDraft("", SqlRunSettings(DEFAULT_MAX_ROWS, spec["command"]), spec.get("table", ""))
         else:
             raise ValueError(f"unknown cell kind {kind!r}")
-        cell_id = notebooks.add_cell(notebook_id, SQL)
-        notebooks.save_draft(notebook_id, cell_id, draft)
+        cell_id = notebooks.add_cell(notebook_id, SQL, draft=draft)
         async for _ in notebooks.run_cell(notebook_id, cell_id):
             pass
 
@@ -43,7 +41,6 @@ async def run_ai_cell(agent: Agent, notebook_id: str, prompt: str, max_rows: int
     """Add an AI Cell at the end of the notebook, with the default model, and start running it: (its id, its
     events)."""
     notebooks = agent.notebooks
-    cell_id = notebooks.add_cell(notebook_id, AI)
     settings = AiRunSettings(agent.config.choices.default_model, None, max_rows)
-    notebooks.save_draft(notebook_id, cell_id, AiDraft(prompt, settings))
+    cell_id = notebooks.add_cell(notebook_id, AI, draft=AiDraft(prompt, settings))
     return cell_id, notebooks.run_cell(notebook_id, cell_id)

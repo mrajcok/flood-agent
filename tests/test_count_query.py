@@ -1,16 +1,10 @@
-"""run_count_query: returns one count to the LLM, creates no Result Table."""
+"""run_count_query and the runner's count: returns one count to the LLM, creates no Result Table."""
 
 import pytest
 
-from flood_agent import queries
 
-
-def _run(telemetry_db, tmp_path, sql):
-    return queries.run_count_query(telemetry_db, tmp_path / "results.db", sql, 5.0)
-
-
-def test_returns_the_count(telemetry_db, tmp_path):
-    assert _run(telemetry_db, tmp_path, "SELECT COUNT(*) FROM flows") == {"success": True, "count": 3}
+def test_returns_the_count(query_runner):
+    assert query_runner().count("SELECT COUNT(*) FROM flows") == {"success": True, "count": 3}
 
 
 @pytest.mark.parametrize(
@@ -27,14 +21,14 @@ def test_returns_the_count(telemetry_db, tmp_path):
         "DROP TABLE flows",
     ],
 )
-def test_rejects_anything_but_one_integer_count(telemetry_db, tmp_path, sql):
-    result = _run(telemetry_db, tmp_path, sql)
+def test_rejects_anything_but_one_integer_count(query_runner, sql):
+    result = query_runner().count(sql)
     assert result["success"] is False
     assert "count" not in result
 
 
-def test_sqlite_error_keeps_raw_error(telemetry_db, tmp_path):
-    result = _run(telemetry_db, tmp_path, "SELECT COUNT(*) FROM nope")
+def test_sqlite_error_keeps_raw_error(query_runner):
+    result = query_runner().count("SELECT COUNT(*) FROM nope")
     assert result["success"] is False and "raw_error" in result
 
 

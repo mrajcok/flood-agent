@@ -4,7 +4,6 @@ import json
 
 import pytest
 
-from flood_agent import queries
 from flood_agent.tool_outcome import (
     UNREADABLE,
     Counted,
@@ -86,15 +85,15 @@ def test_content_that_will_not_decode_is_a_generic_failure_that_keeps_the_raw_te
     ("SELECT 1 AS a UNION ALL SELECT 2 UNION ALL SELECT 3", 2),  # truncated: truncated_to and note
     ("SELECT 1 AS a WHERE 0", 1),  # no rows
 ])
-def test_real_run_query_output_decodes_to_the_same_outcome(telemetry_db, tmp_path, sql, max_rows):
-    result = queries.run_query(telemetry_db, tmp_path / "results.db", sql, 5.0, max_rows)
+def test_real_run_query_output_decodes_to_the_same_outcome(query_runner, sql, max_rows):
+    result = query_runner().run(sql, max_rows)
     assert result["success"]
     outcome = from_query_result(result)
     assert decode(encode(outcome)) == outcome
 
 
-def test_real_run_query_failures_decode_to_the_same_outcome(telemetry_db, tmp_path):
+def test_real_run_query_failures_decode_to_the_same_outcome(query_runner):
     for sql in ("SELECT * FROM no_such_table", "DROP TABLE flows"):
-        outcome = from_query_result(queries.run_query(telemetry_db, tmp_path / "results.db", sql, 5.0, 10))
+        outcome = from_query_result(query_runner().run(sql, 10))
         assert isinstance(outcome, Failed)
         assert decode(encode(outcome)) == outcome

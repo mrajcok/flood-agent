@@ -3,7 +3,7 @@
 import re
 import sqlite3
 
-from conftest import ScriptedLLM, collect, query_limits, tool_call
+from conftest import ScriptedLLM, collect, tool_call
 
 from flood_agent import queries, table_names
 from flood_agent.llm import TextChunk
@@ -12,23 +12,20 @@ SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport"
 NAME = re.compile(r"rt_\d{8}_\d{6}(_\d+)?")
 
 
-def run(telemetry_db, tmp_path, title):
-    return queries.run_query(telemetry_db, tmp_path / "results.db", SQL, title=title, **query_limits())
-
-
-def test_name_ignores_the_title(telemetry_db, tmp_path):
+def test_name_ignores_the_title(query_runner):
+    runner = query_runner()
     for title in ["Top 10 dest IPs", "évil_name; DROP TABLE flows", ""]:
-        meta = run(telemetry_db, tmp_path, title)
+        meta = runner.run(SQL, max_rows=1_000_000, title=title)
         name = meta["result_table"]
         assert NAME.fullmatch(name) and table_names.GENERATED_RE.fullmatch(name), name
         assert f"results.{name} AS" in meta["executed_sql"]
 
 
-def test_two_tables_in_the_same_second_get_distinct_names(telemetry_db, tmp_path, monkeypatch):
+def test_two_tables_in_the_same_second_get_distinct_names(query_runner, tmp_path, monkeypatch):
     monkeypatch.setattr(queries, "_timestamp", lambda: "20261101_230402")
-    a = run(telemetry_db, tmp_path, "Top ports")["result_table"]
-    b = run(telemetry_db, tmp_path, "Other title")["result_table"]
-    c = run(telemetry_db, tmp_path, "Top ports")["result_table"]
+    runner = query_runner()
+    a, b, c = (runner.run(SQL, max_rows=1_000_000, title=title)["result_table"]
+               for title in ("Top ports", "Other title", "Top ports"))
     assert (a, b, c) == ("rt_20261101_230402", "rt_20261101_230402_2", "rt_20261101_230402_3")
     con = sqlite3.connect(tmp_path / "results.db")
     assert con.execute(f"SELECT COUNT(*) FROM {c}").fetchone()[0] > 0

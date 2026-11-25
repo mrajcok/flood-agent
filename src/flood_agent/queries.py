@@ -18,8 +18,7 @@ from typing import Callable, Iterator
 from flood_agent import table_names
 
 
-def rename_table(results_db: Path, old: str, new: str) -> None:
-    """Rename a table in the results database; ValueError (changing nothing) if `new` is taken."""
+def _rename_table(results_db: Path, old: str, new: str) -> None:
     con = sqlite3.connect(results_db)
     try:
         taken = {r[0].lower() for r in con.execute("SELECT name FROM sqlite_master")}
@@ -31,15 +30,12 @@ def rename_table(results_db: Path, old: str, new: str) -> None:
         con.close()
 
 
-def drop_table(results_db: Path, name: str) -> None:
-    """Drop a table in the results database if it is there."""
+def _drop_table(results_db: Path, name: str) -> None:
     with closing(sqlite3.connect(results_db)) as con, con:
         con.execute(f"DROP TABLE IF EXISTS {table_names.quote(name)}")
 
 
-def swap_table(results_db: Path, temp: str, name: str) -> None:
-    """Replace table `name` with `temp` (which takes the name) in one transaction, so a reader sees the
-    old rows or the new, never a missing or half-written table. On error nothing changes."""
+def _swap_table(results_db: Path, temp: str, name: str) -> None:
     con = sqlite3.connect(results_db, isolation_level=None, timeout=10)  # autocommit: the BEGIN below is ours
     try:
         con.execute("BEGIN IMMEDIATE")
@@ -170,6 +166,12 @@ def _scan(sql: str) -> tuple[list[str], list[int]]:
     return words, semis
 
 
+def leading_words(sql: str) -> list[str]:
+    """The statement's unquoted words, lower-cased and in order, so comments and quoted text are not mistaken for how
+    it starts."""
+    return _scan(sql)[0]
+
+
 def validate_select(sql: str) -> str:
     """Accept a single read-only SELECT (optionally WITH ... SELECT). Returns the SQL
     without its one optional trailing semicolon. Raises QueryRejected otherwise."""
@@ -197,9 +199,7 @@ def sql_name(identifier: str) -> str:
     return table_names.quote(identifier)
 
 
-def table_columns(telemetry_db: Path, results_db: Path, name: str, telemetry: bool) -> list[dict] | None:
-    """A table's column names and types (never rows), each with `insert`, the text to put in a query. `telemetry`
-    says which database `name` is in; None if it has no columns there. The caller has checked `name` is readable."""
+def _table_columns(telemetry_db: Path, results_db: Path, name: str, telemetry: bool) -> list[dict] | None:
     if telemetry:
         con = sqlite3.connect(f"file:{telemetry_db}?mode=ro", uri=True)
         try:
@@ -208,7 +208,7 @@ def table_columns(telemetry_db: Path, results_db: Path, name: str, telemetry: bo
         finally:
             con.close()
     else:
-        described = describe_results_table(results_db, name)
+        described = _describe_results_table(results_db, name)
         cols = described["columns"] if described else []
     return [{**c, "insert": sql_name(c["name"])} for c in cols] or None
 
@@ -335,7 +335,7 @@ def _authorizer(allowed_tables: set[str] | None = None):
     return authorizer
 
 
-def open_connection(
+def _open_connection(
     telemetry_db: Path, results_db: Path, allowed_tables: set[str] | None = None
 ) -> sqlite3.Connection:
     """Read-only Telemetry Database connection with the results database attached and a
@@ -392,7 +392,7 @@ def _failure(e: sqlite3.Error, timed_out: bool, timeout_s: float, stop: threadin
     return {"success": False, "error": error, "raw_error": str(e), **extra}
 
 
-def run_query(
+def _run_query(
     telemetry_db: Path,
     results_db: Path,
     sql: str,
@@ -402,21 +402,11 @@ def run_query(
     title: str = "",
     stop: threading.Event | None = None,
 ) -> dict:
-    """Run the SQL as CTAS into the results database. Returns Query Metadata only.
-
-    At most `max_rows` rows are kept; a result of exactly `max_rows` rows is reported as truncated
-    (`truncated_to`, `note`).
-
-    On failure the dict has a sanitised `error` (safe for the LLM) and, for SQLite errors,
-    a `raw_error` that the caller must keep for the Trace and strip before the LLM.
-    The SELECT may reference only the Result Tables in `allowed_tables` (the ones the caller may read).
-    Setting `stop` aborts the query; the failure then has `stopped` set.
-    """
     try:
         select = validate_select(sql)
     except QueryRejected as e:
         return {"success": False, "error": str(e)}
-    con = open_connection(telemetry_db, results_db, allowed_tables)
+    con = _open_connection(telemetry_db, results_db, allowed_tables)
     executed = ""
     try:
         name = _free_name(con)
@@ -449,15 +439,11 @@ def run_query(
     return result
 
 
-def explain_query(
+def _explain_query(
     telemetry_db: Path, results_db: Path, sql: str, timeout_s: float, allowed_tables: set[str] | None = None
 ) -> list[dict]:
-    """The Query Plan of a single read-only SELECT, as steps of {depth, detail} in plan order. No rows are
-    read and nothing is created. Runs under the same rails as run_query (validation, read-only connection,
-    authorizer, timeout). Raises QueryRejected or sqlite3.Error; their messages are for the user, never
-    the LLM."""
     select = validate_select(sql)
-    con = open_connection(telemetry_db, results_db, allowed_tables)
+    con = _open_connection(telemetry_db, results_db, allowed_tables)
     try:
         with _deadline(con, timeout_s) as timed_out:
             try:
@@ -485,14 +471,14 @@ _COUNT_FORM_RE = re.compile(r"^\s*select\s+count\s*\([^()]*\)\s*(?:as\s+\w+\s+)?
 
 
 def looks_like_count(sql: str) -> bool:
-    """Whether the statement has the count form (`SELECT COUNT(...) FROM ...`), as `run_count_query` checks it."""
+    """Whether the statement has the count form (`SELECT COUNT(...) FROM ...`), as `QueryRunner.count` checks it."""
     try:
         return _COUNT_FORM_RE.match(validate_select(sql)) is not None
     except QueryRejected:
         return False
 
 
-def run_count_query(
+def _run_count_query(
     telemetry_db: Path,
     results_db: Path,
     sql: str,
@@ -500,16 +486,13 @@ def run_count_query(
     allowed_tables: set[str] | None = None,
     stop: threading.Event | None = None,
 ) -> dict:
-    """Run a `SELECT COUNT(...) FROM ...` and return the number itself (no Result Table). The one
-    place a telemetry-derived value reaches the LLM, so the select list must be a bare COUNT and
-    the result one non-negative integer. Failures carry `raw_error` like `run_query`."""
     try:
         select = validate_select(sql)
     except QueryRejected as e:
         return {"success": False, "error": str(e)}
     if not _COUNT_FORM_RE.match(select):
         return {"success": False, "error": COUNT_GUIDANCE}
-    con = open_connection(telemetry_db, results_db, allowed_tables)
+    con = _open_connection(telemetry_db, results_db, allowed_tables)
     try:
         with _deadline(con, timeout_s, stop) as timed_out:
             try:
@@ -532,7 +515,7 @@ def shorten_sql(sql: str, limit: int = 60) -> str:
     return one_line if len(one_line) <= limit else one_line[: limit - 1].rstrip() + "\u2026"
 
 
-def result_table_columns(results_db: Path, name: str) -> list[str] | None:
+def _result_table_columns(results_db: Path, name: str) -> list[str] | None:
     if not Path(results_db).exists():
         return None
     con = sqlite3.connect(f"file:{results_db}?mode=ro", uri=True)
@@ -557,7 +540,7 @@ def _column_types(con: sqlite3.Connection, table: str, info: list[tuple[str, str
     return cols
 
 
-def describe_results_table(results_db: Path, name: str) -> dict | None:
+def _describe_results_table(results_db: Path, name: str) -> dict | None:
     """Column names and types plus row count of a table in the results database, never rows.
     The caller has already checked that `name` is a registered, live table."""
     if not Path(results_db).exists():
@@ -589,7 +572,7 @@ def _ipv4_key(value) -> int | None:
     return (a << 24) | (b << 16) | (c << 8) | d
 
 
-def fetch_rows(
+def _fetch_rows(
     results_db: Path,
     name: str,
     columns: list[str] | None = None,
@@ -598,12 +581,7 @@ def fetch_rows(
     sort: str | None = None,
     descending: bool = False,
 ) -> dict:
-    """Internal data path: one page of a Result Table as JSON-able data. Never an LLM tool.
-
-    `sort` must exactly match a column of the Result Table (validated against its schema,
-    then quoted); ties break on rowid so paging is stable.
-    """
-    all_cols = result_table_columns(results_db, name)
+    all_cols = _result_table_columns(results_db, name)
     if all_cols is None:
         raise KeyError(name)
     if sort is not None and sort not in all_cols:
@@ -638,8 +616,8 @@ def fetch_rows(
     return {"columns": cols, "rows": rows, "total": total, "page": page, "page_size": page_size}
 
 
-def result_table_row_count(results_db: Path, name: str) -> int | None:
-    if result_table_columns(results_db, name) is None:
+def _result_table_row_count(results_db: Path, name: str) -> int | None:
+    if _result_table_columns(results_db, name) is None:
         return None
     con = sqlite3.connect(f"file:{results_db}?mode=ro", uri=True)
     try:
@@ -648,16 +626,14 @@ def result_table_row_count(results_db: Path, name: str) -> int | None:
         con.close()
 
 
-def fetch_records(results_db: Path, name: str, limit: int) -> list[dict]:
-    """Internal data path for charts: rows as JSON objects (Vega-Lite's shape), capped at
-    `limit`. Never an LLM tool."""
-    data = fetch_rows(results_db, name, page_size=limit)
+def _fetch_records(results_db: Path, name: str, limit: int) -> list[dict]:
+    data = _fetch_rows(results_db, name, page_size=limit)
     return [dict(zip(data["columns"], row)) for row in data["rows"]]
 
 
-def iter_all_rows(results_db: Path, name: str):
+def _iter_all_rows(results_db: Path, name: str):
     """Yield (columns, row iterator) for the whole Result Table (PSV export)."""
-    all_cols = result_table_columns(results_db, name)
+    all_cols = _result_table_columns(results_db, name)
     if all_cols is None:
         raise KeyError(name)
     con = sqlite3.connect(f"file:{results_db}?mode=ro", uri=True)
@@ -686,51 +662,67 @@ class QueryRunner:
         self._timeout_s, self._readable = timeout_s, readable
 
     def run(self, sql: str, max_rows: int, title: str = "", stop: threading.Event | None = None) -> dict:
-        """Run a SELECT into a new Result Table and return its result, as `run_query` describes."""
+        """Run the SQL as CTAS into a new Result Table. Returns Query Metadata only.
+
+        At most `max_rows` rows are kept; a result of exactly `max_rows` rows is reported as truncated
+        (`truncated_to`, `note`).
+
+        On failure the dict has a sanitised `error` (safe for the LLM) and, for SQLite errors,
+        a `raw_error` that the caller must keep for the Trace and strip before the LLM.
+        Setting `stop` aborts the query; the failure then has `stopped` set."""
         with _database_errors():
-            return run_query(self._telemetry_db, self._results_db, sql, self._timeout_s, max_rows, self._readable(),
-                             title, stop)
+            return _run_query(self._telemetry_db, self._results_db, sql, self._timeout_s, max_rows, self._readable(),
+                              title, stop)
 
     def count(self, sql: str, stop: threading.Event | None = None) -> dict:
-        """Run a count query and return its result, as `run_count_query` describes."""
+        """Run a `SELECT COUNT(...) FROM ...` and return the number itself (no Result Table). The one
+        place a telemetry-derived value reaches the LLM, so the select list must be a bare COUNT and
+        the result one non-negative integer. Failures carry `raw_error` like `run`."""
         with _database_errors():
-            return run_count_query(self._telemetry_db, self._results_db, sql, self._timeout_s, self._readable(), stop)
+            return _run_count_query(self._telemetry_db, self._results_db, sql, self._timeout_s, self._readable(), stop)
 
     def explain(self, sql: str) -> list[dict]:
-        """The Query Plan of a SELECT, as `explain_query` describes. `QueryRejected` or `QueryFailed`."""
+        """The Query Plan of a single read-only SELECT, as steps of {depth, detail} in plan order. No rows are
+        read and nothing is created. Runs under the same rails as `run` (validation, read-only connection,
+        authorizer, timeout). Raises `QueryRejected` or `QueryFailed`; their messages are for the user, never
+        the LLM."""
         with _database_errors():
-            return explain_query(self._telemetry_db, self._results_db, sql, self._timeout_s, self._readable())
+            return _explain_query(self._telemetry_db, self._results_db, sql, self._timeout_s, self._readable())
 
     def describe(self, name: str) -> dict | None:
         """A results-database table's columns and row count; None if it is not there."""
         with _database_errors():
-            return describe_results_table(self._results_db, name)
+            return _describe_results_table(self._results_db, name)
 
     def table_columns(self, name: str, telemetry: bool) -> list[dict] | None:
-        """A table's columns as `table_columns` describes, from the database `telemetry` says; None if not there."""
+        """A table's column names and types (never rows), each with `insert`, the text to put in a query. `telemetry`
+        says which database `name` is in; None if it has no columns there."""
         with _database_errors():
-            return table_columns(self._telemetry_db, self._results_db, name, telemetry)
+            return _table_columns(self._telemetry_db, self._results_db, name, telemetry)
 
     def row_count(self, name: str) -> int | None:
         """A results-database table's row count; None if it is not there."""
         with _database_errors():
-            return result_table_row_count(self._results_db, name)
+            return _result_table_row_count(self._results_db, name)
 
     def result_columns(self, name: str) -> list[str] | None:
         """A Result Table's column names; None if it is not there."""
         with _database_errors():
-            return result_table_columns(self._results_db, name)
+            return _result_table_columns(self._results_db, name)
 
     def fetch_rows(self, name: str, columns: list[str] | None = None, page: int = 1, page_size: int = 50,
                    sort: str | None = None, descending: bool = False) -> dict:
-        """One page of a table's rows, as `fetch_rows` describes. KeyError if not there, `InvalidSort`."""
+        """Internal data path: one page of a Result Table as JSON-able data. Never an LLM tool.
+
+        `sort` must exactly match a column of the table (validated against its schema, then quoted), else
+        `InvalidSort`; ties break on rowid so paging is stable. KeyError if the table is not there."""
         with _database_errors():
-            return fetch_rows(self._results_db, name, columns, page, page_size, sort, descending)
+            return _fetch_rows(self._results_db, name, columns, page, page_size, sort, descending)
 
     def all_rows(self, name: str) -> tuple[list[str], Iterator[tuple]]:
-        """(columns, row iterator) for a whole table. KeyError if not there."""
+        """(columns, row iterator) for a whole table (PSV export). KeyError if not there."""
         with _database_errors():
-            columns, rows = iter_all_rows(self._results_db, name)
+            columns, rows = _iter_all_rows(self._results_db, name)
 
         def guarded():
             with _database_errors():
@@ -739,21 +731,23 @@ class QueryRunner:
         return columns, guarded()
 
     def chart_rows(self, name: str, limit: int) -> list[dict]:
-        """A table's first `limit` rows (the chart row cap) as JSON objects. KeyError if not there."""
+        """Internal data path for charts: the first `limit` rows (the chart row cap) as JSON objects (Vega-Lite's
+        shape). Never an LLM tool. KeyError if the table is not there."""
         with _database_errors():
-            return fetch_records(self._results_db, name, limit)
+            return _fetch_records(self._results_db, name, limit)
 
     def drop(self, name: str) -> None:
         """Drop a results-database table if it is there."""
         with _database_errors():
-            drop_table(self._results_db, name)
+            _drop_table(self._results_db, name)
 
     def swap(self, temp: str, name: str) -> None:
-        """Replace table `name` with `temp`, as `swap_table` describes."""
+        """Replace table `name` with `temp` (which takes the name) in one transaction, so a reader sees the
+        old rows or the new, never a missing or half-written table. On error nothing changes."""
         with _database_errors():
-            swap_table(self._results_db, temp, name)
+            _swap_table(self._results_db, temp, name)
 
     def rename(self, old: str, new: str) -> None:
         """Rename a results-database table; ValueError (changing nothing) if `new` is taken."""
         with _database_errors():
-            rename_table(self._results_db, old, new)
+            _rename_table(self._results_db, old, new)

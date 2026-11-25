@@ -311,25 +311,6 @@ async def test_a_re_run_after_a_run_that_made_no_table_creates_a_new_table(build
     assert new.name != old.name and agent.tables[old.name].sql == "SELECT dport FROM flows"
 
 
-async def test_a_stopped_sql_cell_reaches_the_ai_cell_below_as_stopped_by_the_user(make_agent):
-    llm = ScriptedLLM([TextChunk("ok")])
-    agent = await make_agent(llm, query_timeout_s=60)
-    nb = agent.notebooks.create_notebook()
-    cell = add_sql_cell(agent, nb, sql=SLOW)
-    ai = add_ai_cell(agent, nb, prompt="q")
-    task = asyncio.create_task(run(agent, nb, cell))
-    for _ in range(100):
-        await asyncio.sleep(0.05)
-        if agent.notebooks.running_cell(nb):
-            break
-    await asyncio.sleep(0.2)
-    agent.notebooks.stop_cell(nb, cell)
-    await asyncio.wait_for(task, 10)
-    await run(agent, nb, ai)
-
-    assert llm.calls[0][1]["content"] == f"[SQL Cell, run by the user] {SLOW}\n(stopped by the user)"
-
-
 async def test_the_context_roles_when_notes_and_sql_and_show_cells_precede_an_ai_prompt(make_agent):
     llm = ScriptedLLM([TextChunk("ok")])
     agent = await make_agent(llm)

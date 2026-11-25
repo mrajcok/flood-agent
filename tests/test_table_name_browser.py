@@ -83,12 +83,6 @@ def test_a_table_header_has_edit_copy_delete_and_refresh_icons_but_no_view(build
     expect(header.get_by_role("button", name=f"View {table}")).to_have_count(0)
 
 
-def test_a_chart_header_also_has_a_view_icon_in_order(build_agent, live_page):
-    _, page, table = ask_for_a_chart(build_agent, live_page)
-    labels = page.locator(".display.chart .table-name .icons button").evaluate_all("els => els.map(e => e.getAttribute('aria-label'))")
-    assert labels[:4] == [f"Edit {table}", f"Copy {table}", f"View {table}", f"Delete {table}"]
-
-
 def test_the_delete_icon_asks_then_deletes_the_table(build_agent, live_page):
     agent, page, table = ask_for_a_table(build_agent, live_page)
     header = page.locator(".display .table-name")

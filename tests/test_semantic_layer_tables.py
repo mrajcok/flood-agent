@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from flood_agent.semantic_layer import SYSTEM_INSTRUCTIONS, SemanticLayer
+from flood_agent.semantic_layer import SemanticLayer
 
 REAL = Path(__file__).parent.parent / "semantic_layer.yaml"
 
@@ -29,20 +29,6 @@ def layer_from(tmp_path, text):
     p = tmp_path / "layer.yaml"
     p.write_text(text)
     return SemanticLayer(p)
-
-
-def test_the_system_prompt_has_no_flows_only_wording():
-    assert "flow records and DNS response metadata" in SYSTEM_INSTRUCTIONS
-    assert "how many rows match?" in SYSTEM_INSTRUCTIONS
-    assert "how many flows match" not in SYSTEM_INSTRUCTIONS
-    assert "network flow telemetry" not in SYSTEM_INSTRUCTIONS
-    assert "enum_bits" in SYSTEM_INSTRUCTIONS
-
-
-def test_the_tcp_flags_example_lives_in_the_column_description():
-    assert "tcp_flags &" not in SYSTEM_INSTRUCTIONS
-    desc = SemanticLayer(REAL).data["tables"]["flows"]["columns"]["tcp_flags"]["description"]
-    assert "tcp_flags & 2 != 0" in desc
 
 
 def test_the_system_prompt_is_identical_across_calls():

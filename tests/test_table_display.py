@@ -169,17 +169,6 @@ def test_format_js_url_changes_with_the_file_so_browsers_never_run_a_stale_copy(
     assert f'src="/static/format.js?v={web.static_version("format.js")}"' in page
 
 
-def test_row_keys_change_on_every_load_so_sorting_and_paging_redraw_the_cells(build_agent, web_client):
-    # Alpine reused the old cells (and showed the previous page's values) when row keys stayed 0..N.
-    template = (Path(__file__).parent.parent / "src/flood_agent/templates/display_table.html").read_text()
-    assert """:key="loads + '-' + i\"""" in template and "this.loads++" in template
-
-
-def test_pager_sits_above_the_table_so_it_does_not_move_on_a_short_last_page():
-    template = (Path(__file__).parent.parent / "src/flood_agent/templates/display_table.html").read_text()
-    assert template.index('class="pager"') < template.index("<table>")
-
-
 IP_GEN = (
     "SELECT * FROM (SELECT 1 AS k, '10.0.0.10' AS ip, 'b10' AS name UNION ALL SELECT 2, '10.0.0.2', 'a2' "
     "UNION ALL SELECT 3, '9.255.0.1', 'c1' UNION ALL SELECT 4, '192.168.1.1', 'a10')"

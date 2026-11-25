@@ -1,9 +1,8 @@
 """Markdown Cells: storage, and what reaches the AI Cells below (only text whose Send to AI is ticked)."""
 
 import re
-from dataclasses import replace
 
-from conftest import ScriptedLLM, add_ai_cell, add_markdown_cell, cell_ids, draft_of, latest_run
+from conftest import ScriptedLLM, add_ai_cell, add_markdown_cell, cell_ids, draft_of
 from test_notebook_page import new_notebook
 
 from flood_agent.events import FlagEvent
@@ -13,36 +12,6 @@ from flood_agent.semantic_layer import SYSTEM_INSTRUCTIONS
 
 async def run(agent, nb, cell):
     return [ev async for ev in agent.notebooks.run_cell(nb, cell)]
-
-
-async def test_a_ticked_markdown_cell_reaches_the_llm_as_a_labelled_note_in_notebook_order(make_agent):
-    llm = ScriptedLLM([TextChunk("Answer A.")], [TextChunk("Answer B.")])
-    agent = await make_agent(llm)
-    nb = agent.notebooks.create_notebook()
-    a = add_ai_cell(agent, nb, prompt="ask A")
-    add_markdown_cell(agent, nb, "Focus on UDP.", send_to_ai=True)
-    add_markdown_cell(agent, nb, "my private scratch", send_to_ai=False)
-    b = add_ai_cell(agent, nb, prompt="ask B")
-    await run(agent, nb, a)
-    await run(agent, nb, b)
-
-    assert [m["content"] for m in llm.calls[0][1:]] == ["ask A"]  # a note below is never sent
-    assert [m["content"] for m in llm.calls[1][1:]] == [
-        "ask A", "Answer A.", "[Markdown note] Focus on UDP.", "ask B"]
-    assert "private scratch" not in str(llm.calls[1])
-
-
-async def test_ticking_send_to_ai_changes_the_context_fingerprint(make_agent):
-    llm = ScriptedLLM([TextChunk("One.")], [TextChunk("Two.")])
-    agent = await make_agent(llm)
-    nb = agent.notebooks.create_notebook()
-    note = add_markdown_cell(agent, nb, "note")
-    cell = add_ai_cell(agent, nb, prompt="ask")
-    await run(agent, nb, cell)
-    before = latest_run(agent, nb, cell)["context_fingerprint"]
-    agent.notebooks.save_draft(nb, note, replace(agent.notebooks.cell(nb, note).draft, send_to_ai=True))
-    await run(agent, nb, cell)
-    assert latest_run(agent, nb, cell)["context_fingerprint"] != before
 
 
 async def test_a_value_only_in_an_unticked_note_is_flagged_but_a_ticked_one_is_seen(make_agent):

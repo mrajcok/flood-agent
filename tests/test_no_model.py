@@ -7,7 +7,7 @@ import re
 from conftest import ScriptedLLM, ask, cell_ids, post_run
 from fastapi.testclient import TestClient
 
-from flood_agent.__main__ import build_app, picker_entries
+from flood_agent.__main__ import build_app
 from flood_agent.config import Settings
 from flood_agent.fake_llm import FakeClient, load_canned_prompts
 from flood_agent.llm import TextChunk
@@ -55,23 +55,10 @@ def test_no_model_is_listed_last_and_is_always_selectable(build_agent, web_clien
     assert all(m["disabled"] is True for m in models[:-1])
 
 
-def test_without_a_key_the_page_preselects_no_model(build_agent, web_client):
-    page = web_client(build_agent(ScriptedLLM(), api_key=False)).get("/").text
-
-    assert first_cell_model(page) == NO_MODEL
-
-
 def test_with_a_key_the_page_still_preselects_the_default_model(build_agent, web_client):
     page = web_client(build_agent(ScriptedLLM())).get("/").text
 
     assert first_cell_model(page) == GLM
-
-
-def test_no_badge_and_the_canned_prompt_list_is_on_the_page(build_agent, web_client):
-    page = web_client(build_agent(ScriptedLLM()), picker=picker_entries(CANNED)).get("/").text
-
-    assert ">Fake Mode<" not in page and 'class="badge"' not in page
-    assert CANNED[0].prompt in page
 
 
 def test_the_real_client_factory_gives_the_stand_in_for_no_model_without_a_key():

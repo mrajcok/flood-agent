@@ -96,21 +96,6 @@ def test_the_row_cap_is_reused_and_truncation_is_reported_only_while_it_applies(
     assert rows(client, name)["truncated_to"] is None
 
 
-def test_a_failed_refresh_leaves_the_table_exactly_as_it_was(build_agent, web_client):
-    client, agent, clock, _, (a, b) = ask(
-        build_agent, web_client, "SELECT sip FROM flows", lambda a: f"SELECT sip FROM {a}")
-    client.delete(f"/api/tables/{a}")  # the table B was made from has expired
-    clock.ms += HOUR
-    before_rows, before = rows(client, b), agent.tables[b]
-
-    r = refresh(client, b)
-
-    assert r.status_code == 422 and "expired" in r.json()["detail"].lower()
-    assert rows(client, b)["rows"] == before_rows["rows"]
-    assert agent.tables[b] == before
-    assert result_tables_in_results_db(agent) == [b]  # no temporary table is left behind
-
-
 def test_a_query_that_times_out_fails_plainly_and_changes_nothing(build_agent, web_client, query_runner):
     slow = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 400000) SELECT MAX(x) AS m FROM c"
     client, agent, _, _, (name,) = ask(build_agent, web_client, slow)

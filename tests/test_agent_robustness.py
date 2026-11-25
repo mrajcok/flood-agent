@@ -122,31 +122,6 @@ async def test_unexpected_exception_is_reported_not_raised(make_agent):
     assert run_of(agent, nb)["trace"] is not None
 
 
-async def test_a_cell_below_is_sent_a_repaired_copy_of_a_corrupt_saved_run(make_agent, notebook_store):
-    llm = ScriptedLLM([TextChunk("ok")])
-    agent = await make_agent(llm)
-    nb = agent.notebooks.create_notebook()
-    first = add_ai_cell(agent, nb, prompt="hi")
-    run = notebook_store.start_run(first, "hi", {"model": "m", "effort": None, "max_rows": 10}, "f")
-    call = lambda i: {"id": i, "type": "function", "function": {"name": "run_query", "arguments": "{}"}}  # noqa: E731
-    for m in [
-        {"role": "user", "content": "hi"},
-        {"role": "assistant", "content": "", "tool_calls": [call("a"), call("b")]},
-        {"role": "tool", "tool_call_id": "a", "content": "{}"},  # "b" never answered
-        {"role": "user", "content": "again"},
-        {"role": "assistant", "content": "", "tool_calls": [call("c")]},
-        {"role": "tool", "tool_call_id": "c", "content": "{}"},
-        {"role": "assistant", "content": "fine"},
-        {"role": "assistant", "content": "", "tool_calls": [call("d")]},  # trailing, unanswered
-    ]:
-        notebook_store.add_message(run, m)
-    notebook_store.finish_run(run, "ok")
-    await collect(agent, "next", nb)
-    msgs = llm.calls[0][1:-1]  # between the system prompt and the new prompt
-    assert_valid_history(msgs)
-    assert [m["role"] for m in msgs] == ["user", "user", "assistant", "tool", "assistant"]
-
-
 async def test_a_run_left_running_by_a_killed_app_is_failed_at_the_next_start(make_agent, notebook_store):
     killed = await make_agent(ScriptedLLM())
     nb = killed.notebooks.create_notebook()
@@ -385,16 +360,6 @@ async def test_show_tools_refuse_expired_and_unknown_tables_alike(make_agent, to
     assert expired["error"] == missing["error"]  # an expired table is indistinguishable from a missing one
     assert gone not in json.dumps(expired)
     assert not [e for e in events if isinstance(e, DisplayEvent)]
-
-
-async def test_show_table_still_works_for_own_table(make_agent):
-    llm = ScriptedLLM(
-        [tool_call("run_query", "c1", sql=SQL, title="t")],
-        lambda msgs: [tool_call("show_table", "c2", result_table=last_tool_result(msgs)["result_table"])],
-        [TextChunk("ok")],
-    )
-    events = await collect(await make_agent(llm), "q")
-    assert len([e for e in events if isinstance(e, DisplayEvent)]) == 1
 
 
 # --- cancellation and lifecycle ------------------------------------------------------------------

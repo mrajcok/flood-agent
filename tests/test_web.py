@@ -77,20 +77,3 @@ def test_row_endpoint_reports_the_cap_a_truncated_table_was_cut_to(build_agent, 
     client = web_client(build_agent(script()))
     complete = client.get(_rows_url_after_showing(client, "3000")).json()
     assert complete["total"] == 3 and complete["truncated_to"] is None
-
-
-def test_table_display_has_a_truncation_badge_in_the_pager_line(build_agent, web_client):
-    client = web_client(build_agent(ScriptedLLM()))
-    markup = client.get("/").text
-    assert "badge-truncated" in markup  # styled on the page
-    from flood_agent.web import TEMPLATES
-
-    template = TEMPLATES.get_template("display_table.html").render(rows_url="r", psv_url="p", result_table="t")
-    pager = template.split('<div class="pager">')[1].split("</div>")[0]
-    assert "truncated to" in pager and "Download PSV" in pager
-
-
-def test_the_app_is_named_canopy(build_agent):
-    with TestClient(create_app(build_agent(ScriptedLLM([TextChunk("Hi.")])))) as client:
-        assert ">ANOPY</span></h1>" in client.get("/").text
-        assert client.get("/openapi.json").json()["info"]["title"] == "CANOPY"

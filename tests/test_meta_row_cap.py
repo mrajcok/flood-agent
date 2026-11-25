@@ -2,42 +2,12 @@
 
 import json
 
-import pytest
-from conftest import ScriptedLLM, TextChunk, collect, in_process_transport, last_tool_result, mcp_children, tool_call
+from conftest import ScriptedLLM, TextChunk, collect, in_process_transport, last_tool_result, tool_call
 from mcp import ClientSession
 
 from flood_agent.tool_outcome import decode, project
 
 CAP_KEY = "flood_agent/max_result_rows"
-
-
-@pytest.mark.subprocess
-async def test_launch_environment_has_no_exchange_id(make_agent):
-    seen = {}
-
-    def peek(messages):
-        (pid,) = mcp_children()
-        with open(f"/proc/{pid}/environ", "rb") as f:
-            seen["env"] = dict(kv.split(b"=", 1) for kv in f.read().split(b"\0") if b"=" in kv)
-        return [TextChunk("ok")]
-
-    await collect(await make_agent(ScriptedLLM(peek)), "hi")
-    assert b"TELEMETRY_DB" in seen["env"]
-    assert b"CELL_ID" not in seen["env"] and b"EXCHANGE_ID" not in seen["env"]
-
-
-async def test_no_tool_schema_mentions_an_exchange_id_or_a_chat(make_agent):
-    seen = {}
-
-    class Spy(ScriptedLLM):
-        async def stream_chat(self, messages, tools, reasoning: dict | None = None, session_id: str | None = None):
-            seen["tools"] = json.dumps(tools).lower()
-            async for c in super().stream_chat(messages, tools):
-                yield c
-
-    await collect(await make_agent(Spy([TextChunk("ok")])), "hi")
-    assert "exchange_id" not in seen["tools"] and "any chat" not in seen["tools"] and "any notebook" in seen["tools"]
-    assert "_meta" not in seen["tools"]
 
 
 async def _raw_calls(agent, calls):

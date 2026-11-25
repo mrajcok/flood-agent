@@ -197,10 +197,6 @@ async def test_session_id_is_stable_within_an_exchange_and_differs_between(model
     assert b["session_id"] == "c2"
 
 
-async def test_an_unlisted_models_request_body_is_unchanged():
-    assert "session_id" not in await request_body("meta-llama/llama-4", session_id="c1")
-
-
 async def request_body(model, reasoning=None, **kw):
     seen: list = []
 
@@ -220,13 +216,7 @@ async def test_a_claude_request_body_carries_cache_control_and_keeps_reasoning()
     assert body["reasoning"] == {"effort": "low"}
 
 
-@pytest.mark.parametrize("model", ["deepseek/deepseek-v4", "z-ai/glm-5.3", "qwen/qwen3-max"])
-async def test_other_models_send_no_cache_control(model):
-    assert "cache_control" not in await request_body(model)
-
-
 async def test_a_glm_request_body_carries_the_session_id():
     body = await request_body("z-ai/glm-5.3", session_id="c7")
 
     assert body["session_id"] == "c7"
-

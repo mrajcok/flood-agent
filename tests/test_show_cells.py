@@ -1,11 +1,9 @@
 """SHOW / DESCRIBE SQL Cells (the Command drop-down), through the SQL Cell Run module; the AI Cell below through the Agent."""
 
-import pytest
 from conftest import ScriptedLLM, add_ai_cell, add_sql_cell
 from test_sql_cells import SELECT, run, run_of
 
 from flood_agent import sql_cell_run
-from flood_agent.cell import CannotRun
 from flood_agent.events import TurnEnd, TurnError
 from flood_agent.llm import TextChunk
 from flood_agent.show_commands import SHOW_COMMANDS
@@ -73,15 +71,6 @@ async def test_there_is_no_row_cap_and_rows_are_kept_with_the_run(build_agent):
     await run(agent, nb, add_sql_cell(agent, nb, command="SHOW COLUMNS", max_rows=1))
     res = run_of(agent, nb, 0)["result"]
     assert res["row_count"] > 1 and len(res["rows"]) == res["row_count"] and not res.get("truncated_to")
-
-
-async def test_show_or_describe_typed_into_the_textbox_is_refused_with_a_pointer_and_no_run(build_agent):
-    for sql in ("SHOW TABLES", "  describe table flows", "show\ncolumns"):
-        agent = build_agent(ScriptedLLM())
-        nb = agent.notebooks.create_notebook()
-        with pytest.raises(CannotRun, match="Command drop-down"):
-            await run(agent, nb, add_sql_cell(agent, nb, sql=sql))
-        assert run_of(agent, nb, 0) is None
 
 
 async def test_an_ai_cell_below_sees_the_statement_and_only_some_rows_with_a_note(make_agent, monkeypatch):

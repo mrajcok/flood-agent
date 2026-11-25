@@ -8,8 +8,8 @@
 # Questions name the columns to return; the comparison ignores column names and order
 # and allows extra columns (see evalset/compare.py).
 # Windows (UTC): SYN flood 2026-01-02 14:00-14:30, amplification 2026-01-04 03:00-03:20,
-# port scan 2026-01-06 20:00-20:15, DNS tunnelling 2026-01-07 09:00-10:00, Diameter HSS signaling flood
-# 2026-01-05 16:00-16:20. Dataset window is 2026-01-01 .. 2026-01-08.
+# port scan 2026-01-06 20:00-20:15, DNS tunnelling 2026-01-07 09:00-10:00. Dataset window is 2026-01-01 .. 2026-01-08.
+# Diameter attack windows (UTC): spoofed CLRs 2026-01-03 22:00-22:30, HSS signaling flood 2026-01-05 16:00-16:20.
 
 # ---- common metrics and basics -------------------------------------------------
 - id: total-flow-count
@@ -295,6 +295,18 @@
 - id: diameter-timeouts
   question: How many Diameter transactions timed out? Return a single number.
   sql: SELECT COUNT(*) AS timeouts FROM diameter WHERE status = 'Timeout'
+
+- id: diameter-clr-spoof
+  question: >-
+    Between 2026-01-03 22:00 and 22:30 UTC, spoofed Diameter Cancel-Location-Requests (CLRs) came from a realm
+    other than the home network's (epc.mnc001.mcc001.3gppnetwork.org). Which realm sent them, and how many
+    distinct Subscribers were cancelled? Return the origin realm and the number of Subscribers.
+  sql: >-
+    SELECT origin_realm, COUNT(DISTINCT imsi) AS subscribers FROM diameter
+    WHERE command_code = 317 AND origin_realm <> 'epc.mnc001.mcc001.3gppnetwork.org'
+      AND etime >= 1767477600000 AND etime < 1767479400000
+    GROUP BY origin_realm ORDER BY subscribers DESC LIMIT 1
+  crosscheck: {attack: diameter_clr_spoof, equals: {origin_realm: source_realm, subscribers: victim_count}}
 
 - id: diameter-hss-flood
   question: >-

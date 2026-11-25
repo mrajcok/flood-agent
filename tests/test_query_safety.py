@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+from contextlib import closing
 
 import pytest
 from conftest import ScriptedLLM, all_telemetry_values, collect, last_tool_result, tool_call
@@ -171,20 +172,34 @@ async def test_result_exactly_at_the_cap_is_assumed_truncated(make_agent):
     assert meta["success"] is True and meta["row_count"] == 2 and meta["truncated_to"] == 2
 
 
-def test_telemetry_database_is_unwritable_even_if_validation_bypassed(query_runner, telemetry_db, monkeypatch):
-    monkeypatch.setattr(queries, "validate_select", lambda sql: sql)
-    runner = query_runner()
-    for stmt in [
-        "DELETE FROM flows",
-        "DROP TABLE flows",
-        "UPDATE flows SET bytes = 0",
-        "CREATE TABLE main.evil (a)",
-        "ATTACH DATABASE ':memory:' AS evil",
-        "PRAGMA writable_schema = 1",
-    ]:
-        with pytest.raises(queries.QueryFailed):
-            runner.explain(stmt)  # the one operation that hands the statement to the database unwrapped
-    assert all_telemetry_values(telemetry_db) >= {"172.30.41.7"}
+TELEMETRY_WRITES = ["DELETE FROM flows", "DROP TABLE flows", "UPDATE flows SET bytes = 0", "CREATE TABLE main.evil (a)"]
+
+
+@pytest.mark.parametrize(
+    "authorized, statements, refusal",
+    [
+        (True, [*TELEMETRY_WRITES, "ATTACH DATABASE ':memory:' AS evil", "PRAGMA writable_schema = 1"],
+         "not authorized"),
+        (False, TELEMETRY_WRITES, "readonly database"),
+    ],
+    ids=["authorizer", "read-only-open"],
+)
+def test_telemetry_database_is_unwritable_even_if_validation_bypassed(
+    telemetry_db, tmp_path, authorized, statements, refusal
+):
+    """Each guard on the query connection refuses on its own: the authorizer says "not authorized" before the
+    database is touched, and with the authorizer removed the read-only open still refuses every write."""
+    before = all_telemetry_values(telemetry_db)
+    with closing(queries._open_connection(telemetry_db, tmp_path / "results.db")) as con:
+        if not authorized:
+            con.set_authorizer(None)
+        for statement in statements:
+            with pytest.raises(sqlite3.Error, match=refusal):
+                con.execute(statement)
+        con.commit()  # anything that did run is kept, so the checks below would see it
+    assert all_telemetry_values(telemetry_db) == before
+    with closing(sqlite3.connect(telemetry_db)) as con:
+        assert con.execute("SELECT 1 FROM sqlite_master WHERE name = 'evil'").fetchone() is None
 
 
 def test_bypassed_validation_cannot_write_via_run(query_runner, telemetry_db, monkeypatch):

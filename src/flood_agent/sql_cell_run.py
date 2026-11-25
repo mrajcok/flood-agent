@@ -154,7 +154,7 @@ class SqlCellRuns:
     def __init__(self, store: NotebookStore, tables: Catalog, replacement: TableReplacement,
                  runner: QueryRunner, clock: Callable[[], int]):
         self._store, self.tables, self.replacement = store, tables, replacement
-        self.queries, self.clock = runner, clock
+        self.runner, self.clock = runner, clock
         self._running: dict[str, tuple[threading.Event, asyncio.Future]] = {}  # SQL Cell id -> its query's stop flag and thread
         self._closed = False
 
@@ -225,7 +225,7 @@ class SqlCellRuns:
         """The blocking part of a Run (it runs in a thread)."""
         if command:  # SHOW / DESCRIBE: no table, no row cap; the rows are kept with the Run
             try:
-                names, rows = run_show(command, table, self.queries, self.tables.listing())
+                names, rows = run_show(command, table, self.runner, self.tables.listing())
             except ShowFailed as e:
                 log.warning("SQL Cell %s failed: %s", owner.cell_id, e)
                 return _refused(str(e))
@@ -239,7 +239,7 @@ class SqlCellRuns:
             return _Failed(error, raw)
 
         if queries.looks_like_count(sql):
-            counted = self.queries.count(sql, stop)
+            counted = self.runner.count(sql, stop)
             if counted["success"]:
                 return _Count(counted["count"])
             if counted.get("stopped") or counted["error"] != queries.COUNT_GUIDANCE:  # only the wrong shape falls back to a table
@@ -256,7 +256,7 @@ class SqlCellRuns:
                 return failure(f"The table {prior.name} expired during the run. Run the cell again.")
             t = done.table
             return _TableMade(t.name, t.columns, done.row_count, t.truncated_to)
-        result = self.queries.run(sql, max_rows, title, stop)
+        result = self.runner.run(sql, max_rows, title, stop)
         if not result["success"]:
             return failure(result["error"], result.get("raw_error"), bool(result.get("stopped")))
         name = result["result_table"]
@@ -264,6 +264,6 @@ class SqlCellRuns:
             self.tables.register_for(owner, name, title, result["columns"], table_names.SQL_CELL_REQUEST,
                                      result.get("truncated_to"), sql, max_rows)
         except BaseException:
-            self.queries.drop(name)
+            self.runner.drop(name)
             raise
         return _TableMade(name, result["columns"], result["row_count"], result.get("truncated_to"))

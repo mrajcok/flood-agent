@@ -320,12 +320,12 @@ class Catalog(CatalogView):
     def __init__(
         self, app_db: Path, clock: Callable[[], int] = _now, default_retention_ms: int = DAY_MS,
         telemetry_tables: Iterable[str] = (), results_db: Path | None = None,
-        on_rename: Callable[[sqlite3.Connection, str, str], None] | None = None, runner: QueryRunner | None = None,
+        on_rename: Callable[[sqlite3.Connection, str, str], None] | None = None, *, runner: QueryRunner,
     ):
         """`default_retention_ms` is the Retention a new Result Table is given (kept in `policy`). `on_rename(con, old, new)` is
         the store's hook: it runs in the same app-database transaction as the registry rename, to update
         whatever else shows the old name (Displays and Chart Specs), so the Catalog never knows their schema.
-        `runner`, over the same results database, renames and drops tables there (needed only to do either)."""
+        `runner`, over the same results database, renames and drops tables there."""
         super().__init__(app_db, clock, telemetry_tables, results_db, _read_only=False,
                          default_retention_ms=default_retention_ms)
         self._on_rename = on_rename
@@ -369,18 +369,12 @@ class Catalog(CatalogView):
                         (as_of_ms, json.dumps(table.columns), table.truncated_to, table.cell_id, table.run_id,
                          table.title, table.sql, table.max_rows, table.name))
 
-    def _query_runner(self) -> QueryRunner:
-        if self._runner is None:
-            raise RuntimeError("This Catalog was built without a query runner.")
-        return self._runner
-
     def _drop_physical(self, names: Iterable[str]) -> None:
         names = list(names)
         if not names or self.results_db is None or not self.results_db.exists():
             return
-        runner = self._query_runner()
         for n in names:
-            runner.drop(n)
+            self._runner.drop(n)
 
     def _mark_expired(self, names: list[str]) -> None:
         with closing(self._connect()) as con, con:
@@ -463,8 +457,7 @@ class Catalog(CatalogView):
         """Rename in the results database, then in the app database. These are two files, so if the
         second step fails the first is undone."""
         self._check_new_name(new)
-        runner = self._query_runner()
-        runner.rename(old, new)  # ValueError if `new` is taken there
+        self._runner.rename(old, new)  # ValueError if `new` is taken there
         try:
             with closing(self._connect()) as con, con:
                 con.execute("UPDATE result_tables SET name=? WHERE name=?", (new, old))
@@ -473,10 +466,10 @@ class Catalog(CatalogView):
                 if self._on_rename:
                     self._on_rename(con, old, new)
         except sqlite3.IntegrityError:
-            runner.rename(new, old)
+            self._runner.rename(new, old)
             raise ValueError(f"A table named {new} already exists.")
         except BaseException:
-            runner.rename(new, old)
+            self._runner.rename(new, old)
             raise
 
     def _register_lookup(self, name: str, parsed: lookup_tables.ParsedRows) -> dict:

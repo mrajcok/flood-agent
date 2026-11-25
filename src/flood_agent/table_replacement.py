@@ -48,8 +48,8 @@ class Replaced:
 
 
 class TableReplacement:
-    def __init__(self, tables: Catalog, queries: QueryRunner):
-        self.tables, self.queries = tables, queries
+    def __init__(self, tables: Catalog, runner: QueryRunner):
+        self.tables, self.runner = tables, runner
         self._busy: set[str] = set()  # tables being replaced now
         self._lock = threading.Lock()
 
@@ -66,7 +66,7 @@ class TableReplacement:
         `ReplacementFailed` if the query fails or is stopped."""
         before = self.tables[name]
         with self._one_at_a_time(before.name):
-            result = self.queries.run(sql, max_rows, rerun.title if rerun else before.title, stop)
+            result = self.runner.run(sql, max_rows, rerun.title if rerun else before.title, stop)
             if not result["success"]:
                 raise ReplacementFailed(result["error"], result.get("raw_error") or result["error"],
                                         bool(result.get("stopped")))
@@ -78,13 +78,13 @@ class TableReplacement:
             try:
                 # The one catalog write is the step that can be undone, and it refuses a table a sweep expired.
                 undo = self.tables.record_replacement(after)
-                self.queries.swap(temp, before.name)
+                self.runner.swap(temp, before.name)
             except BaseException:
                 try:
                     if undo is not None:
                         self.tables.restore_replacement(undo)
                 finally:
-                    self.queries.drop(temp)  # even if the restore fails
+                    self.runner.drop(temp)  # even if the restore fails
                 self.tables[before.name]  # a sweep dropped the table meanwhile: TableExpired, the plain answer
                 raise
             return Replaced(self.tables[before.name], result["row_count"])

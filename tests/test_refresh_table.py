@@ -114,7 +114,7 @@ def test_a_failed_refresh_leaves_the_table_exactly_as_it_was(build_agent, web_cl
 def test_a_query_that_times_out_fails_plainly_and_changes_nothing(build_agent, web_client, query_runner):
     slow = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 400000) SELECT MAX(x) AS m FROM c"
     client, agent, _, _, (name,) = ask(build_agent, web_client, slow)
-    agent.replacement.queries = query_runner(agent.tables.readable, timeout_s=0.01)  # the Refresh's limit only
+    agent.replacement.runner = query_runner(agent.tables.readable, timeout_s=0.01)  # the Refresh's limit only
 
     r = refresh(client, name)
 

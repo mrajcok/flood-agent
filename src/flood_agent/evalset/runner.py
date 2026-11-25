@@ -81,7 +81,9 @@ def _count_answers(trace: dict | None) -> list[int]:
     return counts
 
 
-def _judge(q: Question, ref, runner: QueryRunner, names: list[str], counts: list[int]) -> tuple[bool, str, int, str | None, int]:
+def _judge(
+    q: Question, ref, runner: QueryRunner, names: list[str], counts: list[int]
+) -> tuple[bool, str, int, str | None, int]:
     if not names and not counts:
         return False, "no Result Table or count answer was produced", 0, None, 0
     ref_cols, ref_rows = ref

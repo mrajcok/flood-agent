@@ -2,7 +2,7 @@
 
 import pytest
 from conftest import ScriptedLLM, add_ai_cell, add_sql_cell
-from test_sql_cells import SELECT, run, run_of, run_sql
+from test_sql_cells import SELECT, run, run_of
 
 from flood_agent import sql_cell_run
 from flood_agent.cell import CannotRun
@@ -17,7 +17,7 @@ async def ran_show(build_agent, command, table=""):
     agent = build_agent(ScriptedLLM())
     nb = agent.notebooks.create_notebook()
     cell = add_sql_cell(agent, nb, command=command, table=table)
-    events = await run_sql(agent, nb, cell)
+    events = await run(agent, nb, cell)
     return agent, nb, cell, events
 
 
@@ -28,10 +28,10 @@ def column(result, name):
 async def test_show_tables_lists_the_readable_tables_with_no_table_made(build_agent):
     agent = build_agent(ScriptedLLM())
     nb = agent.notebooks.create_notebook()
-    await run_sql(agent, nb, add_sql_cell(agent, nb, sql=SELECT))
+    await run(agent, nb, add_sql_cell(agent, nb, sql=SELECT))
     made = agent.tables.names()
     show = add_sql_cell(agent, nb, command="SHOW TABLES")
-    events = await run_sql(agent, nb, show)
+    events = await run(agent, nb, show)
 
     r = run_of(agent, nb, 1)
     assert r["status"] == "ok" and isinstance(events[-1], TurnEnd)
@@ -70,7 +70,7 @@ async def test_the_other_commands_are_not_available_on_the_development_database(
 async def test_there_is_no_row_cap_and_rows_are_kept_with_the_run(build_agent):
     agent = build_agent(ScriptedLLM())
     nb = agent.notebooks.create_notebook()
-    await run_sql(agent, nb, add_sql_cell(agent, nb, command="SHOW COLUMNS", max_rows=1))
+    await run(agent, nb, add_sql_cell(agent, nb, command="SHOW COLUMNS", max_rows=1))
     res = run_of(agent, nb, 0)["result"]
     assert res["row_count"] > 1 and len(res["rows"]) == res["row_count"] and not res.get("truncated_to")
 

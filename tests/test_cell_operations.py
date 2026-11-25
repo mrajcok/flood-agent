@@ -105,13 +105,13 @@ async def test_moving_or_deleting_a_cell_makes_the_cells_below_stale(make_agent)
     a, b, c = (add_ai_cell(agent, nb, prompt=p) for p in "abc")
     for cell in (a, b, c):
         await run(agent, nb, cell)
-    assert agent.notebooks.stale_cells(nb) == set()
+    assert agent.notebooks.stale_ids(nb) == []
     agent.notebooks.move_cell(nb, c, "up")  # now a, c, b: c no longer sees b, and b now sees c
-    assert agent.notebooks.stale_cells(nb) == {b, c}
+    assert agent.notebooks.stale_ids(nb) == [c, b]
     agent.notebooks.move_cell(nb, c, "down")
-    assert agent.notebooks.stale_cells(nb) == set()
+    assert agent.notebooks.stale_ids(nb) == []
     agent.notebooks.delete_cell(nb, a)
-    assert agent.notebooks.stale_cells(nb) == {b, c}
+    assert agent.notebooks.stale_ids(nb) == [b, c]
 
 
 async def test_a_running_cell_cannot_be_moved_copied_deleted_or_cleared_of_earlier_tables(make_agent):

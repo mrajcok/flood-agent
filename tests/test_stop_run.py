@@ -202,12 +202,12 @@ async def test_closing_the_app_before_a_run_takes_its_first_step_stops_it(make_a
     assert run["status"] == "stopped" and run["error"] is None
 
 
-async def test_an_ai_cell_cannot_run_once_its_runs_are_closed(make_agent):
+async def test_an_ai_cell_cannot_run_once_the_agent_is_closed(make_agent):
     agent = await make_agent(ScriptedLLM([TextChunk("hi")]))
     nb = agent.notebooks.create_notebook()
     cell = add_ai_cell(agent, nb, prompt="q")
-    await agent.ai_cells.aclose()
+    await agent.aclose()
 
     with pytest.raises(RuntimeError, match="closed"):
-        [e async for e in agent.ai_cells.run(agent.notebooks.cell(nb, cell))]
-    assert latest_run(agent, nb, cell) is None
+        [e async for e in agent.notebooks.run_cell(nb, cell)]
+    assert latest_run(agent, nb, cell) is None and agent.notebooks.running_cell(nb) is None

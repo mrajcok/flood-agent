@@ -1,5 +1,5 @@
 """Model choices: which models can be used here, with their Efforts, and the default model. Built once at startup, so
-the page's Model picker, the starting Drafts of new Cells and typing Cells all agree."""
+the page's Model Choice dropdown, the starting Drafts of new Cells and typing Cells all agree."""
 
 from dataclasses import dataclass
 
@@ -14,7 +14,7 @@ NO_MODEL = "no-model"
 class ModelChoices:
     models: tuple[ModelSpec, ...]  # the curated list
     has_api_key: bool  # without one, only NO_MODEL can be used
-    default_model: str  # for a turn or a Cell that names none: NO_MODEL without an API key
+    default_model: str  # for a Run or a Cell that names none: NO_MODEL without an API key
 
     @classmethod
     def build(cls, models: tuple[ModelSpec, ...], configured_model: str, has_api_key: bool) -> "ModelChoices":

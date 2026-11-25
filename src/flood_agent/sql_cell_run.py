@@ -151,9 +151,9 @@ class SqlCellRuns:
     """Runs SQL Cells and stops them. Built once by the Agent; the Notebook module keeps the rule that one Cell runs per
     Notebook at a time."""
 
-    def __init__(self, notebooks: NotebookStore, tables: Catalog, replacement: TableReplacement,
+    def __init__(self, store: NotebookStore, tables: Catalog, replacement: TableReplacement,
                  telemetry_db: Path, results_db: Path, timeout_s: float, clock: Callable[[], int]):
-        self.notebooks, self.tables, self.replacement = notebooks, tables, replacement
+        self._store, self.tables, self.replacement = store, tables, replacement
         self.telemetry_db, self.results_db, self.timeout_s, self.clock = telemetry_db, results_db, timeout_s, clock
         self._running: dict[str, tuple[threading.Event, asyncio.Future]] = {}  # SQL Cell id -> its query's stop flag and thread
         self._closed = False
@@ -170,7 +170,7 @@ class SqlCellRuns:
         max_rows, command = settings.max_rows, settings.command
         last = cell.run  # the table a re-run replaces: the latest Run's own Result Table, if still live; never a Saved Table
         prior = next((t for t in (self.tables.tables_of_run(cell_id, last.id) if last else []) if t.kind == "result"), None)
-        run_id = self.notebooks.start_run(cell_id, statement, settings.stored(), "")
+        run_id = self._store.start_run(cell_id, statement, settings.stored(), "")
         stop = threading.Event()
         work = asyncio.ensure_future(asyncio.to_thread(
             self._execute, sql, max_rows, stop, prior, CellRun(cell_id, run_id), command, table))
@@ -186,7 +186,7 @@ class SqlCellRuns:
                 stop.set()
                 with contextlib.suppress(BaseException):
                     await work
-                self.notebooks.finish_run(run_id, "stopped")
+                self._store.finish_run(run_id, "stopped")
                 raise
         finally:
             self._running.pop(cell_id, None)
@@ -195,9 +195,9 @@ class SqlCellRuns:
         label = f"{SHOW_CELL_LABEL} {statement}" if command else f"{SQL_CELL_LABEL} {sql}"
         displays, events = outcome.shown(sql, self.clock)
         # The message is stored once, so what AI Cells below are sent is frozen at this Run.
-        self.notebooks.add_step(run_id, [({"role": "user", "content": f"{label}\n{outcome.detail()}"}, displays)])
-        self.notebooks.save_result(run_id, outcome.saved() | {"elapsed_s": elapsed_s})
-        self.notebooks.finish_run(run_id, outcome.status, outcome.error)
+        self._store.add_step(run_id, [({"role": "user", "content": f"{label}\n{outcome.detail()}"}, displays)])
+        self._store.save_result(run_id, outcome.saved() | {"elapsed_s": elapsed_s})
+        self._store.finish_run(run_id, outcome.status, outcome.error)
         for event in events:
             yield event
         yield TurnEnd()

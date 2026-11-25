@@ -156,6 +156,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool 
             yield
 
     app = FastAPI(title="CANOPY", lifespan=lifespan)
+    notebooks, choices = agent.notebooks, agent.config.choices
 
     @app.exception_handler(TableExpired)
     def expired_handler(request: Request, exc: TableExpired):
@@ -187,11 +188,10 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool 
 
     def sidebar(current_notebook: str | None = None) -> dict:
         return {
-            "notebooks": agent.notebooks.list_notebooks(), "current_notebook_id": current_notebook,
+            "notebooks": notebooks.list_notebooks(), "current_notebook_id": current_notebook,
             "picker": picker or [], "dev": dev,
         }
 
-    choices = agent.config.choices
     models = [{"id": m.id, "label": m.label, "disabled": not choices.can_use(m.id), "efforts": m.efforts,
                "default_effort": m.default_effort} for m in choices.models]
     models.append({"id": NO_MODEL, "label": "No model", "disabled": False, "efforts": [], "default_effort": None})
@@ -249,7 +249,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool 
     def output_items(cell: AiCell | SqlCell, refreshable_counts: bool = True) -> list[dict]:
         """What a Cell's finished (or stopped) Run shows under its prompt: the answer's text and its Displays, in
         order. An AI Cell's Count Displays refresh; a SQL Cell's do not (its Run is its refresh)."""
-        transcript = agent.notebooks.run_transcript(cell.notebook_id, cell.id)
+        transcript = notebooks.run_transcript(cell.notebook_id, cell.id)
         shown = {i["result_table"] for i in transcript if i["type"] == "display" and i["result_table"]}
         expired = shown - agent.tables.live_among(shown)
         items: list[dict] = []
@@ -357,7 +357,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool 
         return sql_view(cell, shown.run, starting, shown.stale)
 
     def cell_html(notebook_id: str, cell_id: str, template: str, starting: bool = False) -> str:
-        shown = agent.notebooks.page_cell(notebook_id, cell_id)
+        shown = notebooks.page_cell(notebook_id, cell_id)
         return TEMPLATES.get_template(template).render(
             cell=cell_view(shown, starting), notebook_id=notebook_id, **model_picker())
 
@@ -372,14 +372,14 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool 
         return AiDraft(form.prompt, AiRunSettings(chosen, effort_choice(chosen, form.effort), max_rows))
 
     def new_notebook() -> str:
-        notebook_id = agent.notebooks.create_notebook()
-        agent.notebooks.add_cell(notebook_id, AI)
+        notebook_id = notebooks.create_notebook()
+        notebooks.add_cell(notebook_id, AI)
         return notebook_id
 
     @app.get("/")
     def home():
         """The landing page: the notebook with the most recent activity, or a new one if there is none yet."""
-        existing = agent.notebooks.list_notebooks()
+        existing = notebooks.list_notebooks()
         return RedirectResponse(f"/n/{existing[0]['id'] if existing else new_notebook()}", status_code=303)
 
     @app.post("/notebooks")
@@ -390,28 +390,28 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool 
     @app.get("/api/notebooks")
     def search_notebooks(q: str = ""):
         """The notebooks (id, title) whose title or cell text contains `q`, most recent activity first."""
-        return [{"id": n["id"], "title": n["title"]} for n in agent.notebooks.list_notebooks(q)]
+        return [{"id": n["id"], "title": n["title"]} for n in notebooks.list_notebooks(q)]
 
     @app.post("/n/{notebook_id}/rename")
     def rename_notebook(notebook_id: str, title: str = Form("")):
         try:
-            agent.notebooks.rename_notebook(notebook_id, title)
+            notebooks.rename_notebook(notebook_id, title)
         except ValueError as e:
             raise HTTPException(422, str(e))
         return RedirectResponse(f"/n/{notebook_id}", status_code=303)
 
     @app.get("/n/{notebook_id}/delete-preview")
     def notebook_delete_preview(notebook_id: str):
-        return agent.notebooks.notebook_delete_preview(notebook_id)
+        return notebooks.notebook_delete_preview(notebook_id)
 
     @app.post("/n/{notebook_id}/delete")
     def delete_notebook(notebook_id: str, tables: TablesChoice = Form("keep")):
-        agent.notebooks.delete_notebook(notebook_id, tables)
+        notebooks.delete_notebook(notebook_id, tables)
         return RedirectResponse("/", status_code=303)
 
     @app.get("/n/{notebook_id}", response_class=HTMLResponse)
     def open_notebook(request: Request, notebook_id: str):
-        page = agent.notebooks.notebook_page(notebook_id)
+        page = notebooks.notebook_page(notebook_id)
         return TEMPLATES.TemplateResponse(request, "notebook.html", {
             **sidebar(notebook_id), **model_picker(), "notebook_id": notebook_id, "title": page.title,
             "cells": [cell_view(c) for c in page.cells], "stale_ids": sorted(page.stale_ids),
@@ -420,7 +420,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool 
     @app.get("/n/{notebook_id}/stale")
     def stale_cells(notebook_id: str) -> list[str]:
         """The ids of the notebook's stale AI Cells: the page re-reads them after anything that can change one."""
-        return agent.notebooks.notebook_page(notebook_id).stale_ids
+        return notebooks.stale_ids(notebook_id)
 
     @app.post("/n/{notebook_id}/cells", response_class=HTMLResponse)
     def add_cell(notebook_id: str, kind: str = Form(AI), after: str | None = Form(None), at: str = Form(""),
@@ -430,24 +430,24 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool 
         if kind not in (AI, SQL, MARKDOWN):
             raise HTTPException(422, f"unknown cell kind {kind!r}")
         position = "after" if after else "start" if at == "start" else "end"
-        cell_id = agent.notebooks.add_cell(notebook_id, kind, position, after or None, sql)
+        cell_id = notebooks.add_cell(notebook_id, kind, position, after or None, sql)
         return cell_html(notebook_id, cell_id, "notebook_slot.html")
 
     @app.post("/n/{notebook_id}/cells/{cell_id}/move", status_code=204)
     def move_cell(notebook_id: str, cell_id: str, direction: Literal["up", "down"] = Form(...)):
-        agent.notebooks.move_cell(notebook_id, cell_id, direction)
+        notebooks.move_cell(notebook_id, cell_id, direction)
 
     @app.post("/n/{notebook_id}/cells/{cell_id}/copy", response_class=HTMLResponse)
     def copy_cell(notebook_id: str, cell_id: str):
         """Copy the cell's Draft into a new cell just below it; returns it, for the page to place."""
-        new_id = agent.notebooks.copy_cell(notebook_id, cell_id)
+        new_id = notebooks.copy_cell(notebook_id, cell_id)
         return cell_html(notebook_id, new_id, "notebook_slot.html")
 
     @app.get("/n/{notebook_id}/cells/{cell_id}/copy-to-markdown")
     def copy_to_markdown_preview(notebook_id: str, cell_id: str):
         """The `rt_` tables a Copy to Markdown Cell would embed: the user may save (rename) them first."""
         try:
-            return {"tables": agent.notebooks.markdown_copy_tables(notebook_id, cell_id)}
+            return {"tables": notebooks.markdown_copy_tables(notebook_id, cell_id)}
         except ValueError as e:
             raise HTTPException(422, str(e))
 
@@ -457,18 +457,18 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool 
         (that table is renamed, so a Saved Table). Returns the new cell, for the page to place."""
         pairs = {old: new for old, _, new in (item.partition(":") for item in save)}
         try:
-            new_id = agent.notebooks.copy_to_markdown_cell(notebook_id, cell_id, pairs)
+            new_id = notebooks.copy_to_markdown_cell(notebook_id, cell_id, pairs)
         except ValueError as e:
             raise HTTPException(422, str(e))
         return cell_html(notebook_id, new_id, "notebook_slot.html")
 
     @app.get("/n/{notebook_id}/cells/{cell_id}/delete-preview")
     def cell_delete_preview(notebook_id: str, cell_id: str):
-        return agent.notebooks.cell_delete_preview(notebook_id, cell_id)
+        return notebooks.cell_delete_preview(notebook_id, cell_id)
 
     @app.post("/n/{notebook_id}/cells/{cell_id}/delete", status_code=204)
     def delete_cell(notebook_id: str, cell_id: str, tables: TablesChoice = Form("keep")):
-        agent.notebooks.delete_cell(notebook_id, cell_id, tables)
+        notebooks.delete_cell(notebook_id, cell_id, tables)
 
     @app.get("/n/{notebook_id}/cells/{cell_id}", response_class=HTMLResponse)
     def get_cell(notebook_id: str, cell_id: str):
@@ -477,49 +477,49 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool 
     @app.post("/n/{notebook_id}/cells/{cell_id}/draft", status_code=204)
     def save_posted_draft(notebook_id: str, cell_id: str, form: Annotated[DraftForm, Form()]):
         """Remember a cell's edited prompt (or SQL) and settings without running them."""
-        cell = agent.notebooks.cell(notebook_id, cell_id)
+        cell = notebooks.cell(notebook_id, cell_id)
         if isinstance(cell, MarkdownCell):
             raise HTTPException(422, "a Markdown Cell's Draft is saved as Markdown")
-        agent.notebooks.save_draft(notebook_id, cell_id, posted_draft(cell, form))
+        notebooks.save_draft(notebook_id, cell_id, posted_draft(cell, form))
 
     @app.post("/n/{notebook_id}/cells/{cell_id}/markdown", status_code=204)
     def save_markdown(notebook_id: str, cell_id: str, text: str = Form(""), send_to_ai: str = Form("")):
         """Remember a Markdown Cell's text and its Send to AI tick (a missing tick is unticked)."""
-        cell = agent.notebooks.cell(notebook_id, cell_id)
+        cell = notebooks.cell(notebook_id, cell_id)
         if not isinstance(cell, MarkdownCell):
             raise HTTPException(422, "not a Markdown Cell")
-        agent.notebooks.save_draft(notebook_id, cell_id, replace(cell.draft, text=text, send_to_ai=bool(send_to_ai)))
+        notebooks.save_draft(notebook_id, cell_id, replace(cell.draft, text=text, send_to_ai=bool(send_to_ai)))
 
     @app.post("/n/{notebook_id}/cells/{cell_id}/earlier-tables/delete", response_class=HTMLResponse)
     def delete_earlier_tables(notebook_id: str, cell_id: str):
         """Drop the `rt_` tables of the cell's earlier Runs (never Saved Tables); returns the cell. 409 while it runs."""
-        agent.notebooks.delete_earlier_tables(notebook_id, cell_id)
+        notebooks.delete_earlier_tables(notebook_id, cell_id)
         return cell_html(notebook_id, cell_id, "notebook_cell.html")
 
     @app.post("/n/{notebook_id}/cells/{cell_id}/run", response_class=HTMLResponse)
     def run_cell(notebook_id: str, cell_id: str, form: Annotated[DraftForm, Form()]):
         """Save the cell's prompt (or SQL) and settings as its Draft and return the cell, running; its stream starts the
         Run. 422 with the reason if the Draft cannot be Run (it stays saved)."""
-        cell = agent.notebooks.cell(notebook_id, cell_id)
+        cell = notebooks.cell(notebook_id, cell_id)
         if isinstance(cell, MarkdownCell):
             raise HTTPException(422, "only AI and SQL Cells run")
         draft = posted_draft(cell, form)
-        agent.notebooks.save_draft(notebook_id, cell_id, draft)
+        notebooks.save_draft(notebook_id, cell_id, draft)
         reason = replace(cell, draft=draft).cannot_run()
         if reason is not None:
             raise HTTPException(422, reason)
-        if agent.notebooks.running_cell(notebook_id):  # early: the claim when the stream opens is what counts
+        if notebooks.running_cell(notebook_id):  # early: the claim when the stream opens is what counts
             raise HTTPException(409, "A cell in this notebook is already running")
         return cell_html(notebook_id, cell_id, "notebook_cell.html", starting=True)
 
     @app.get("/n/{notebook_id}/cells/{cell_id}/stream")
     async def stream_cell(notebook_id: str, cell_id: str):
-        agent.notebooks.cell(notebook_id, cell_id)  # 404 now: once it streams, an error can only be told in the stream
+        notebooks.cell(notebook_id, cell_id)  # 404 now: once it streams, an error can only be told in the stream
 
         async def events():
             live = LiveCounter()
             try:
-                async with aclosing(cast(AsyncGenerator, agent.notebooks.run_cell(notebook_id, cell_id))) as run:
+                async with aclosing(cast(AsyncGenerator, notebooks.run_cell(notebook_id, cell_id))) as run:
                     async for ev in run:
                         sse = live_event_sse(ev, cell_id, live, notebook=True)  # a SQL Cell's event has no display_id
                         if sse is not None:
@@ -539,7 +539,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool 
     @app.post("/n/{notebook_id}/cells/{cell_id}/stop", status_code=204)
     async def stop_cell(notebook_id: str, cell_id: str):  # async: it touches the event loop's tasks
         """Stop a running cell now; its stream still ends. Does nothing if it already ended."""
-        agent.notebooks.stop_cell(notebook_id, cell_id)
+        notebooks.stop_cell(notebook_id, cell_id)
 
     if dev:
         @app.post("/api/dev/shift-timestamps")

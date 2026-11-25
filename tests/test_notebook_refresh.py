@@ -39,7 +39,7 @@ def test_an_ai_cells_count_display_refreshes_without_a_run_or_staleness(build_ag
     after = latest_run(agent, nb, cell)
     assert (after["id"], after["number"], after["messages"], after["context_fingerprint"]) == (
         before["id"], before["number"], before["messages"], before["context_fingerprint"])
-    assert below not in agent.notebooks.stale_cells(nb)
+    assert below not in agent.notebooks.stale_ids(nb)
     assert client.post("/api/notebook-displays/99999/refresh").status_code == 404
 
 
@@ -56,7 +56,7 @@ def test_refreshing_an_ai_cells_table_does_not_make_a_cell_below_stale_or_change
 
     assert client.post(f"/api/results/{table.name}/refresh").status_code == 200
 
-    assert agent.notebooks.stale_cells(nb) == set()
+    assert agent.notebooks.stale_ids(nb) == []
     again = latest_run(agent, nb, cell)
     assert (again["id"], again["number"], again["messages"]) == (run["id"], run["number"], run["messages"])
     assert latest_run(agent, nb, second)["number"] == 2  # no refresh took a run number

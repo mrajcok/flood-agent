@@ -141,11 +141,11 @@ class AiCellRuns:
     per Notebook at a time, and the Agent supervises the MCP connection this gets from `connection`."""
 
     def __init__(
-        self, notebooks: NotebookStore, tables: Catalog, semantic_layer: SemanticLayer, client_for: ClientFactory,
+        self, store: NotebookStore, tables: Catalog, semantic_layer: SemanticLayer, client_for: ClientFactory,
         connection: ConnectionProvider, started: Callable[[], bool], spec_of: Callable[[str], ModelSpec | None],
         max_llm_steps: int, max_failed_attempts: int, clock: Callable[[], int],
     ):
-        self.notebooks, self.tables, self.semantic_layer = notebooks, tables, semantic_layer
+        self._store, self.tables, self.semantic_layer = store, tables, semantic_layer
         self.client_for, self._connection, self._started = client_for, connection, started
         self.spec_of = spec_of
         self.max_llm_steps, self.max_failed_attempts, self.clock = max_llm_steps, max_failed_attempts, clock
@@ -192,9 +192,9 @@ class AiCellRuns:
 
     def _start(self, cell: AiCell) -> tuple[asyncio.Task, _RunQueue, Callable[[], None]]:
         notebook_id, cell_id, prompt, settings = cell.notebook_id, cell.id, cell.prompt, cell.run_settings
-        context = ai_cell_context.context_above(self.notebooks.cells(notebook_id), cell_id)
+        context = ai_cell_context.context_above(self._store.cells(notebook_id), cell_id)
         history, above, fingerprint = context.messages, context.above, context.fingerprint
-        run_id = self.notebooks.start_run(cell_id, prompt, settings.stored(), fingerprint)
+        run_id = self._store.start_run(cell_id, prompt, settings.stored(), fingerprint)
         run = CellRun(cell_id, run_id)
         session_id = f"notebook-{notebook_id}"  # lets OpenRouter route every step of every cell to one cache
 
@@ -215,11 +215,11 @@ class AiCellRuns:
             ended any other way without closing it crashed."""
             if self._keyed.get(cell_id) is task:
                 del self._keyed[cell_id]
-            if task.done() and self.notebooks.status_of(run_id) == "running":
+            if task.done() and self._store.status_of(run_id) == "running":
                 if task.cancelled():
-                    self.notebooks.finish_run(run_id, "stopped")
+                    self._store.finish_run(run_id, "stopped")
                 else:
-                    self.notebooks.finish_run(run_id, "failed", RUN_CRASHED)
+                    self._store.finish_run(run_id, "failed", RUN_CRASHED)
 
         def end_stream(_t: asyncio.Task) -> None:
             if task.cancelled():  # it could not end its events itself, so its stream is not left waiting
@@ -280,15 +280,15 @@ class AiCellRuns:
             status, error = "failed", await self._record_failure(history, active, trace, e)
         finished = trace.finish()
         self._save_trace(run, finished)
-        self.notebooks.finish_run(run.run_id, status, error)
+        self._store.finish_run(run.run_id, status, error)
         await queue.put(TraceReady(finished))
 
     def _record(self, history: list[dict], run: CellRun, message: dict) -> None:
         history.append(message)
-        self.notebooks.add_message(run.run_id, message)
+        self._store.add_message(run.run_id, message)
 
     def _save_trace(self, run: CellRun, trace: dict) -> None:
-        self.notebooks.save_trace(run.run_id, trace, context_tokens(trace))
+        self._store.save_trace(run.run_id, trace, context_tokens(trace))
 
     def _record_stop(self, history: list[dict], active: _ActiveRun, live: _LiveStep, trace: TraceBuilder) -> None:
         """The Run was stopped: keep the text of the step in progress, and say so, in the page,
@@ -384,7 +384,7 @@ class AiCellRuns:
                                                      "computed_at_ms": count.computed_at_ms}))
                     step_displays.append((count, len(items)))
                 items.append(({"role": "tool", "tool_call_id": c.id, "content": content}, displays))
-            _, display_ids = self.notebooks.add_step(active.cell_run.run_id, items)
+            _, display_ids = self._store.add_step(active.cell_run.run_id, items)
             for event, index in step_displays:
                 if isinstance(event, CountEvent):
                     event.display_id = display_ids[index][-1]  # a call makes one Display: its count is the last

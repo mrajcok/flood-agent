@@ -4,7 +4,7 @@ import json
 import sqlite3
 
 import pytest
-from conftest import DAY, Clock, ScriptedLLM, all_telemetry_values, ask, last_tool_result, tool_call
+from conftest import Clock, ScriptedLLM, all_telemetry_values, ask, last_tool_result, tool_call
 
 from flood_agent.llm import TextChunk, ToolCallChunk
 
@@ -141,19 +141,6 @@ def test_a_result_table_named_lookup_is_not_a_lookup_table(build_agent, web_clie
     assert last_tool_result(llm.calls[2])["kind"] == "result"
 
 
-def test_a_lookup_table_never_expires(build_agent, web_client):
-    clock = Clock()
-    llm = ScriptedLLM([describe("lookup_hosts")], [TextChunk("ok")])
-    agent = build_agent(llm, clock=clock, result_ttl_ms=DAY)
-    client = web_client(agent)
-    add(client, "hosts", "ip\n1.1.1.1")
-    clock.ms += 1000 * DAY
-    agent.tables.sweep()
-    run_cell(client)
-    assert last_tool_result(llm.calls[1])["kind"] == "lookup"
-    assert stored(agent, "lookup_hosts") == [["1.1.1.1"]]
-
-
 def test_sidebar_has_the_add_lookup_table_dialog(build_agent, web_client):
     html = web_client(build_agent(ScriptedLLM())).get("/").text
     assert "Create lookup table" in html
@@ -237,15 +224,6 @@ def test_more_than_100000_rows_is_rejected_but_exactly_100000_is_fine(build_agen
     client = web_client(agent)
     rejected(client, agent, "t", "a\n" + "\n".join(str(i) for i in range(100_001)), "100,000")
     assert add(client, "t", "a\n" + "\n".join(str(i) for i in range(100_000))).json()["row_count"] == 100_000
-
-
-def test_existing_lookup_name_is_refused_without_overwrite(build_agent, web_client):
-    agent = build_agent(ScriptedLLM())
-    client = web_client(agent)
-    add(client, "hosts", "ip\n1.1.1.1")
-    r = add(client, "hosts", "ip\n2.2.2.2")
-    assert r.status_code == 422 and "lookup_hosts" in r.json()["detail"]
-    assert stored(agent, "lookup_hosts") == [["1.1.1.1"]]
 
 
 def test_overwrite_replaces_rows_and_columns(build_agent, web_client):

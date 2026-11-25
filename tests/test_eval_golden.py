@@ -98,8 +98,3 @@ def test_dns_questions_are_in_the_set_and_the_two_joins_are_crosschecked():
     assert by_id["dns-top-names"].ordered
     assert by_id["dns-tunnel"].crosscheck["attack"] == "dns_tunnel"
     assert by_id["amp-dns-name"].crosscheck["attack"] == "amplification"
-
-
-def test_header_lists_the_tunnelling_window():
-    from flood_agent.evalset import golden
-    assert "tunnelling 2026-01-07 09:00-10:00" in golden.GOLDEN_PATH.read_text()

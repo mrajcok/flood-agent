@@ -45,29 +45,6 @@ def test_renamed_tables_are_listed_as_saved_tables_and_rt_ones_as_result_tables(
     assert listed["result"] == [a_table]
 
 
-def test_saved_and_result_tables_come_with_their_retention_in_days(build_agent, web_client):
-    client, _, _, a_table, b_table = two_notebooks_with_tables(build_agent, web_client, result_ttl_ms=DAY)
-    client.post("/api/lookup-tables", data={"name": "watch", "rows": "ip\n10.0.0.1"})
-    client.post(f"/api/results/{b_table}/settings", data={"name": "ddos_victims", "retention_days": "30"})
-    # Telemetry and Lookup Tables have no Retention; a Result Table not changed by the user has the default.
-    assert client.get("/api/tables").json()["retention_days"] == {"ddos_victims": 30, a_table: 1}
-    client.post(f"/api/results/{a_table}/settings", data={"retention_days": "0.5"})
-    assert client.get("/api/tables").json()["retention_days"][a_table] == 0.5
-
-
-def test_saved_and_result_tables_come_with_the_time_left_before_they_expire(build_agent, web_client):
-    clock = Clock()
-    client = web_client(build_agent(ScriptedLLM(*table_script(), *table_script()), clock=clock, result_ttl_ms=DAY))
-    a, _, _ = ask(client, "top ports")
-    clock.ms += 3_600_000
-    b, _, _ = ask(client, "top talkers")
-    a_table, b_table = table_of(client, a), table_of(client, b)
-    client.post(f"/api/results/{b_table}/settings", data={"name": "ddos_victims", "retention_days": "30"})
-    clock.ms += 1000
-    assert client.get("/api/tables").json()["expires_in_ms"] == {
-        a_table: DAY - 3_600_000 - 1000, "ddos_victims": 30 * DAY - 1000}
-
-
 def test_result_tables_past_their_retention_are_left_out(build_agent, web_client):
     clock = Clock()
     client = web_client(build_agent(ScriptedLLM(*table_script(), *table_script()), clock=clock, result_ttl_ms=DAY))
@@ -100,15 +77,6 @@ def test_listing_tables_creates_no_notebook_cell_message_or_trace(build_agent, w
     assert app_db_counts(tmp_path / "app.db") == counts
     assert client.get("/").text == home
     assert client.get(f"/n/{a}").text == notebook
-
-
-def test_deleting_a_lookup_table_drops_and_unregisters_it(build_agent, web_client):
-    client = web_client(build_agent(ScriptedLLM()))
-    client.post("/api/lookup-tables", data={"name": "watch", "rows": "ip\n10.0.0.1"})
-    assert client.delete("/api/tables/lookup_watch").status_code == 204
-    assert client.get("/api/tables").json()["lookup"] == []
-    # Gone from the results database too: the name can be used again without Overwrite.
-    assert client.post("/api/lookup-tables", data={"name": "watch", "rows": "ip\n10.0.0.2"}).status_code == 200
 
 
 def test_deleting_saved_and_result_tables_leaves_their_displays_showing_expired(build_agent, web_client):

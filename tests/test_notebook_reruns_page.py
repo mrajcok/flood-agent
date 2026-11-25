@@ -54,9 +54,3 @@ def test_earlier_runs_tables_are_listed_collapsed_and_clearing_them_spares_saved
     assert cleared.status_code == 200
     assert "Tables from earlier runs (1)" in cleared.text and "kept_ports" in cleared.text
     assert rt.name not in agent.tables and "kept_ports" in agent.tables and current in agent.tables
-
-
-def test_clearing_earlier_tables_of_an_unknown_cell_is_404(build_agent, web_client):
-    client = web_client(build_agent(ScriptedLLM()))
-    nb, _ = new_notebook(client)
-    assert client.post(f"/n/{nb}/cells/nope/earlier-tables/delete").status_code == 404

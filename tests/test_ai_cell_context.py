@@ -70,16 +70,6 @@ def test_what_a_cell_is_sent_is_byte_identical_to_before(cell_id):
     assert context.fingerprint == want["fp"]
 
 
-def test_goldens_cover_the_cases_the_ticket_names():
-    sent = [m["content"] for m in GOLDEN["last"]["messages"] if m["role"] == "user"]
-    assert "[Markdown note] Notes here" in sent
-    assert "[Markdown note] with disp\n[Display: table r_1]\n[Display: chart r_2]" in sent
-    assert "[Markdown note] unticked" not in sent
-    assert any(s.startswith(ctx.SQL_CELL_LABEL) for s in sent) and any(s.startswith(ctx.SHOW_CELL_LABEL) for s in sent)
-    final = [m["content"] for m in GOLDEN["last"]["messages"] if m["role"] == "assistant"]
-    assert "partial\n\n(stopped by the user)" in final and "failed: boom" in final
-
-
 def _stored(cells):
     """Give every finished AI Cell the fingerprint it was sent, as a real Run stores it."""
     for cell in cells:

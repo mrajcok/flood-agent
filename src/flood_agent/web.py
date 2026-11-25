@@ -7,7 +7,6 @@ path to the browser; it is a plain HTTP route, never registered as an MCP tool.
 import csv
 import io
 import json
-import sqlite3
 import time
 from contextlib import aclosing, asynccontextmanager
 from dataclasses import dataclass, field, replace
@@ -21,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from flood_agent import dev_tools, lookup_tables, queries
+from flood_agent import dev_tools, lookup_tables
 from flood_agent.agent import Agent, NotRefreshable, RefreshFailed
 from flood_agent.ai_cell_context import without_stop_note
 from flood_agent.ai_cell_run import resolve_chart_data
@@ -42,7 +41,7 @@ from flood_agent.events import CountEvent, DisplayEvent, FlagEvent, LlmCallStart
 from flood_agent.lookup_tables import InvalidLookupTable
 from flood_agent.model_choices import NO_MODEL
 from flood_agent.notebook import COUNT_KIND, NotebookBusy, PageCell, TablesChoice, UnknownCell, UnknownNotebook
-from flood_agent.queries import InvalidSort
+from flood_agent.queries import InvalidSort, QueryFailed, QueryRejected
 from flood_agent.show_commands import SHOW_COMMANDS
 from flood_agent.table_replacement import RefreshInProgress
 from flood_agent.trace import short_model, split_system_prompt
@@ -616,7 +615,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool 
         kind = agent.tables.kind_of(name)
         if kind is None:
             raise HTTPException(404, "unknown table")
-        columns = queries.table_columns(agent.config.telemetry_db, agent.config.results_db, agent.tables.canonical(name), kind == "telemetry")
+        columns = agent.queries.table_columns(agent.tables.canonical(name), kind == "telemetry")
         if columns is None:
             raise HTTPException(404, "unknown table")
         return {"name": agent.tables.canonical(name), "kind": kind, "columns": columns}
@@ -656,17 +655,16 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool 
             table = agent.refresh_table(result_table)
         except KeyError:
             raise HTTPException(404, "unknown result table")
-        info = queries.describe_results_table(agent.config.results_db, table.name) or {}
+        info = agent.queries.describe(table.name) or {}
         return {**table.to_json(), **info, "truncated_to": table.truncated_to}
 
     @app.post("/api/explain")
     def explain(sql: str = Form("")):
         """The Query Plan of a Generated SQL from a Trace, for the user only: no LLM, nothing stored.
-        It may read any live table. 422 with the plain reason (rejected SQL, a database error)."""
+        It may read any live table. 422 with a plain, value-free reason (rejected SQL, a database error)."""
         try:
-            plan = queries.explain_query(agent.config.telemetry_db, agent.config.results_db, sql,
-                                         agent.config.query_timeout_s, agent.tables.readable())
-        except (queries.QueryRejected, sqlite3.Error) as e:
+            plan = agent.queries.explain(sql)
+        except (QueryRejected, QueryFailed) as e:
             raise HTTPException(422, str(e))
         return {"plan": plan}
 

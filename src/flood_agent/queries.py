@@ -109,7 +109,8 @@ def _database_errors():
     try:
         yield
     except sqlite3.Error as e:
-        raise QueryFailed(str(e) if isinstance(e, _TimedOut) else sanitize_error(str(e))) from e
+        reason = str(e) if isinstance(e, _TimedOut) else sanitize_error(str(e), keep_table_names=True)
+        raise QueryFailed(reason) from e
 
 
 LIMIT_IN_SQL_CELL = (
@@ -278,22 +279,30 @@ _STRING_FUNCTIONS = {
 
 _DENIAL_RE = re.compile(r"is prohibited|not authorized", re.I)
 _QUALIFIED_RE = re.compile(r"\b(?:results|main|temp)\.\w+(?:\.\w+)?", re.I)
+_NUMBER_RE = re.compile(r"(?<![A-Za-z_])\d+(\.\d+)*")
+# A whole generated table name (group 1), else a number.
+_NAME_OR_NUMBER_RE = re.compile(rf"(?<!\w)({table_names.GENERATED_RE.pattern})(?!\w)|{_NUMBER_RE.pattern}")
 
 
 ACCESS_DENIED = "Access to a table or column was denied."
 
 
-def sanitize_error(message: str) -> str:
+def sanitize_error(message: str, keep_table_names: bool = False) -> str:
     """Strip quoted literals and numbers from an SQLite error before it reaches the LLM.
 
     Authorizer denials ("access to results.<table>.col is prohibited", "not authorized") are
     replaced wholesale so no table or column name from a denied read (possibly another
-    notebook's) reaches the LLM; any other database-qualified reference is redacted."""
+    notebook's) reaches the LLM; any other database-qualified reference is redacted.
+
+    `keep_table_names` leaves a whole generated table name (`rt_<date>_<time>`) as it is, so a reason
+    shown to the user says which table it means. A failed run's or count's `error` does not ask for it."""
     if _DENIAL_RE.search(message):
         return ACCESS_DENIED
     message = _QUALIFIED_RE.sub("<table>", message)
     message = re.sub(r"'[^']*'?|\"[^\"]*\"?|`[^`]*`?", "<literal>", message)
-    return re.sub(r"(?<![A-Za-z_])\d+(\.\d+)*", "<n>", message)
+    if keep_table_names:
+        return _NAME_OR_NUMBER_RE.sub(lambda m: m[1] or "<n>", message)
+    return _NUMBER_RE.sub("<n>", message)
 
 
 _ALLOWED_ACTIONS = {

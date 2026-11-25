@@ -1,7 +1,9 @@
 """The generator's `diameter` table: S6a signaling, seen through `generate()` and the database."""
 
 import hashlib
+import json
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -118,6 +120,14 @@ def test_a_destination_host_is_missing_only_when_a_timed_out_request_named_none(
     assert unnamed and unnamed <= {316, 318}  # an MME's AIR or ULR names no Destination-Host
 
 
+def outside_attacks(db):
+    """A condition selecting the records outside every Diameter attack window: the baseline's."""
+    attacks = json.loads(Path(f"{db}.attacks.json").read_text())
+    return " AND ".join(
+        f"stime NOT BETWEEN {a['start']} AND {a['end']}" for a in attacks if a["type"].startswith("diameter_")
+    )
+
+
 HOME = "00101"
 HOME_REALM = "epc.mnc001.mcc001.3gppnetwork.org"
 
@@ -142,7 +152,7 @@ def realm_of(plmn):
 
 
 def test_every_s6a_record_crosses_between_an_mme_and_the_subscribers_hss(db):
-    for r in records(db):
+    for r in records(db, outside_attacks(db)):
         from_hss = r["command_code"] in (317, 319, 320)  # CLR, IDR, DSR
         hss_realm = r["origin_realm"] if from_hss else r["destination_realm"]
         mme_realm = r["destination_realm"] if from_hss else r["origin_realm"]
@@ -183,7 +193,7 @@ def test_columns_that_do_not_apply_are_null(db):
 
 
 def test_normal_cancellations_follow_a_move_to_another_mme(db):
-    clrs = records(db, "command_code = 317")
+    clrs = records(db, f"command_code = 317 AND {outside_attacks(db)}")
     assert clrs
     for c in clrs:
         assert (c["cancellation_type"], c["origin_realm"], c["home_plmn_id"]) == (0, HOME_REALM, HOME)

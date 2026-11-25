@@ -9,9 +9,9 @@ from dataclasses import replace
 import pytest
 from conftest import DAY, Clock, ScriptedLLM
 
-from flood_agent import queries
 from flood_agent.catalog import CellRun, TableExpired
-from flood_agent.table_replacement import RefreshInProgress, ReplacementFailed, Rerun
+from flood_agent.queries import QueryFailed
+from flood_agent.table_replacement import RefreshInProgress, ReplacementFailed, Rerun, TableReplacement
 
 HOUR = 3_600_000
 FIRST = "SELECT dport FROM flows ORDER BY dport"
@@ -20,16 +20,16 @@ OWNER = CellRun("cell-1", "run-1")
 
 
 @pytest.fixture
-def setup(build_agent):
+def setup(build_agent, query_runner):
     """An Agent (not started) with a clock, and a table of FIRST's rows capped at 2."""
     clock = Clock()
     agent = build_agent(ScriptedLLM(), clock=clock, result_ttl_ms=DAY)
+    agent.replacement = TableReplacement(agent.tables, query_runner(agent.tables.readable))
     return agent, clock, make_table(agent, FIRST, 2)
 
 
 def make_table(agent, sql, max_rows):
-    result = queries.run_query(agent.config.telemetry_db, agent.config.results_db, sql, 10, max_rows,
-                               agent.tables.readable(), "First")
+    result = agent.replacement.queries.run(sql, max_rows, "First")
     agent.tables.register_for(OWNER, result["result_table"], "First", result["columns"], "", result.get("truncated_to"),
                               sql, max_rows)
     return result["result_table"]
@@ -118,7 +118,7 @@ def test_a_table_that_is_not_live_is_refused_and_nothing_changes(setup):
 
 def test_a_sweep_dropping_the_table_mid_replacement_gives_the_plain_expired_answer(setup, monkeypatch):
     agent, clock, name = setup
-    real = queries.run_query
+    real = agent.replacement.queries.run
 
     def sweep_during(*args, **kwargs):
         result = real(*args, **kwargs)
@@ -126,7 +126,7 @@ def test_a_sweep_dropping_the_table_mid_replacement_gives_the_plain_expired_answ
         agent.tables.sweep()
         return result
 
-    monkeypatch.setattr(queries, "run_query", sweep_during)
+    monkeypatch.setattr(agent.replacement.queries, "run", sweep_during)
     with pytest.raises(TableExpired):
         agent.replacement.replace(name, FIRST, 5)
     assert tables_in_results_db(agent) == []  # no temporary table is left behind
@@ -138,10 +138,10 @@ def test_a_failed_swap_restores_the_catalog_and_keeps_the_old_rows(setup, monkey
     clock.ms += HOUR
 
     def broken(*args, **kwargs):
-        raise sqlite3.OperationalError("disk I/O error")
+        raise QueryFailed("disk I/O error")
 
-    monkeypatch.setattr(queries, "swap_table", broken)
-    with pytest.raises(sqlite3.OperationalError):
+    monkeypatch.setattr(agent.replacement.queries, "swap", broken)
+    with pytest.raises(QueryFailed):
         agent.replacement.replace(name, WIDER, 5, rerun=Rerun(CellRun("cell-2", "run-2"), "Second"))
 
     assert described(agent.tables[name]) == before  # columns, truncation, as-of time, owner, title, SQL and row cap
@@ -162,14 +162,14 @@ def test_a_rerun_re_owns_the_table_in_the_same_replacement(setup):
 def test_a_second_replacement_of_the_same_table_is_refused_while_one_runs(setup, monkeypatch):
     agent, _, name = setup
     other = make_table(agent, FIRST, 3)
-    started, release, real = threading.Event(), threading.Event(), queries.run_query
+    started, release, real = threading.Event(), threading.Event(), agent.replacement.queries.run
 
     def slow(*args, **kwargs):
         started.set()
         assert release.wait(5)
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(queries, "run_query", slow)
+    monkeypatch.setattr(agent.replacement.queries, "run", slow)
     done = []
     t = threading.Thread(target=lambda: done.append(agent.replacement.replace(name, FIRST, 2)))
     t.start()
@@ -179,11 +179,11 @@ def test_a_second_replacement_of_the_same_table_is_refused_while_one_runs(setup,
             agent.replacement.replace(name, FIRST, 2)
         with pytest.raises(RefreshInProgress):  # a SQL Cell re-run of the same table is refused too
             agent.replacement.replace(name, FIRST, 2, rerun=Rerun(CellRun("c", "r"), "T"))
-        monkeypatch.setattr(queries, "run_query", real)
+        monkeypatch.setattr(agent.replacement.queries, "run", real)
         agent.replacement.replace(other, FIRST, 3)  # a different table is not blocked
     finally:
         release.set()
         t.join(5)
     assert len(done) == 1
-    monkeypatch.setattr(queries, "run_query", real)
+    monkeypatch.setattr(agent.replacement.queries, "run", real)
     agent.replacement.replace(name, FIRST, 2)  # the guard was released

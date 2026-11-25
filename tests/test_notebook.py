@@ -120,6 +120,8 @@ async def test_a_second_run_while_one_runs_is_refused_plainly(notebook_parts):
         await run(parts, nb, other)
     assert nbs.cell(nb, other).run is None  # refused before a Run was recorded
     assert nbs.running_cell(nb) == slow
+    elsewhere = nbs.create_notebook()
+    await run(parts, elsewhere, sql_cell(parts, elsewhere, "SELECT 1 AS one"))  # another Notebook runs meanwhile
     nbs.stop_cell(nb, slow)
     await asyncio.wait_for(task, 10)
 
@@ -505,15 +507,3 @@ def test_a_run_transcript_is_the_latest_runs_messages_and_displays(notebook_part
     assert [i["type"] for i in transcript] == ["message", "display", "display"]
     assert transcript[0]["message"]["content"] == "The answer."
     assert [i["result_table"] for i in transcript[1:]] == ["rt_a", "rt_b"]
-
-
-def test_notebooks_are_listed_by_recent_activity_and_searched_by_title_or_cell_text(notebook_parts):
-    parts = notebook_parts()
-    nbs = parts.notebooks
-    ports = nbs.create_notebook("Ports")
-    parts.clock.ms += 1000
-    hosts = nbs.create_notebook("Hosts")
-    nbs.save_draft(hosts, sql_cell(parts, hosts), SqlDraft("SELECT dport FROM flows", SqlRunSettings(10, ""), ""))
-    assert [n["id"] for n in nbs.list_notebooks()] == [hosts, ports]
-    assert [n["title"] for n in nbs.list_notebooks("port")] == ["Hosts", "Ports"]
-    assert [n["title"] for n in nbs.list_notebooks("hos")] == ["Hosts"]

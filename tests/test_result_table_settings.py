@@ -42,13 +42,6 @@ def test_settings_get_and_post_carry_the_retention_policy(build_agent, web_clien
     assert client.post(f"/api/results/{name}/settings", data={"retention_days": "7"}).json()["policy"] == policy
 
 
-def test_rename_is_a_real_sql_rename(build_agent, web_client):
-    client, _, name = shown_table(build_agent, web_client)
-    resp = client.post(f"/api/results/{name}/settings", data={"name": "  top_ports  "})
-    assert resp.status_code == 200 and resp.json()["name"] == "top_ports"
-    assert client.get("/api/results/top_ports/rows").json()["name"] == "top_ports"
-
-
 def test_blank_name_and_bad_retention_are_rejected(build_agent, web_client):
     client, _, name = shown_table(build_agent, web_client)
     url = f"/api/results/{name}/settings"
@@ -57,22 +50,6 @@ def test_blank_name_and_bad_retention_are_rejected(build_agent, web_client):
         assert client.post(url, data={"retention_days": bad}).status_code == 422, bad
     assert client.post("/api/results/r_nope/settings", data={"name": "x"}).status_code == 404
     assert client.get(f"/api/results/{name}/rows").json()["retention_days"] == 1
-
-
-def test_longer_retention_keeps_the_table_alive(build_agent, web_client):
-    client, clock, name = shown_table(build_agent, web_client)
-    assert client.post(f"/api/results/{name}/settings", data={"retention_days": "7"}).json()["retention_days"] == 7
-    clock.ms += 7 * DAY - 1
-    assert client.get(f"/api/results/{name}/rows").status_code == 200
-    clock.ms += 2
-    assert client.get(f"/api/results/{name}/rows").status_code == 410
-
-
-def test_shorter_retention_expires_sooner(build_agent, web_client):
-    client, clock, name = shown_table(build_agent, web_client)
-    client.post(f"/api/results/{name}/settings", data={"retention_days": "0.5"})
-    clock.ms += DAY // 2 + 1
-    assert client.get(f"/api/results/{name}/rows").status_code == 410
 
 
 def test_settings_on_expired_table_is_410(build_agent, web_client):

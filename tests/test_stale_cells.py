@@ -111,3 +111,18 @@ def test_the_page_marks_a_stale_cell_and_serves_the_stale_cells(build_agent, web
     assert client.get(f"/n/{nb}").text.count('data-stale="true"') == 1
     assert 'data-stale="true"' in client.get(f"/n/{nb}/cells/{second}").text
     assert client.get("/n/nope/stale").status_code == 404
+
+
+async def test_moving_or_deleting_a_cell_makes_the_cells_below_stale(make_agent):
+    agent = await make_agent(ScriptedLLM([TextChunk("A.")], [TextChunk("B.")], [TextChunk("C.")]))
+    nb = agent.notebooks.create_notebook()
+    a, b, c = (add_ai_cell(agent, nb, prompt=p) for p in "abc")
+    for cell in (a, b, c):
+        await run(agent, nb, cell)
+    assert agent.notebooks.stale_ids(nb) == []
+    agent.notebooks.move_cell(nb, c, "up")  # now a, c, b: c no longer sees b, and b now sees c
+    assert agent.notebooks.stale_ids(nb) == [c, b]
+    agent.notebooks.move_cell(nb, c, "down")
+    assert agent.notebooks.stale_ids(nb) == []
+    agent.notebooks.delete_cell(nb, a)
+    assert agent.notebooks.stale_ids(nb) == [b, c]

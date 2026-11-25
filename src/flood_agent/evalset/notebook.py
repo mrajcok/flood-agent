@@ -3,7 +3,15 @@
 from collections.abc import AsyncIterator
 
 from flood_agent.agent import Agent
+from flood_agent.config import Settings
 from flood_agent.events import Event
+from flood_agent.model_choices import ModelChoices
+
+
+def eval_model_choices(settings: Settings, model: str) -> ModelChoices:
+    """An eval brings its own client for `model`, so `model` is the default (for its Cells, which name none) and can
+    be used, whether or not an API key is set."""
+    return ModelChoices.build(tuple(settings.models), model, has_api_key=True)
 
 
 async def add_cells_above(agent: Agent, notebook_id: str, above: list[dict] | None) -> None:

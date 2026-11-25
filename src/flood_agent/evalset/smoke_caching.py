@@ -29,7 +29,7 @@ from pydantic import ValidationError
 from flood_agent.agent import Agent
 from flood_agent.config import Settings
 from flood_agent.evalset.golden import Question, load_golden
-from flood_agent.evalset.notebook import add_cells_above, run_ai_cell
+from flood_agent.evalset.notebook import add_cells_above, eval_model_choices, run_ai_cell
 from flood_agent.events import TextDelta, TurnError
 from flood_agent.llm import OpenRouterClient, UsageChunk
 
@@ -216,7 +216,7 @@ async def run_notebook(model: str, questions: list[Question], settings: Settings
     results_db, app_db = workdir / "results.db", workdir / "app.db"
     for p in (results_db, app_db):
         p.unlink(missing_ok=True)
-    agent = Agent(replace(settings.agent_config(), model=model, results_db=results_db, app_db=app_db),
+    agent = Agent(replace(settings.agent_config(), choices=eval_model_choices(settings, model), results_db=results_db, app_db=app_db),
                   lambda _model: recorder)
     error, reply, cells = None, "", []
     async with agent:

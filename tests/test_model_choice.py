@@ -84,7 +84,7 @@ def test_an_unknown_model_id_is_rejected_before_any_run_starts(build_agent, web_
 
 def test_with_no_key_a_real_model_is_refused_with_a_clear_message_and_never_faked(build_agent, web_client):
     llm = ScriptedLLM([TextChunk("never")])
-    client = web_client(build_agent(llm), has_api_key=False)
+    client = web_client(build_agent(llm, api_key=False))
 
     response = post_run(client, model=SONNET)
 
@@ -93,7 +93,7 @@ def test_with_no_key_a_real_model_is_refused_with_a_clear_message_and_never_fake
 
 
 def test_with_no_key_every_real_model_shows_as_disabled(build_agent, web_client):
-    page = web_client(build_agent(ScriptedLLM()), has_api_key=False).get("/").text
+    page = web_client(build_agent(ScriptedLLM(), api_key=False)).get("/").text
 
     assert "needs OPENROUTER_API_KEY" in page
     assert re.search(r'disabled(?:"|&#34;):\s*true', page) and len(re.findall(r"disabled(?:\"|&#34;):\s*false", page)) == 1  # only No model is enabled

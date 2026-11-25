@@ -22,7 +22,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from flood_agent import dev_tools, lookup_tables, queries
-from flood_agent.agent import NO_MODEL, Agent, NotebookBusy, NotRefreshable, RefreshFailed, TablesChoice
+from flood_agent.agent import Agent, NotebookBusy, NotRefreshable, RefreshFailed, TablesChoice
 from flood_agent.ai_cell_context import without_stop_note
 from flood_agent.ai_cell_run import resolve_chart_data
 from flood_agent.catalog import TableExpired
@@ -33,7 +33,6 @@ from flood_agent.cell import (
     CannotRun,
     Cell,
     MarkdownCell,
-    ModelEfforts,
     SqlCell,
     SqlDraft,
     SqlRunSettings,
@@ -46,6 +45,7 @@ from flood_agent.cell_kinds import AI, MARKDOWN, SQL
 from flood_agent.context_usage import context_usage
 from flood_agent.events import CountEvent, DisplayEvent, FlagEvent, LlmCallStarted, TextDelta, TraceLive, TurnEnd
 from flood_agent.lookup_tables import InvalidLookupTable
+from flood_agent.model_choices import NO_MODEL
 from flood_agent.notebook_store import COUNT_KIND
 from flood_agent.queries import InvalidSort
 from flood_agent.show_commands import SHOW_COMMANDS
@@ -150,11 +150,9 @@ def _table_display_urls(result_table: str) -> dict:
 NEEDS_KEY = "needs OPENROUTER_API_KEY"
 
 
-def create_app(
-    agent: Agent, picker: list[PickerEntry] | None = None, has_api_key: bool = True, dev: bool = False
-) -> FastAPI:
-    """The Model dropdown lists the curated models, disabled when `has_api_key` is False, then "No model"
-    (Fake Mode, always selectable). The `picker` Canned Prompts show on the page only while it is selected.
+def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool = False) -> FastAPI:
+    """The Model dropdown lists the Agent's model choices: the curated models, disabled when they cannot be used
+    here (no API key), then "No model" (Fake Mode, always selectable). The `picker` Canned Prompts show on the page only while it is selected.
     `dev` (set by flood-agent-dev only) adds the button and endpoint that shift the Telemetry Database to now."""
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -186,25 +184,26 @@ def create_app(
             "picker": picker or [], "dev": dev,
         }
 
-    models = [{"id": m.id, "label": m.label, "disabled": not has_api_key, "efforts": m.efforts,
-               "default_effort": m.default_effort} for m in agent.config.models]
+    choices = agent.config.choices
+    models = [{"id": m.id, "label": m.label, "disabled": not choices.can_use(m.id), "efforts": m.efforts,
+               "default_effort": m.default_effort} for m in choices.models]
     models.append({"id": NO_MODEL, "label": "No model", "disabled": False, "efforts": [], "default_effort": None})
-    default_model = agent.config.model if has_api_key else NO_MODEL
+    default_model = choices.default_model
 
     def usage(tokens: int | None, model: str | None = None) -> dict:
         """The Context Usage for `model` (the default when None); No model has no window."""
-        return context_usage(tokens, agent.config.window_of(model or default_model))
+        return context_usage(tokens, choices.window_of(model or default_model))
 
     def known_model(choice: str) -> str:
         """`choice` if it is in the curated list or NO_MODEL (422 otherwise)."""
-        if choice not in {m["id"] for m in models}:
+        if not choices.is_known(choice):
             raise HTTPException(422, f"unknown model {choice!r}")
         return choice
 
     def model_choice(raw: str | None) -> str:
         """The model a prompt asked for, checked against the curated list and the API key (422 otherwise)."""
         choice = known_model(raw or default_model)
-        if choice != NO_MODEL and not has_api_key:
+        if not choices.can_use(choice):
             raise HTTPException(422, f"{choice} {NEEDS_KEY}: set it in .env and restart the app")
         return choice
 
@@ -212,7 +211,7 @@ def create_app(
         """The Effort a prompt asked for (None: the model's default), checked against the model's levels (422 otherwise)."""
         if model == NO_MODEL or not raw:
             return None
-        spec = agent.config.spec_of(model)
+        spec = choices.spec_of(model)
         assert spec is not None  # model_choice has already vetted it
         if raw not in spec.efforts:
             raise HTTPException(422, f"{spec.label} does not offer reasoning effort {raw!r}")
@@ -240,18 +239,10 @@ def create_app(
         label = next((m["label"] for m in models if m["id"] == model), model)
         return f"{label} · {effort or 'no effort'} · ≤ {max_rows:,} rows"
 
-    def can_use(model_id: str) -> bool:
-        """Whether a model can be used here: in the list, and not disabled (no API key)."""
-        return any(m["id"] == model_id and not m["disabled"] for m in models)
-
-    def efforts_of(model_id: str) -> ModelEfforts | None:
-        """A curated model's Efforts, whether or not it can be used here; None outside the list."""
-        spec = agent.config.spec_of(model_id)
-        return ModelEfforts(tuple(spec.efforts), spec.default_effort) if spec else None
-
     def add_ai_cell(notebook_id: str, after: str | None = None, before: str | None = None) -> str:
         last = agent.notebooks.last_settings(AI)
-        d = starting_ai_draft(AiRunSettings.from_stored(last) if last else None, can_use, efforts_of, default_model)
+        d = starting_ai_draft(AiRunSettings.from_stored(last) if last else None, choices.can_use, choices.efforts_of,
+                              default_model)
         s = d.settings
         return agent.add_ai_cell(notebook_id, d.prompt, model=s.model, effort=s.effort, max_rows=s.max_rows,
                                  after=after, before=before)

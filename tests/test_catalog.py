@@ -172,15 +172,15 @@ def _physical(path):
         con.close()
 
 
-def _swept_world(tmp_path, clock, *physical):
+def _swept_world(tmp_path, clock, runner, *physical):
     results = _results_db(tmp_path, *physical)
     app_db = tmp_path / "app.db"
-    catalog = Catalog(app_db, clock, default_retention_ms=HOUR, results_db=results)
+    catalog = Catalog(app_db, clock, default_retention_ms=HOUR, results_db=results, runner=runner)
     return catalog, "cell-1", results
 
 
-def test_sweep_drops_an_expired_table_and_keeps_it_registered_as_dropped(tmp_path, clock):
-    catalog, cid, results = _swept_world(tmp_path, clock, "rt_a", "rt_b")
+def test_sweep_drops_an_expired_table_and_keeps_it_registered_as_dropped(tmp_path, clock, query_runner):
+    catalog, cid, results = _swept_world(tmp_path, clock, query_runner(), "rt_a", "rt_b")
     register_table(catalog, "rt_a", cid, 1)
     clock.now += HOUR - 1
     register_table(catalog, "rt_b", cid, 1)
@@ -194,10 +194,10 @@ def test_sweep_drops_an_expired_table_and_keeps_it_registered_as_dropped(tmp_pat
     assert "rt_b" in catalog
 
 
-def test_sweep_drops_only_old_unregistered_rt_tables(tmp_path, clock):
+def test_sweep_drops_only_old_unregistered_rt_tables(tmp_path, clock, query_runner):
     clock.now = int(datetime(2026, 5, 1, 12, 0, 0).timestamp() * 1000)  # local time, like the name generator
     catalog, cid, results = _swept_world(
-        tmp_path, clock, "rt_20260501_105959", "rt_20260501_110001", "rt_20260501_105900_2", "lookup_x", "mine", "rt_live")
+        tmp_path, clock, query_runner(), "rt_20260501_105959", "rt_20260501_110001", "rt_20260501_105900_2", "lookup_x", "mine", "rt_live")
     register_table(catalog, "rt_live", cid, 1)
     register_table(catalog, "mine", cid, 1)
 
@@ -237,10 +237,11 @@ def _exists(path, name) -> bool:
 
 
 @pytest.fixture
-def full(tmp_path, clock):
+def full(tmp_path, clock, query_runner):
     """(catalog, cell id, results db path): a Catalog that knows a Telemetry table `flows`."""
     app_db, results_db = tmp_path / "app.db", tmp_path / "results.db"
-    catalog = Catalog(app_db, clock, default_retention_ms=HOUR, results_db=results_db, telemetry_tables=["flows"])
+    catalog = Catalog(app_db, clock, default_retention_ms=HOUR, results_db=results_db, telemetry_tables=["flows"],
+                      runner=query_runner())
     return catalog, "cell-1", results_db
 
 

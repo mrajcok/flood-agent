@@ -214,26 +214,23 @@ def _spec_problem(node, fields: set[str], top: bool = True) -> str | None:
 
 def create_server(settings: ServerSettings, clock: Callable[[], int] | None = None) -> FastMCP:
     """The MCP server with its tools bound to these static settings. Tables are read through a read-only
-    Catalog view, whose liveness is worked out on every call from `clock` (epoch ms; the wall clock by default)."""
+    Catalog view, whose liveness is worked out on every call from `clock` (epoch ms; the wall clock by default).
+    Every tool queries through the server's own query runner (ADR 0002), which lets a SELECT read any live Result
+    Table, Saved Table or Lookup Table (ADR 0003), or none without an app database."""
     mcp = FastMCP("flood-agent")
     catalog = (
         CatalogView(settings.app_db, clock or _wall_clock, settings.telemetry_tables) if settings.app_db else None
     )
+    runner = queries.QueryRunner(settings.telemetry_db, settings.results_db, settings.query_timeout_s,
+                                 catalog.readable if catalog else set)
 
     @mcp.tool()
     @_in_worker_thread
     def run_query(sql: str, title: str, ctx: Context) -> str:
         """Run a single read-only SELECT over the Telemetry Database. The output is stored in
         a new Result Table (named by the tool). Returns only Query Metadata, never rows."""
-        # The SELECT may reference any live Result Table (ADR 0003).
-        allowed = catalog.readable() if catalog else set()
         # The raw error and the executed CTAS travel in the outcome's internal part, for the Trace only.
-        return encode(from_query_result(
-            queries.run_query(
-                settings.telemetry_db, settings.results_db, sql, settings.query_timeout_s,
-                _max_result_rows(ctx), allowed, title,
-            )
-        ))
+        return encode(from_query_result(runner.run(sql, _max_result_rows(ctx), title)))
 
     @mcp.tool()
     @_in_worker_thread
@@ -241,10 +238,7 @@ def create_server(settings: ServerSettings, clock: Callable[[], int] | None = No
         """Run a single read-only SELECT that returns one number, e.g. SELECT COUNT(*) FROM ...
         No Result Table is created; the count itself is returned to you and you may state it. The user
         is shown it as a one-line Count Display labelled with `title` (a short name for what is counted)."""
-        allowed = catalog.readable() if catalog else set()
-        return encode(from_query_result(
-            queries.run_count_query(settings.telemetry_db, settings.results_db, sql, settings.query_timeout_s, allowed)
-        ))
+        return encode(from_query_result(runner.count(sql)))
 
     @mcp.tool()
     @_in_worker_thread
@@ -255,7 +249,7 @@ def create_server(settings: ServerSettings, clock: Callable[[], int] | None = No
         kind = catalog.kind_of(name) if catalog else None
         kind = kind if kind in ("lookup", "result", "saved") else None
         name = CatalogView.canonical(name)
-        described = queries.describe_results_table(settings.results_db, name) if kind else None
+        described = runner.describe(name) if kind else None
         if described is None or kind is None:
             return encode(Failed("No such table."))
         return encode(TableDescribed(name, kind, described["columns"], described["row_count"]))
@@ -268,7 +262,7 @@ def create_server(settings: ServerSettings, clock: Callable[[], int] | None = No
         # Any live Result Table may be shown (ADR 0003).
         live = catalog is not None and result_table in catalog
         result_table = CatalogView.canonical(result_table)
-        available = queries.result_table_columns(settings.results_db, result_table) if live else None
+        available = runner.result_columns(result_table) if live else None
         if available is None:
             return encode(Failed(_not_showable(catalog, result_table)))
         if columns is not None and not set(columns) <= set(available):
@@ -292,13 +286,13 @@ def create_server(settings: ServerSettings, clock: Callable[[], int] | None = No
         if table != CatalogView.canonical(table):  # the Display records the table under its canonical name
             vega_lite_spec = rename_data_source(vega_lite_spec, table, CatalogView.canonical(table))
             table = CatalogView.canonical(table)
-        count = queries.result_table_row_count(settings.results_db, table) if live else None
+        count = runner.row_count(table) if live else None
         if count is None:
             return encode(Failed(f"{_not_showable(catalog, table)} {CHART_GUIDANCE}"))
         violation = _find_violation(vega_lite_spec, table)
         if violation:
             return encode(Failed(violation))
-        columns = queries.result_table_columns(settings.results_db, table) or []
+        columns = runner.result_columns(table) or []
         problem = _spec_problem(vega_lite_spec, set(columns) | _transform_outputs(vega_lite_spec))
         if problem:
             return encode(Failed(f"{problem} The columns of {table} are: {', '.join(columns)}."))

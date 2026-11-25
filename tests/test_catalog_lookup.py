@@ -24,10 +24,10 @@ def clock():
 
 
 @pytest.fixture
-def lookups(tmp_path, clock):
+def lookups(tmp_path, clock, query_runner):
     """(catalog, results database path): a Catalog that can write Lookup Tables."""
     app_db, results_db = tmp_path / "app.db", tmp_path / "results.db"
-    return Catalog(app_db, clock, results_db=results_db), results_db
+    return Catalog(app_db, clock, results_db=results_db, runner=query_runner()), results_db
 
 
 def stored(results_db, name):

@@ -35,7 +35,8 @@ def run_reference(telemetry_db: Path, scratch_results_db: Path, sql: str) -> tup
     made = runner.run(sql, sys.maxsize)
     if not made["success"]:
         raise RuntimeError(f"Reference SQL failed: {made.get('raw_error', made['error'])}")
-    columns, rows = runner.all_rows(made["result_table"])
-    fetched = list(rows)
-    runner.drop(made["result_table"])
-    return columns, fetched
+    try:
+        columns, rows = runner.all_rows(made["result_table"])
+        return columns, list(rows)
+    finally:
+        runner.drop(made["result_table"])

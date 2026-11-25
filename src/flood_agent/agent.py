@@ -81,7 +81,8 @@ class Parts:
 def build_parts(config: AgentConfig, semantic_layer: SemanticLayer, client_for: ClientFactory,
                 connection: ConnectionProvider, started: Callable[[], bool]) -> Parts:
     """Build Notebook storage, the query runner, the Table Catalog, Table Replacement, the Run modules and the Notebook
-    module, wired together. `connection` and `started` are the MCP connection the AI Cell Runs use and whether it is up."""
+    module, wired together. `connection` and `started` are the MCP connection the AI Cell Runs use and whether it
+    is up."""
     store = NotebookStore(config.app_db, config.clock)
     # The runner asks for the readable set only when it queries, by which time the Catalog below exists.
     runner = QueryRunner(config.telemetry_db, config.results_db, config.query_timeout_s, lambda: tables.readable())

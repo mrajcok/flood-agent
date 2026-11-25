@@ -313,7 +313,8 @@ def query_runner(tmp_path, telemetry_db):
     test's results database (the one `config_for_test` names). `readable` is the set of tables a query may read,
     which the test may change afterwards, or a function returning it (e.g. a Catalog's `readable`)."""
 
-    def _build(readable: set[str] | Callable[[], set[str]] | None = None, timeout_s: float | None = None) -> QueryRunner:
+    def _build(readable: set[str] | Callable[[], set[str]] | None = None,
+               timeout_s: float | None = None) -> QueryRunner:
         tables = set() if readable is None else readable
         return QueryRunner(telemetry_db, tmp_path / "results.db",
                            default_agent_config().query_timeout_s if timeout_s is None else timeout_s,

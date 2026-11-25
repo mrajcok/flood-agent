@@ -670,24 +670,27 @@ class QueryRunner:
         On failure the dict has a sanitised `error` (safe for the LLM) and, for SQLite errors,
         a `raw_error` that the caller must keep for the Trace and strip before the LLM.
         Setting `stop` aborts the query; the failure then has `stopped` set."""
+        readable = self._readable()  # outside: a failure to read the set is not a query failure
         with _database_errors():
-            return _run_query(self._telemetry_db, self._results_db, sql, self._timeout_s, max_rows, self._readable(),
-                              title, stop)
+            return _run_query(self._telemetry_db, self._results_db, sql, self._timeout_s, max_rows, readable, title,
+                              stop)
 
     def count(self, sql: str, stop: threading.Event | None = None) -> dict:
         """Run a `SELECT COUNT(...) FROM ...` and return the number itself (no Result Table). The one
         place a telemetry-derived value reaches the LLM, so the select list must be a bare COUNT and
         the result one non-negative integer. Failures carry `raw_error` like `run`."""
+        readable = self._readable()
         with _database_errors():
-            return _run_count_query(self._telemetry_db, self._results_db, sql, self._timeout_s, self._readable(), stop)
+            return _run_count_query(self._telemetry_db, self._results_db, sql, self._timeout_s, readable, stop)
 
     def explain(self, sql: str) -> list[dict]:
         """The Query Plan of a single read-only SELECT, as steps of {depth, detail} in plan order. No rows are
         read and nothing is created. Runs under the same rails as `run` (validation, read-only connection,
         authorizer, timeout). Raises `QueryRejected` or `QueryFailed`; their messages are for the user, never
         the LLM."""
+        readable = self._readable()
         with _database_errors():
-            return _explain_query(self._telemetry_db, self._results_db, sql, self._timeout_s, self._readable())
+            return _explain_query(self._telemetry_db, self._results_db, sql, self._timeout_s, readable)
 
     def describe(self, name: str) -> dict | None:
         """A results-database table's columns and row count; None if it is not there."""
@@ -706,7 +709,7 @@ class QueryRunner:
             return _result_table_row_count(self._results_db, name)
 
     def result_columns(self, name: str) -> list[str] | None:
-        """A Result Table's column names; None if it is not there."""
+        """A results-database table's column names; None if it is not there."""
         with _database_errors():
             return _result_table_columns(self._results_db, name)
 

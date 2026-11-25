@@ -75,7 +75,9 @@ def records(db, where="1"):
 
 def test_timeouts_have_no_answer_and_are_declared_after_five_seconds(db):
     timeouts = records(db, "status = 'Timeout'")
-    assert 0.001 < len(timeouts) / len(records(db)) < 0.008  # about 0.3% of requests
+    baseline = outside_attacks(db)
+    rate = len(records(db, f"status = 'Timeout' AND {baseline}")) / len(records(db, baseline))
+    assert 0.001 < rate < 0.008  # about 0.3% of requests
     for r in timeouts:
         assert r["etime"] == r["stime"] + 5000
         assert (r["latency_ms"], r["result_code"], r["experimental_result_code"]) == (None,) * 3
@@ -103,7 +105,7 @@ def test_an_answered_record_has_exactly_one_result_code_and_its_answer_delay(db)
 
 
 def test_about_two_percent_of_s6a_records_fail_with_a_3gpp_experimental_result(db):
-    s6a = records(db, "application_id = 16777251")
+    s6a = records(db, f"application_id = 16777251 AND {outside_attacks(db)}")
     failed = [r for r in s6a if r["experimental_result_code"] is not None]
     assert 0.01 < len(failed) / len(s6a) < 0.035
     assert {r["experimental_result_code"] for r in failed} == {5001, 5004, 5420}

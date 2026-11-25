@@ -9,7 +9,7 @@
 # and allows extra columns (see evalset/compare.py).
 # Windows (UTC): SYN flood 2026-01-02 14:00-14:30, amplification 2026-01-04 03:00-03:20,
 # port scan 2026-01-06 20:00-20:15, DNS tunnelling 2026-01-07 09:00-10:00. Dataset window is 2026-01-01 .. 2026-01-08.
-# Diameter attack windows (UTC): spoofed CLRs 2026-01-03 22:00-22:30.
+# Diameter attack windows (UTC): spoofed CLRs 2026-01-03 22:00-22:30, HSS signaling flood 2026-01-05 16:00-16:20.
 
 # ---- common metrics and basics -------------------------------------------------
 - id: total-flow-count
@@ -307,3 +307,15 @@
       AND etime >= 1767477600000 AND etime < 1767479400000
     GROUP BY origin_realm ORDER BY subscribers DESC LIMIT 1
   crosscheck: {attack: diameter_clr_spoof, equals: {origin_realm: source_realm, subscribers: victim_count}}
+
+- id: diameter-hss-flood
+  question: >-
+    When was the HSS shedding load (answering DIAMETER_TOO_BUSY), and which host flooded it? Return one row:
+    the first and the last minute with such an answer (each as the minute's start in epoch milliseconds,
+    by etime), and the origin host that sent the most of the requests so answered.
+  sql: >-
+    SELECT (MIN(etime) / 60000) * 60000 AS first_minute, (MAX(etime) / 60000) * 60000 AS last_minute,
+      (SELECT origin_host FROM diameter WHERE result_code = 3004
+       GROUP BY origin_host ORDER BY COUNT(*) DESC LIMIT 1) AS origin_host
+    FROM diameter WHERE result_code = 3004
+  crosscheck: {attack: diameter_hss_flood, equals: {first_minute: start, origin_host: source_host}}

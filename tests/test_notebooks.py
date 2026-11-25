@@ -12,7 +12,6 @@ from flood_agent.catalog import CellRun
 from flood_agent.cell import AiCell
 from flood_agent.events import TextDelta, TraceReady
 from flood_agent.llm import TextChunk
-from flood_agent.notebook import NotebookBusy
 from flood_agent.notebook_store import NotebookStore
 
 SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
@@ -117,24 +116,6 @@ async def test_the_system_prompt_lists_tables_from_cells_above_and_the_cells_own
     assert listed(b_step2).index(a_table.name) < listed(b_step2).index(b_table.name)  # in creation order
     assert a_table.name in c_step and b_table.name in c_step
     assert a_table.owner == CellRun(a, run_of(agent, nb, 0)["id"])
-
-
-async def test_a_second_cell_cannot_run_while_one_runs_in_the_notebook(make_agent):
-    agent = await make_agent(Slow())
-    nb, other = agent.notebooks.create_notebook(), agent.notebooks.create_notebook()
-    a, b = add_ai_cell(agent, nb, prompt="a"), add_ai_cell(agent, nb, prompt="b")
-    c = add_ai_cell(agent, other, prompt="c")
-
-    first = agent.notebooks.run_cell(nb, a)
-    await anext(first)
-    with pytest.raises(NotebookBusy):
-        await anext(agent.notebooks.run_cell(nb, b))
-    agent.client_for = lambda model: ScriptedLLM([TextChunk("fine")])
-    await run(agent, other, c)  # a different notebook is free to run meanwhile
-    assert agent.notebooks.stop_cell(nb, a)
-    assert any(isinstance(e, TraceReady) for e in [ev async for ev in first])
-    agent.client_for = lambda model: ScriptedLLM([TextChunk("fine")])
-    await run(agent, nb, b)  # and once it ended, so is this one
 
 
 async def test_stopping_a_cell_keeps_what_it_streamed_and_records_the_run_as_stopped(make_agent):

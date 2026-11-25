@@ -9,7 +9,6 @@ from flood_agent.catalog import CellRun
 from flood_agent.events import LlmCallStarted, TextDelta, TraceLive, TraceReady, TurnEnd
 from flood_agent.llm import TextChunk
 from flood_agent.mcp_connection import McpConnection
-from flood_agent.notebook import UnknownCell
 
 SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
 
@@ -67,17 +66,6 @@ async def test_stopping_after_earlier_calls_keeps_them_and_a_valid_history(make_
     assert messages[1]["tool_calls"]
     trace = next(e.trace for e in events if isinstance(e, TraceReady))
     assert trace["totals"]["llm_steps"] == 2
-
-
-async def test_stopping_an_unknown_or_finished_cell_does_nothing(make_agent):
-    agent = await make_agent(ScriptedLLM([TextChunk("hi")]))
-    nb = agent.notebooks.create_notebook()
-    with pytest.raises(UnknownCell):
-        agent.notebooks.stop_cell(nb, "nope")
-    cell = add_ai_cell(agent, nb, prompt="q")
-    async for _ in agent.notebooks.run_cell(nb, cell):
-        pass
-    assert not agent.notebooks.stop_cell(nb, cell)
 
 
 async def test_a_run_announces_each_llm_call_and_each_trace_entry_as_it_happens(make_agent):

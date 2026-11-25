@@ -18,7 +18,6 @@ from flood_agent.catalog import CellRun
 from flood_agent.cell import SqlRunSettings
 from flood_agent.events import CountEvent, DisplayEvent, TurnEnd
 from flood_agent.llm import TextChunk
-from flood_agent.notebook_store import DEFAULT_MAX_ROWS
 
 SELECT = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
 SLOW = ("WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 400000000) "
@@ -111,16 +110,6 @@ def test_a_query_ending_in_limit_is_recognised_but_a_limit_in_a_subquery_is_not(
     for sql in ("SELECT dport FROM flows", "SELECT dport FROM flows WHERE dport IN (SELECT dport FROM flows LIMIT 5)",
                 "SELECT 'limit 5' AS note FROM flows"):
         assert not queries.ends_with_limit(sql), sql
-
-
-async def test_an_old_sql_cell_saved_without_a_row_cap_runs_with_the_default_row_cap(build_agent, notebook_store):
-    agent = build_agent(ScriptedLLM())
-    nb = agent.notebooks.create_notebook()
-    cell = notebook_store.add_cell(nb, "sql", {"sql": "SELECT dport FROM flows"})
-    await run(agent, nb, cell)
-
-    r = run_of(agent, nb, 0)
-    assert r["status"] == "ok" and r["settings"] == {"max_rows": DEFAULT_MAX_ROWS, "command": ""}
 
 
 async def test_re_running_replaces_the_table_under_the_same_name(build_agent):
@@ -288,24 +277,6 @@ async def test_the_user_sees_the_raw_error_the_ai_cell_below_the_value_free_one_
     assert f"Failed: {r['error']}" in seen
     assert "nosuchcolumn_7" not in seen.split("\n", 1)[1]  # past the SQL itself, the error carries no names
     assert any("nosuchcolumn_7" in rec.getMessage() and rec.levelno == logging.WARNING for rec in caplog.records)
-
-
-async def test_a_second_cell_cannot_run_while_a_sql_cell_runs_and_the_agents_stop_reaches_it(make_agent):
-    import pytest
-
-    from flood_agent.notebook import NotebookBusy
-    agent = await make_agent(ScriptedLLM(), query_timeout_s=60)
-    nb = agent.notebooks.create_notebook()
-    slow = add_sql_cell(agent, nb, sql=SLOW)
-    other = add_sql_cell(agent, nb, sql="SELECT 1 AS one")
-    task = asyncio.create_task(run(agent, nb, slow))
-    await asyncio.sleep(0.3)
-    with pytest.raises(NotebookBusy):
-        await run(agent, nb, other)
-    assert agent.notebooks.running_cell(nb) == slow
-    assert agent.notebooks.stop_cell(nb, slow)  # the Notebook module's Stop reaches a running SQL Cell
-    await asyncio.wait_for(task, 10)
-    assert run_of(agent, nb, 0)["status"] == "stopped" and agent.notebooks.running_cell(nb) is None
 
 
 async def test_a_re_run_never_overwrites_a_saved_table_it_makes_a_new_one(build_agent):

@@ -30,15 +30,6 @@ def readable(client, name):
     return client.get(f"/api/results/{name}/rows").status_code == 200
 
 
-def test_preview_counts_live_result_tables_and_saved_tables_separately(build_agent, web_client):
-    client, _, nb, c1, c2, _, _ = two_tables(build_agent, web_client)
-    assert client.get(f"/n/{nb}/delete-preview").json() == {"result": 1, "saved": 1}
-    assert client.get(f"/n/{nb}/cells/{c1}/delete-preview").json() == {"result": 1, "saved": 0}
-    assert client.get(f"/n/{nb}/cells/{c2}/delete-preview").json() == {"result": 0, "saved": 1}
-    assert client.get("/n/nope/delete-preview").status_code == 404
-    assert client.get(f"/n/{nb}/cells/nope/delete-preview").status_code == 404
-
-
 def test_deleting_a_notebook_keeps_its_tables_by_default_until_they_expire(build_agent, web_client):
     client, clock, nb, _, _, first, second = two_tables(build_agent, web_client)
     assert client.post(f"/n/{nb}/delete", follow_redirects=False).status_code == 303
@@ -61,23 +52,11 @@ def test_a_kept_table_is_queryable_from_another_notebook(build_agent, web_client
     assert "ok" in stream and "failed" not in stream
 
 
-def test_deleting_result_tables_drops_only_rt_tables_and_keeps_saved_tables(build_agent, web_client):
-    client, _, nb, _, _, first, second = two_tables(build_agent, web_client)
-    client.post(f"/n/{nb}/delete", data={"tables": "delete_rt"})
-    assert not readable(client, first) and readable(client, second)
-
-
 def test_delete_all_is_not_a_choice(build_agent, web_client):
     client, _, nb, c1, _, first, second = two_tables(build_agent, web_client)
     assert client.post(f"/n/{nb}/delete", data={"tables": "delete_all"}).status_code == 422
     assert client.post(f"/n/{nb}/cells/{c1}/delete", data={"tables": "delete_all"}).status_code == 422
     assert readable(client, first) and readable(client, second)
-
-
-def test_unknown_choice_is_rejected_and_deletes_nothing(build_agent, web_client):
-    client, _, nb, _, _, first, _ = two_tables(build_agent, web_client)
-    assert client.post(f"/n/{nb}/delete", data={"tables": "bogus"}).status_code == 422
-    assert readable(client, first) and f'href="/n/{nb}"' in client.get("/").text
 
 
 def test_cell_deletion_keeps_by_default_and_honours_the_choices(build_agent, web_client):
@@ -86,12 +65,6 @@ def test_cell_deletion_keeps_by_default_and_honours_the_choices(build_agent, web
     assert readable(client, first)
     client.post(f"/n/{nb}/cells/{c2}/delete", data={"tables": "delete_rt"})
     assert readable(client, second)  # renamed, so delete_rt keeps it
-
-
-def test_cell_delete_rt_drops_that_cells_result_tables_only(build_agent, web_client):
-    client, _, nb, c1, _, first, second = two_tables(build_agent, web_client)
-    client.post(f"/n/{nb}/cells/{c1}/delete", data={"tables": "delete_rt"})
-    assert not readable(client, first) and readable(client, second)
 
 
 def test_ownership_is_the_recorded_run_not_the_first_mention(build_agent, web_client, notebook_store):

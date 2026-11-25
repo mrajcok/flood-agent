@@ -9,3 +9,7 @@ Anything that starts a subprocess or a task (a `start()`, a restart path) owns i
 A lifecycle object rejects reuse: a second `start()`, or `start()` after `aclose()`, raises a clear error.
 
 Closing an owner (the Agent, the app lifespan) cancels and awaits the work it started before releasing what that work uses.
+
+## One test per rule
+
+Each rule is tested once, at the deepest interface that owns it (a module's own test file, e.g. `tests/test_notebook.py` for the Notebook module). Shallower layers test only their wiring: one test that a route reaches the module and maps its errors, not the rule again through HTTP or the Agent. A test that repeats a rule already tested deeper is duplication: delete the shallower one. A change that adds tests at a new, deeper interface deletes the tests it subsumes.

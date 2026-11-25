@@ -1,23 +1,13 @@
-"""Notebook management: rename, delete (keep or delete the `rt_` tables), search and ordering by activity."""
+"""Notebook management: ordering by activity, search, and the rename, delete and search routes. Trimming, blank
+titles and deleting with its tables are tested in test_notebook.py."""
 
-import asyncio
 from dataclasses import replace
 
-import pytest
 from conftest import Clock, ScriptedLLM, add_ai_cell, add_markdown_cell, add_sql_cell
-from test_cell_operations import _cell_with_rt_and_saved
 from test_notebook_page import new_notebook
-from test_notebooks import Slow, run
+from test_notebooks import run
 
 from flood_agent.llm import TextChunk
-from flood_agent.notebook import NotebookBusy, UnknownNotebook
-
-
-def gone(agent, nb) -> bool:
-    """Whether the Notebook is deleted: unknown, and no longer listed."""
-    with pytest.raises(UnknownNotebook):
-        agent.notebooks.notebook_page(nb)
-    return nb not in [n["id"] for n in agent.notebooks.list_notebooks()]
 
 
 async def test_rename_changes_the_title_but_not_the_activity_order(make_agent):
@@ -27,10 +17,6 @@ async def test_rename_changes_the_title_but_not_the_activity_order(make_agent):
     agent.notebooks.rename_notebook(first, "  Port scans  ")
     assert agent.notebooks.notebook_page(first).title == "Port scans"
     assert [n["id"] for n in agent.notebooks.list_notebooks()] == before
-    with pytest.raises(ValueError):
-        agent.notebooks.rename_notebook(first, "   ")
-    with pytest.raises(KeyError):
-        agent.notebooks.rename_notebook("nope", "x")
     assert second in before
 
 
@@ -63,37 +49,6 @@ async def test_search_matches_titles_and_cell_text_but_never_answers(make_agent)
     assert found == {by_title, by_prompt, by_sql, by_note}
     assert agent.notebooks.list_notebooks("zebra") == []
     assert len(agent.notebooks.list_notebooks("  ")) == 5  # blank: everything
-
-
-async def test_deleting_a_notebook_keeps_or_deletes_its_rt_tables_and_always_keeps_saved(make_agent):
-    agent, nb, a, rt, current = await _cell_with_rt_and_saved(make_agent)
-    assert agent.notebooks.notebook_delete_preview(nb) == {"result": 2, "saved": 1}
-    agent.notebooks.delete_notebook(nb, "delete_rt")
-    assert rt.name not in agent.tables and current.name not in agent.tables
-    assert "kept_ports" in agent.tables
-    assert gone(agent, nb)
-
-
-async def test_deleting_with_the_keep_choice_leaves_the_tables_to_expire(make_agent):
-    agent, nb, a, rt, current = await _cell_with_rt_and_saved(make_agent)
-    agent.notebooks.delete_notebook(nb, "keep")
-    assert rt.name in agent.tables and current.name in agent.tables and "kept_ports" in agent.tables
-    assert gone(agent, nb)
-
-
-async def test_a_notebook_with_a_running_cell_cannot_be_deleted(make_agent):
-    agent = await make_agent(Slow())
-    nb = agent.notebooks.create_notebook()
-    a = add_ai_cell(agent, nb, prompt="a")
-    task = asyncio.create_task(run(agent, nb, a))
-    while agent.notebooks.running_cell(nb) != a:
-        await asyncio.sleep(0.01)
-    with pytest.raises(NotebookBusy):
-        agent.notebooks.delete_notebook(nb)
-    agent.notebooks.stop_cell(nb, a)
-    await task
-    agent.notebooks.delete_notebook(nb)
-    assert gone(agent, nb)
 
 
 # --- through the page's routes -----------------------------------------------------------------------

@@ -76,14 +76,6 @@ def test_deleting_a_notebook_lands_on_the_home_page_which_opens_another(build_ag
     assert client.get("/", follow_redirects=False).headers["location"] == f"/n/{first}"
 
 
-def test_an_unknown_notebook_or_cell_is_404(build_agent, web_client):
-    client = web_client(build_agent(ScriptedLLM()))
-    nb, cell = new_notebook(client)
-    assert client.get("/n/nope").status_code == 404
-    assert client.get(f"/n/{nb}/cells/nope").status_code == 404
-    assert client.get(f"/n/nope/cells/{cell}").status_code == 404
-
-
 def test_running_a_cell_streams_the_answer_and_its_footer_shows_the_run(build_agent, web_client):
     llm = ScriptedLLM([tool_call("run_query", sql=SQL, title="t")], [TextChunk("Port 8443 is busiest.")])
     client = web_client(build_agent(llm))
@@ -281,20 +273,6 @@ def test_a_second_tab_opened_mid_run_shows_the_cell_running_until_it_stops(build
     client.post(f"/n/{nb}/cells/{cell}/stop")
     reader.join(5)
     assert POLLS not in client.get(f"/n/{nb}/cells/{cell}").text
-
-
-def test_deleting_a_later_cell_leaves_an_earlier_cells_table_readable_and_foreign_cells_404(build_agent, web_client):
-    client = web_client(build_agent(ScriptedLLM(*table_script("one"), *table_script("two"), [TextChunk("other")])))
-    nb, first, _ = ask(client, "first question")
-    _, second, _ = ask(client, "second question", nb)
-    other, other_cell, _ = ask(client, "elsewhere")
-    first_table = re.search(r"/api/results/([a-z0-9_]+)/rows", client.get(f"/n/{nb}/cells/{first}").text).group(1)
-
-    assert client.post(f"/n/{nb}/cells/{second}/delete", data={"tables": "delete_rt"}).status_code == 204
-    assert client.get(f"/api/results/{first_table}/rows").status_code == 200  # made by the first cell
-    assert client.post(f"/n/{nb}/cells/{other_cell}/delete").status_code == 404  # another notebook's cell
-    assert client.post(f"/n/{other}/cells/{second}/delete").status_code == 404  # a cell that is gone
-    assert "first question" in client.get(f"/n/{nb}").text and "elsewhere" in client.get(f"/n/{other}").text
 
 
 def test_no_notebook_text_says_session(build_agent, web_client):

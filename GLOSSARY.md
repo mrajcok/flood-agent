@@ -1,6 +1,6 @@
 # CANOPY
 
-Flood stores network telemetry (NetFlow/IPFIX). CANOPY is a notebook-based analyst tool for exploring that telemetry and investigating volumetric attacks, without ever exposing telemetry data to the LLM.
+Flood stores network telemetry (NetFlow/IPFIX, DNS and Diameter signaling). CANOPY is a notebook-based analyst tool for exploring that telemetry and investigating volumetric attacks, without ever exposing telemetry data to the LLM.
 
 ## Actors
 
@@ -15,7 +15,7 @@ _Avoid_: Agent (for the model)
 ## Data
 
 **Telemetry Database**:
-The read-only store of network telemetry (Flow Records and DNS Response Records); SQLite here, Ocient in production.
+The read-only store of network telemetry (Flow Records, DNS Response Records and Diameter Transaction Records); SQLite here, Ocient in production.
 _Avoid_: Source DB, flow DB
 
 **Flow Record**:
@@ -25,6 +25,14 @@ _Avoid_: Flow (ambiguous), packet, event
 **DNS Response Record**:
 One resource record of a DNS response, with its response's header and question. Responses with no records are not recorded.
 _Avoid_: DNS query, DNS packet, DNS event
+
+**Diameter Transaction Record**:
+One Diameter request seen at the tap point, paired with its answer if one arrived. A request with no answer is a timeout. A retransmitted request is its own record. Answers with no request are not recorded.
+_Avoid_: response, xDR, CDR, message
+
+**Subscriber**:
+A mobile customer, identified by IMSI; the MSISDN (phone number) and IMEI (device) are its attributes.
+_Avoid_: user (the CANOPY user), customer, UE
 
 **Circuit**:
 An opaque 12-character identifier for the monitored link a Flow Record was observed on.

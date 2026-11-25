@@ -9,19 +9,17 @@ The data starts at START_MS; the dev server can shift it to end at the current t
 
 import argparse
 import json
-import math
 import random
 import sqlite3
 from pathlib import Path
 
-START_MS = 1767225600000  # 2026-01-01T00:00:00Z
-DAYS = 7
-MIN_MS = 60_000
-TOTAL_MINUTES = DAYS * 24 * 60
-END_MS = START_MS + DAYS * 86_400_000  # the end of the generated data; the eval runner's fixed "now"
+from flood_agent import diameter_generator
+from flood_agent.generator_clock import DAYS, END_MS, MIN_MS, START_MS, TOTAL_MINUTES, diurnal
+
+__all__ = ["END_MS", "INDEXES", "SCHEMA", "START_MS", "expected_rows", "generate"]
 BASE_PER_MIN = 190.0  # mean baseline Flow Records per minute at scale 1.0
 
-SCHEMA = """
+FLOWS_AND_DNS_SCHEMA = """
 CREATE TABLE flows (
   sip TEXT, dip TEXT, sport INTEGER, dport INTEGER, proto INTEGER,
   tcp_flags INTEGER, circuit TEXT, stime INTEGER, etime INTEGER,
@@ -33,6 +31,7 @@ CREATE TABLE dns_metadata (
   rsection TEXT, rname TEXT, rtype INTEGER, rclass INTEGER, rttl INTEGER, rdata TEXT, etime INTEGER
 );
 """
+SCHEMA = FLOWS_AND_DNS_SCHEMA + diameter_generator.SCHEMA
 INDEXES = """
 CREATE INDEX flows_etime ON flows(etime);
 CREATE INDEX flows_sip ON flows(sip);
@@ -40,7 +39,7 @@ CREATE INDEX flows_dip ON flows(dip);
 CREATE INDEX dns_metadata_etime ON dns_metadata(etime);
 CREATE INDEX dns_metadata_sip ON dns_metadata(sip);
 CREATE INDEX dns_metadata_dip ON dns_metadata(dip);
-"""
+""" + diameter_generator.INDEXES
 
 # type -> (start minute offset, duration minutes, flows per minute at scale 1.0)
 ATTACK_PLAN = {
@@ -50,14 +49,8 @@ ATTACK_PLAN = {
 }
 
 
-def _diurnal(minute: int) -> float:
-    """Multiplier peaking mid-afternoon UTC, trough in the small hours."""
-    h = (minute % 1440) / 60
-    return 1 + 0.6 * math.sin(2 * math.pi * (h - 9) / 24)
-
-
 def _base_count(minute: int, scale: float) -> int:
-    return max(0, round(BASE_PER_MIN * scale * _diurnal(minute)))
+    return max(0, round(BASE_PER_MIN * scale * diurnal(minute)))
 
 
 def expected_rows(scale: float) -> int:
@@ -325,11 +318,13 @@ def generate(db_path, seed: int = 1, scale: float = 1.0) -> list[dict]:
     amp_count, tunnel_count = _generate_dns(con, seed, dns_flows, amp_dns_flows, tunnel_flows)
     attacks["amplification"].update(dns_question=AMP_QUESTION, dns_qtype=AMP_QTYPE, dns_response_count=amp_count)
     attacks["dns_tunnel"].update(flow_count=len(tunnel_flows), dns_response_count=tunnel_count)
+    ue_candidates = set(clients) - {TUNNEL_CLIENT}  # an attack's host is no Subscriber
+    diameter_attacks = diameter_generator.generate_diameter(con, seed, scale, ue_candidates)
     con.executescript(INDEXES)
     con.commit()
     con.close()
 
-    out = list(attacks.values())
+    out = list(attacks.values()) + diameter_attacks
     Path(str(db_path) + ".attacks.json").write_text(json.dumps(out, indent=2) + "\n")
     return out
 
@@ -341,7 +336,9 @@ def main(argv=None) -> None:
     p.add_argument("--scale", type=float, default=1.0)
     a = p.parse_args(argv)
     attacks = generate(a.db, seed=a.seed, scale=a.scale)
-    print(f"wrote {a.db}; attacks: " + ", ".join(f"{x['type']} ({x['flow_count']} flows)" for x in attacks))
+    counts = [f"{x['flow_count']} flows" if "flow_count" in x else f"{x['record_count']} records" for x in attacks]
+    named = ", ".join(f"{x['type']} ({n})" for x, n in zip(attacks, counts, strict=True))
+    print(f"wrote {a.db}; attacks: {named}")
 
 
 if __name__ == "__main__":

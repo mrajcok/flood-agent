@@ -45,7 +45,7 @@ tmp_path_retention_policy = "failed"
 markers = [
     "subprocess: runs the MCP server as a real stdio subprocess",
     "network: needs internet access; skipped unless run with --network",
-    "generated_data: telemetry_db is the generated database (with dns_metadata), not the small test one",
+    "generated_data: telemetry_db is the generated database (with DNS and Diameter rows), not the small test one",
     "browser: drives the real app in headless system Chrome (Playwright)",
 ]
 

@@ -1,10 +1,13 @@
 """The dev time shift moves every Telemetry table by one delta."""
 
+import shutil
 import sqlite3
+from pathlib import Path
 
 from flood_agent.dev_tools import shift_to_now
 from flood_agent.semantic_layer import SemanticLayer
 
+REAL = Path(__file__).parent.parent / "semantic_layer.yaml"
 NOW = 1_800_000_000_000
 TWO = """\
 dialect: sqlite
@@ -22,6 +25,23 @@ tables:
     columns:
       seen: {type: INTEGER}
 """
+
+
+def test_the_three_shipped_telemetry_tables_move_by_one_delta(generated_db, tmp_path):
+    db = Path(shutil.copy(generated_db, tmp_path / "telemetry.db"))
+
+    def bounds():
+        con = sqlite3.connect(db)
+        try:
+            return {t: con.execute(f"SELECT MIN(etime), MAX(etime) FROM {t}").fetchone()
+                    for t in ("flows", "dns_metadata", "diameter")}
+        finally:
+            con.close()
+
+    before = bounds()
+    delta = shift_to_now(db, SemanticLayer(REAL), NOW)
+    assert delta == NOW - max(hi for _, hi in before.values())
+    assert bounds() == {t: (lo + delta, hi + delta) for t, (lo, hi) in before.items()}
 
 
 def test_every_table_moves_by_one_delta_from_the_latest_time_key_overall(tmp_path):

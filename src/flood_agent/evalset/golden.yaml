@@ -9,6 +9,7 @@
 # and allows extra columns (see evalset/compare.py).
 # Windows (UTC): SYN flood 2026-01-02 14:00-14:30, amplification 2026-01-04 03:00-03:20,
 # port scan 2026-01-06 20:00-20:15, DNS tunnelling 2026-01-07 09:00-10:00. Dataset window is 2026-01-01 .. 2026-01-08.
+# Diameter attack windows (UTC): spoofed CLRs 2026-01-03 22:00-22:30, HSS signaling flood 2026-01-05 16:00-16:20.
 
 # ---- common metrics and basics -------------------------------------------------
 - id: total-flow-count
@@ -281,3 +282,64 @@
 - id: dns-suffix
   question: How many DNS Response Records have a question name under example.org (ignoring letter case)? Return a single number.
   sql: SELECT COUNT(*) AS records FROM dns_metadata WHERE ENDSWITH(LOWER(question), '.example.org')
+
+# ---- Diameter ----------------------------------------------------------------------
+- id: diameter-total
+  question: How many Diameter Transaction Records are there in total? Return a single number.
+  sql: SELECT COUNT(*) AS records FROM diameter
+
+- id: diameter-by-interface
+  question: How many Diameter Transaction Records are there for each interface? Return application_id and the count.
+  sql: SELECT application_id, COUNT(*) AS records FROM diameter GROUP BY application_id
+
+- id: diameter-subscriber-for-flow
+  question: >-
+    Which Subscriber held the client IP address 10.3.131.107 when its flows between 2026-01-03 10:00 and 13:00 UTC
+    ended? Return the IMSI.
+  sql: >-
+    WITH s AS (SELECT session_id, MIN(ue_ip_address) AS ue_ip_address, MIN(imsi) AS imsi,
+    MIN(CASE WHEN cc_request_type = 1 THEN stime END) AS session_start,
+    COALESCE(MAX(CASE WHEN cc_request_type = 3 THEN etime END), MAX(etime)) AS session_end
+    FROM diameter WHERE application_id = 16777238
+    AND etime >= 1767434400000 - 86400000 AND etime < 1767445200000 + 86400000 GROUP BY session_id)
+    SELECT DISTINCT imsi FROM (
+    SELECT s.imsi, f.sip, f.dip FROM flows f JOIN s ON f.sip = s.ue_ip_address
+    WHERE f.etime >= 1767434400000 AND f.etime < 1767445200000
+    AND f.etime BETWEEN s.session_start AND s.session_end
+    UNION ALL
+    SELECT s.imsi, f.sip, f.dip FROM flows f JOIN s ON f.dip = s.ue_ip_address
+    WHERE f.etime >= 1767434400000 AND f.etime < 1767445200000
+    AND f.etime BETWEEN s.session_start AND s.session_end)
+    WHERE sip = '10.3.131.107' OR dip = '10.3.131.107'
+
+- id: diameter-inbound-roamers
+  question: How many distinct inbound roaming Subscribers appear in the Diameter data? Return a single number.
+  sql: SELECT COUNT(DISTINCT imsi) AS subscribers FROM diameter WHERE home_plmn_id <> '00101'
+
+- id: diameter-timeouts
+  question: How many Diameter transactions timed out? Return a single number.
+  sql: SELECT COUNT(*) AS timeouts FROM diameter WHERE status = 'Timeout'
+
+- id: diameter-clr-spoof
+  question: >-
+    Between 2026-01-03 22:00 and 22:30 UTC, spoofed Diameter Cancel-Location-Requests (CLRs) came from a realm
+    other than the home network's (epc.mnc001.mcc001.3gppnetwork.org). Which realm sent them, and how many
+    distinct Subscribers were cancelled? Return the origin realm and the number of Subscribers.
+  sql: >-
+    SELECT origin_realm, COUNT(DISTINCT imsi) AS subscribers FROM diameter
+    WHERE command_code = 317 AND origin_realm <> 'epc.mnc001.mcc001.3gppnetwork.org'
+      AND etime >= 1767477600000 AND etime < 1767479400000
+    GROUP BY origin_realm ORDER BY subscribers DESC LIMIT 1
+  crosscheck: {attack: diameter_clr_spoof, equals: {origin_realm: source_realm, subscribers: victim_count}}
+
+- id: diameter-hss-flood
+  question: >-
+    When was the HSS shedding load (answering DIAMETER_TOO_BUSY), and which host flooded it? Return one row:
+    the first and the last minute with such an answer (each as the minute's start in epoch milliseconds,
+    by etime), and the origin host that sent the most of the requests so answered.
+  sql: >-
+    SELECT (MIN(etime) / 60000) * 60000 AS first_minute, (MAX(etime) / 60000) * 60000 AS last_minute,
+      (SELECT origin_host FROM diameter WHERE result_code = 3004
+       GROUP BY origin_host ORDER BY COUNT(*) DESC LIMIT 1) AS origin_host
+    FROM diameter WHERE result_code = 3004
+  crosscheck: {attack: diameter_hss_flood, equals: {first_minute: start, origin_host: source_host}}

@@ -58,7 +58,7 @@ class Settings(BaseSettings):
         description="MODELS: the curated model list, the [[models]] tables in defaults.toml (not set from .env)."
     )
     telemetry_db: Path = Field(
-        description="Read-only network telemetry (flow records and DNS response metadata). Create with: uv run python -m flood_agent.generator data/telemetry.db"
+        description="Read-only network telemetry (flow records, DNS response metadata and Diameter signaling). Create with: uv run python -m flood_agent.generator data/telemetry.db"
     )
     results_db: Path = Field(description="Writable database holding Result Tables.")
     app_db: Path = Field(

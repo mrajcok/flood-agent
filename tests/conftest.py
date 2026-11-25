@@ -80,6 +80,42 @@ tables:
 """
 
 
+DIAMETER_SEED, DIAMETER_SCALE = 7, 0.05  # enough records for every kind of Diameter transaction, timeouts included
+HOME_PLMN = "00101"
+HOME_REALM = "epc.mnc001.mcc001.3gppnetwork.org"
+
+
+def sql_rows(db: Path, sql: str, *args, row_factory=None) -> list:
+    con = sqlite3.connect(db)
+    con.row_factory = row_factory
+    try:
+        return con.execute(sql, args).fetchall()
+    finally:
+        con.close()
+
+
+def table_rows(db: Path, table: str) -> list[tuple]:
+    return sql_rows(db, f"SELECT * FROM {table} ORDER BY rowid")
+
+
+def diameter_records(db: Path, where: str = "1", *args, order: str = "rowid") -> list[dict]:
+    sql = f"SELECT * FROM diameter WHERE {where} ORDER BY {order}"
+    return [dict(r) for r in sql_rows(db, sql, *args, row_factory=sqlite3.Row)]
+
+
+def attack_entries(db: Path) -> list[dict]:
+    """The generator's attacks.json beside `db`."""
+    return json.loads(Path(f"{db}.attacks.json").read_text())
+
+
+@pytest.fixture(scope="session")
+def diameter_db(tmp_path_factory) -> Path:
+    """The generated Telemetry Database the Diameter tests read; they must not change it."""
+    path = tmp_path_factory.mktemp("diameter") / "telemetry.db"
+    generate(path, seed=DIAMETER_SEED, scale=DIAMETER_SCALE)
+    return path
+
+
 def pytest_addoption(parser):
     parser.addoption("--network", action="store_true", help="also run tests marked `network` (need internet access)")
     parser.addoption("--browser", action="store_true", help="also run tests marked `browser` (headless system Chrome)")
@@ -117,7 +153,7 @@ def telemetry_db_template(tmp_path_factory) -> Path:
 
 @pytest.fixture(scope="session")
 def generated_db(tmp_path_factory) -> Path:
-    """A small generated Telemetry Database: flows plus dns_metadata, with the amplification attack."""
+    """A small generated Telemetry Database: every table, with the injected attacks."""
     path = tmp_path_factory.mktemp("generated") / "telemetry.db"
     generate(path, seed=1, scale=0.01)
     return path
@@ -126,16 +162,21 @@ def generated_db(tmp_path_factory) -> Path:
 @pytest.fixture
 def telemetry_db(request, tmp_path: Path, telemetry_db_template: Path) -> Path:
     """A per-test copy of the session's test Telemetry Database. A test marked `generated_data`
-    gets the generated one instead, since only it has dns_metadata."""
+    gets the generated one instead, since only it has DNS and Diameter rows."""
     generated = request.node.get_closest_marker("generated_data") is not None
     source = request.getfixturevalue("generated_db") if generated else telemetry_db_template
     return Path(shutil.copy(source, tmp_path / "telemetry.db"))
 
 
+def needs_generated_data(canned_id: str) -> bool:
+    """Whether a Canned Prompt queries DNS or Diameter rows, which only the generated database has."""
+    return canned_id.startswith(("dns-", "diameter-"))
+
+
 def canned_params(canned_prompts):
-    """Parametrize arguments for Canned Prompts: the DNS ones are marked `generated_data`."""
+    """Parametrize arguments for Canned Prompts: the DNS and Diameter ones are marked `generated_data`."""
     return [
-        pytest.param(c, id=c.id, marks=[pytest.mark.generated_data] if "dns" in c.id else [])
+        pytest.param(c, id=c.id, marks=[pytest.mark.generated_data] if needs_generated_data(c.id) else [])
         for c in canned_prompts
     ]
 
@@ -153,7 +194,7 @@ def leakable_values(path: Path, canned) -> set[str]:
     plain numbers that the SQL text contains by coincidence (1000, 3600, 15000), so for them a
     number is only checked from 6 digits up; large counts, byte totals and IPs as integers still are."""
     script = repr(canned)
-    min_digits = 6 if canned.id.startswith("dns-") else 4
+    min_digits = 6 if needs_generated_data(canned.id) else 4
     return {
         v for v in all_telemetry_values(path)
         if len(v) >= (min_digits if v.isdigit() else 4) and v not in script

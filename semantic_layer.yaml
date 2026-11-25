@@ -151,17 +151,21 @@ tables:
         example: 5001
         enum: {4181: DIAMETER_AUTHENTICATION_DATA_UNAVAILABLE, 5001: DIAMETER_ERROR_USER_UNKNOWN, 5004: DIAMETER_ERROR_ROAMING_NOT_ALLOWED, 5420: DIAMETER_ERROR_UNKNOWN_EPS_SUBSCRIPTION}
       imsi: {type: TEXT, description: "The Subscriber's IMSI: digits, leading zeros kept", example: "001010000000000"}
-      msisdn: {type: TEXT, description: "The Subscriber's phone number, E.164 digits without +. On S6a only on a successfully answered ULR and on an IDR", example: "99912345678"}
+      msisdn: {type: TEXT, description: "The Subscriber's phone number, E.164 digits without +. On every Gx and Gy record; on S6a only on a successfully answered ULR and on an IDR", example: "99912345678"}
       imei: {type: TEXT, description: "Device identity, 15 digits; S6a ULR only", example: "000000000000000"}
       home_plmn_id: {type: TEXT, description: "The Subscriber's home network, MCC+MNC digits. The home PLMN is '00101', so a Subscriber with any other value is an inbound roamer", example: "00101"}
       visited_plmn_id: {type: TEXT, description: "Network serving the Subscriber, MCC+MNC digits; S6a ULR and AIR. A home Subscriber with another value here is an outbound roamer", example: "00101"}
-      ue_ip_address: {type: TEXT, description: "The Subscriber device's IPv4 address; Gx and Gy only", example: "192.0.2.33"}
+      ue_ip_address: {type: TEXT, description: "The Subscriber device's IPv4 address; Gx and Gy only. The probe correlates a session, so every record of it has it (on Gy, from PS-Information). An address passes between Subscribers, so match it by session time (see flows_subscriber_join)", example: "192.0.2.33"}
       apn: {type: TEXT, description: "Access Point Name; Gx and Gy only", example: "internet"}
-      cc_request_type: {type: INTEGER, description: "Credit-control request type; Gx and Gy only", example: 1}
+      cc_request_type:
+        type: INTEGER
+        description: Credit-control request type; Gx and Gy only. A Gx session (one session_id) lasts at most 24 h
+        example: 1
+        enum: {1: INITIAL_REQUEST, 2: UPDATE_REQUEST, 3: TERMINATION_REQUEST, 4: EVENT_REQUEST}
       cc_request_number: {type: INTEGER, description: "Number of the credit-control request within its session; Gx and Gy only", example: 0}
       rat_type:
         type: INTEGER
-        description: Radio access technology; S6a ULR and Gx
+        description: Radio access technology; S6a ULR and Gx CCR-I
         example: 1004
         enum: {1000: UTRAN, 1001: GERAN, 1004: EUTRAN, 1005: EUTRAN-NB-IoT, 1006: NR, 1007: LTE-M}
       cancellation_type:
@@ -262,3 +266,23 @@ metrics:
       WHERE f.etime >= <start> AND f.etime < <end> AND d.etime >= <start> AND d.etime < <end>
       AND d.etime BETWEEN f.stime AND f.etime
       GROUP BY d.question, d.qtype ORDER BY total_bytes DESC LIMIT 10
+  flows_subscriber_join:
+    description: >-
+      Which Subscriber held a flow's client IP when the flow ended: one row per flow and matching Gx
+      session, so wrap it to filter or group (e.g. by imsi). A session spans its INITIAL's stime to its
+      TERMINATION's etime, or to its latest record if no TERMINATION is inside the bound. Sessions cap
+      at 24 h, so the diameter etime bound is the flows bound widened by 86400000 ms on each side.
+      Keep the two equality joins in a UNION ALL; do not join on an OR.
+    sql: >-
+      WITH s AS (SELECT session_id, MIN(ue_ip_address) AS ue_ip_address, MIN(imsi) AS imsi,
+      MIN(msisdn) AS msisdn, MIN(CASE WHEN cc_request_type = 1 THEN stime END) AS session_start,
+      COALESCE(MAX(CASE WHEN cc_request_type = 3 THEN etime END), MAX(etime)) AS session_end
+      FROM diameter WHERE application_id = 16777238
+      AND etime >= <start> - 86400000 AND etime < <end> + 86400000 GROUP BY session_id)
+      SELECT s.imsi, s.msisdn, f.sip, f.dip, f.bytes, f.etime FROM flows f
+      JOIN s ON f.sip = s.ue_ip_address WHERE f.etime >= <start> AND f.etime < <end>
+      AND f.etime BETWEEN s.session_start AND s.session_end
+      UNION ALL
+      SELECT s.imsi, s.msisdn, f.sip, f.dip, f.bytes, f.etime FROM flows f
+      JOIN s ON f.dip = s.ue_ip_address WHERE f.etime >= <start> AND f.etime < <end>
+      AND f.etime BETWEEN s.session_start AND s.session_end

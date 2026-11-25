@@ -26,10 +26,12 @@ CREATE TABLE diameter (
 INDEXES = """
 CREATE INDEX diameter_etime ON diameter(etime);
 CREATE INDEX diameter_imsi ON diameter(imsi);
+CREATE INDEX diameter_ue_ip_address ON diameter(ue_ip_address);
 """
 
-S6A = 16777251  # application_id
+S6A, GX, GY = 16777251, 16777238, 4  # application_id
 ULR, CLR, AIR, IDR, DSR, PUR, NOR = 316, 317, 318, 319, 320, 321, 323  # command_code
+CCR = 272  # command_code, Gx and Gy
 SUCCESS = 2001
 TIMEOUT_MS = 5000  # the probe's answer timeout
 TIMEOUT_RATE = 0.003
@@ -87,12 +89,13 @@ class World:
     subscribers: tuple[Subscriber, ...]
     records: list[Record] = field(default_factory=list)
     attacks: list[dict] = field(default_factory=list)
+    client_ips: tuple[str, ...] = ()  # the distinct client IPs of `flows`, sorted
 
     @classmethod
-    def build(cls, seed: int, scale: float) -> "World":
+    def build(cls, seed: int, scale: float, client_ips: tuple[str, ...] = ()) -> "World":
         rng = random.Random(seed + 5)
         home, partners = home_network(rng), partner_networks(rng)
-        return cls(rng, seed, home, partners, subscribers(rng, home, partners, scale))
+        return cls(rng, seed, home, partners, subscribers(rng, home, partners, scale), client_ips=client_ips)
 
     def fork(self, name: str) -> "World":
         """This World with an RNG of its own, adding to the same records and attacks."""
@@ -114,14 +117,17 @@ class World:
         names_destination: bool = False,
         result_code: int | None = SUCCESS,
         experimental_result_code: int | None = None,
+        latency_ms: float | None = None,
         **columns,
     ) -> Record:
         """Record one request from `origin` to `destination`, and its answer.
 
         `session_id` defaults to a new Session-Id. `columns` sets other `diameter` columns. A few
         requests time out and are sent again. Returns the answered record, which is then the
-        retransmission, so that what follows a request can be timed from its `etime`."""
-        latency = self._latency(origin, destination)
+        retransmission, so that what follows a request can be timed from its `etime`. Given
+        `latency_ms`, the answer takes that long and the request does not time out."""
+        may_time_out = latency_ms is None
+        latency = self._latency(origin, destination) if latency_ms is None else latency_ms
         record = Record(
             stime=stime, etime=stime + round(latency), latency_ms=latency, status="Answered",
             session_id=session_id or f"{origin.host};{self.rng.getrandbits(32)};{self.rng.getrandbits(32)}",
@@ -134,7 +140,7 @@ class World:
             names_destination=names_destination, **columns,
         )
         self.records.append(record)
-        return self.time_out(record) if self.rng.random() < TIMEOUT_RATE else record
+        return self.time_out(record) if may_time_out and self.rng.random() < TIMEOUT_RATE else record
 
     def time_out(self, record: Record) -> Record:
         """Take the answer away from `record`, and record the request being sent again.

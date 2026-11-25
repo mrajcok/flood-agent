@@ -228,6 +228,61 @@
   expect:
     displays: [table]
 
+- id: diameter-per-hour
+  prompt: Chart Diameter transactions per hour by interface
+  steps:
+    - tool_calls:
+        - name: run_query
+          args:
+            sql: >-
+              SELECT (etime / 3600000) * 3600000 AS bucket_ms, application_id, COUNT(*) AS records FROM diameter
+              WHERE etime >= 1767225600000 AND etime < 1767830400000
+              GROUP BY bucket_ms, application_id ORDER BY bucket_ms, application_id
+            title: Diameter transactions per hour by interface
+    - text: "Here are the hourly Diameter transactions, one line per interface."
+      tool_calls:
+        - name: show_chart
+          args:
+            vega_lite_spec:
+              data: {name: "{result_table}"}
+              mark: line
+              encoding:
+                x: {field: bucket_ms, type: temporal, scale: {type: utc}, title: Time (UTC)}
+                y: {field: records, type: quantitative, title: Transactions}
+                color: {field: application_id, type: nominal, title: Interface}
+  expect:
+    displays: [chart]
+
+- id: diameter-top-subscribers
+  prompt: Which Subscribers sent the most traffic?
+  steps:
+    - tool_calls:
+        - name: run_query
+          args:
+            sql: >-
+              WITH s AS (SELECT session_id, MIN(ue_ip_address) AS ue_ip_address, MIN(imsi) AS imsi,
+              MIN(CASE WHEN cc_request_type = 1 THEN stime END) AS session_start,
+              COALESCE(MAX(CASE WHEN cc_request_type = 3 THEN etime END), MAX(etime)) AS session_end
+              FROM diameter WHERE application_id = 16777238
+              AND etime >= 1767225600000 - 86400000 AND etime < 1767830400000 + 86400000 GROUP BY session_id)
+              SELECT imsi, SUM(bytes) AS total_bytes FROM (
+              SELECT s.imsi, f.bytes FROM flows f JOIN s ON f.sip = s.ue_ip_address
+              WHERE f.etime >= 1767225600000 AND f.etime < 1767830400000
+              AND f.etime BETWEEN s.session_start AND s.session_end
+              UNION ALL
+              SELECT s.imsi, f.bytes FROM flows f JOIN s ON f.dip = s.ue_ip_address
+              WHERE f.etime >= 1767225600000 AND f.etime < 1767830400000
+              AND f.etime BETWEEN s.session_start AND s.session_end)
+              GROUP BY imsi ORDER BY total_bytes DESC LIMIT 10
+            title: Top Subscribers by flow bytes
+    - text: "Here are the 10 Subscribers whose flows carried the most bytes, in either direction."
+      tool_calls:
+        - name: show_table
+          args:
+            result_table: "{result_table}"
+  expect:
+    displays: [table]
+
 - id: chained-query
   prompt: Total bytes by port, then show the top 3 ports from that result
   steps:

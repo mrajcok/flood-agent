@@ -10,23 +10,27 @@ end: the records of the sources before it stay as they were. An attack draws fro
 - `network`: the Networks, their Nodes and the Subscribers
 - `records`: the Record (one row) and the World, which records each request and its answer
 - `s6a`: the baseline MME-HSS traffic
+- `sessions`: the Gx and Gy data sessions, which hold some of the `flows` client IPs
 """
 
 import sqlite3
+from collections.abc import Collection
 
-from flood_agent.diameter_generator import s6a
+from flood_agent.diameter_generator import s6a, sessions
 from flood_agent.diameter_generator.records import COLUMNS, INDEXES, SCHEMA, World
 
 __all__ = ["INDEXES", "SCHEMA", "generate_diameter"]
 
 SOURCES = (
     s6a.baseline,
+    sessions.data_sessions,
 )
 
 
-def generate_diameter(con: sqlite3.Connection, seed: int, scale: float) -> list[dict]:
-    """Fill the `diameter` table; return the injected attack records."""
-    world = World.build(seed, scale)
+def generate_diameter(con: sqlite3.Connection, seed: int, scale: float, client_ips: Collection[str]) -> list[dict]:
+    """Fill the `diameter` table; return the injected attack records. Some of `client_ips`, the client
+    IPs of `flows`, become Subscribers' UE IPs."""
+    world = World.build(seed, scale, tuple(sorted(set(client_ips))))
     for source in SOURCES:
         source(world)
     world.records.sort(key=lambda r: (r.etime, r.stime))  # etime order (Time Key stand-in)

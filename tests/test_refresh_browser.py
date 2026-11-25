@@ -10,7 +10,6 @@ from playwright.sync_api import expect
 from test_chart_tooltip_browser import chart_script
 from test_notebook_browser import run_in_new_notebook
 
-from flood_agent import queries
 from flood_agent.llm import TextChunk
 
 RECENT = "SELECT sip, etime FROM flows WHERE etime > now() - 1500 ORDER BY etime"
@@ -54,14 +53,14 @@ def test_refresh_updates_the_table_in_place_and_moves_its_as_of_time(build_agent
 
 def test_the_control_is_disabled_while_a_refresh_runs(build_agent, live_page, monkeypatch):
     agent, _, page, _ = ask_for_recent_table(build_agent, live_page, monkeypatch)
-    started, release, real = threading.Event(), threading.Event(), queries.run_query
+    started, release, real = threading.Event(), threading.Event(), agent.queries.run
 
     def slow(*args, **kwargs):
         started.set()
         release.wait(5)
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(queries, "run_query", slow)
+    monkeypatch.setattr(agent.queries, "run", slow)
     button = page.locator(".display .table-name").get_by_role("button", name="Refresh")
     button.click()
     assert started.wait(5)

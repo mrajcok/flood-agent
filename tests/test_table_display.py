@@ -7,9 +7,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import ScriptedLLM, query_limits, register_table
-
-from flood_agent import queries
+from conftest import ScriptedLLM, register_table
 
 LAYER = """\
 dialect: sqlite
@@ -38,7 +36,7 @@ def env(build_agent, web_client, semantic_layer_path):
     client = web_client(agent)
 
     def table(sql=GEN):
-        meta = queries.run_query(agent.config.telemetry_db, agent.config.results_db, sql, **query_limits())
+        meta = agent.queries.run(sql, 1_000_000)
         assert meta["success"], meta
         register_table(agent.tables, meta["result_table"])
         return meta["result_table"]

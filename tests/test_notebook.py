@@ -7,8 +7,19 @@ from contextlib import closing
 
 import pytest
 
+from flood_agent import ai_cell_context
 from flood_agent.catalog import CellRun
-from flood_agent.cell import AiDraft, AiRunSettings, CannotRun, MarkdownDraft, SqlDraft, SqlRunSettings
+from flood_agent.cell import (
+    AiCell,
+    AiDraft,
+    AiRunSettings,
+    CannotRun,
+    MarkdownCell,
+    MarkdownDraft,
+    SqlCell,
+    SqlDraft,
+    SqlRunSettings,
+)
 from flood_agent.cell_kinds import AI, MARKDOWN, SQL
 from flood_agent.events import TurnEnd
 from flood_agent.model_choices import NO_MODEL
@@ -411,3 +422,88 @@ def test_copy_to_markdown_cell_inserts_the_answer_below_and_saves_the_tables_nam
     assert isinstance(draft, MarkdownDraft) and draft.text == "The answer." and not draft.send_to_ai
     assert [d["table"] for d in draft.displays] == ["top_ports", "rt_b"]
     assert live(parts, cell) == {"top_ports", "rt_b"}
+
+
+# --- reads for the page ------------------------------------------------------------------------------------------
+
+
+def ran_with_context(parts, cell, fingerprint: str) -> None:
+    """Record a finished Run of an AI Cell as sent a context with this fingerprint, as the AI Cell Run module would."""
+    run_id = parts.store.start_run(cell, "q", {"model": NO_MODEL, "effort": None, "max_rows": 10}, fingerprint)
+    parts.store.finish_run(run_id, "ok")
+
+
+def notebook_with_a_stale_cell(parts) -> tuple[str, list[str]]:
+    """A Notebook of: an AI Cell whose Run was sent what it would be sent now (nothing), an AI Cell whose Run was sent
+    something else (Stale), a never-run SQL Cell and a Markdown Cell."""
+    nbs = parts.notebooks
+    nb = nbs.create_notebook("Ports")
+    fresh, stale = nbs.add_cell(nb, AI), nbs.add_cell(nb, AI)
+    ran_with_context(parts, fresh, ai_cell_context.fingerprint([]))  # nothing above it: an empty context
+    ran_with_context(parts, stale, "a context from before")
+    return nb, [fresh, stale, sql_cell(parts, nb), nbs.add_cell(nb, MARKDOWN)]
+
+
+def test_the_notebook_page_has_its_title_its_typed_cells_in_order_and_which_are_stale(notebook_parts):
+    parts = notebook_parts()
+    nb, (fresh, stale, sql, note) = notebook_with_a_stale_cell(parts)
+    page = parts.notebooks.notebook_page(nb)
+    assert page.id == nb and page.title == "Ports"
+    assert [c.cell.id for c in page.cells] == [fresh, stale, sql, note]
+    assert [type(c.cell) for c in page.cells] == [AiCell, AiCell, SqlCell, MarkdownCell]
+    assert [c.stale for c in page.cells] == [False, True, False, False]
+    assert page.stale_ids == [stale]
+    assert page.cells[1].run is not None and page.cells[1].run["status"] == "ok" and page.cells[2].run is None
+    with pytest.raises(UnknownNotebook):
+        parts.notebooks.notebook_page("nope")
+
+
+def test_one_cell_read_is_typed_and_its_stale_agrees_with_the_notebook_page(notebook_parts):
+    parts = notebook_parts()
+    nbs = parts.notebooks
+    nb, cells = notebook_with_a_stale_cell(parts)
+    note = nbs.add_cell(nb, MARKDOWN, "start")  # a ticked note above makes the first Cell Stale too
+    nbs.save_draft(nb, note, MarkdownDraft("Focus on UDP.", True, ()))
+    page = nbs.notebook_page(nb)
+    assert page.stale_ids == cells[:2]
+    for shown in page.cells:
+        one = nbs.page_cell(nb, shown.cell.id)
+        assert (one.cell, one.run, one.stale) == (shown.cell, shown.run, shown.stale)
+
+
+def test_one_cell_read_of_an_unknown_cell_or_notebook_is_refused(notebook_parts):
+    parts = notebook_parts()
+    nbs = parts.notebooks
+    nb, other = nbs.create_notebook(), nbs.create_notebook()
+    theirs = nbs.add_cell(other, AI)
+    for cell in (theirs, "nope"):
+        with pytest.raises(UnknownCell):
+            nbs.page_cell(nb, cell)
+        with pytest.raises(UnknownCell):
+            nbs.run_transcript(nb, cell)
+    with pytest.raises(UnknownNotebook):
+        nbs.page_cell("nope", theirs)
+
+
+def test_a_run_transcript_is_the_latest_runs_messages_and_displays(notebook_parts):
+    parts = notebook_parts()
+    nbs = parts.notebooks
+    nb = nbs.create_notebook()
+    assert nbs.run_transcript(nb, nbs.add_cell(nb, AI)) == []
+    cell = answered_ai_cell(parts, nb)
+    transcript = nbs.run_transcript(nb, cell)
+    assert [i["type"] for i in transcript] == ["message", "display", "display"]
+    assert transcript[0]["message"]["content"] == "The answer."
+    assert [i["result_table"] for i in transcript[1:]] == ["rt_a", "rt_b"]
+
+
+def test_notebooks_are_listed_by_recent_activity_and_searched_by_title_or_cell_text(notebook_parts):
+    parts = notebook_parts()
+    nbs = parts.notebooks
+    ports = nbs.create_notebook("Ports")
+    parts.clock.ms += 1000
+    hosts = nbs.create_notebook("Hosts")
+    nbs.save_draft(hosts, sql_cell(parts, hosts), SqlDraft("SELECT dport FROM flows", SqlRunSettings(10, ""), ""))
+    assert [n["id"] for n in nbs.list_notebooks()] == [hosts, ports]
+    assert [n["title"] for n in nbs.list_notebooks("port")] == ["Hosts", "Ports"]
+    assert [n["title"] for n in nbs.list_notebooks("hos")] == ["Hosts"]

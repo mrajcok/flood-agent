@@ -123,7 +123,7 @@ async def _run_question(model, q, ref, telemetry_db, semantic_layer, client_fact
         lambda _model: llm,
     )
     retries, error, trace = 0, None, None
-    cell_id = None
+    notebook_id = cell_id = None
     start = time.perf_counter()
     try:
         async with agent:
@@ -145,7 +145,7 @@ async def _run_question(model, q, ref, telemetry_db, semantic_layer, client_fact
     if error:
         ok, reason, extra, matched, n = False, "turn failed", 0, None, 0
     else:
-        run = agent.notebook_store.cell(cell_id)["run"] if cell_id else None  # the judge reads the cell's current-Run tables
+        run = agent.notebooks.page_cell(notebook_id, cell_id).run if notebook_id and cell_id else None  # its current Run
         names = [t.name for t in agent.tables.tables_of_run(cell_id, run["id"])] if cell_id and run else []
         ok, reason, extra, matched, n = _judge(q, ref, results_db, names, counts)
     return QuestionResult(

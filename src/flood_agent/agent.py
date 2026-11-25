@@ -89,9 +89,8 @@ def build_parts(config: AgentConfig, semantic_layer: SemanticLayer, client_for: 
         config.app_db, config.clock, config.result_ttl_ms, telemetry_tables=semantic_layer.table_names(),
         results_db=config.results_db, on_rename=store.follow_rename,  # Displays follow a table's new name
     )
-    replacement = TableReplacement(tables, config.telemetry_db, config.results_db, config.query_timeout_s)
-    sql_cells = SqlCellRuns(store, tables, replacement, config.telemetry_db, config.results_db,
-                            config.query_timeout_s, config.clock)
+    replacement = TableReplacement(tables, runner)
+    sql_cells = SqlCellRuns(store, tables, replacement, runner, config.clock)
     ai_cells = AiCellRuns(store, tables, semantic_layer, client_for, connection, started, config.choices.spec_of,
                           config.max_llm_steps, config.max_failed_attempts, config.clock)
     notebooks = Notebooks(store, tables, sql_cells, ai_cells, config.choices)
@@ -196,7 +195,7 @@ class Agent:
 
         Adds per-column display formats from the Semantic Layer."""
         table = self.tables[result_table]
-        data = queries.fetch_rows(self.config.results_db, table.name, columns, **page_args)
+        data = self.queries.fetch_rows(table.name, columns, **page_args)
         data["formats"] = self.semantic_layer.column_formats(data["columns"])
         data["truncated_to"] = table.truncated_to
         data.update(table.to_json())
@@ -252,10 +251,7 @@ class Agent:
             raise KeyError(display_id)
         label = f'Count Display "{definition["title"]}"'
         with self._refresh_guard(("count", display_id), label):
-            result = queries.run_count_query(
-                self.config.telemetry_db, self.config.results_db, definition["sql"], self.config.query_timeout_s,
-                self.tables.readable(),
-            )
+            result = self.queries.count(definition["sql"])
             if not result["success"]:
                 raise RefreshFailed(self._refresh_error(label, result))
             computed_at_ms = self.config.clock()
@@ -264,8 +260,8 @@ class Agent:
 
     def iter_all_rows(self, result_table: str):
         """Internal data path for PSV export of the full Result Table. Not an LLM tool."""
-        return queries.iter_all_rows(self.config.results_db, self.tables[result_table].name)
+        return self.queries.all_rows(self.tables[result_table].name)
 
     def fetch_chart_rows(self, result_table: str) -> list[dict]:
         """Internal data path for the chart-rows endpoint (chart cap). Not an LLM tool."""
-        return queries.fetch_records(self.config.results_db, self.tables[result_table].name, self.config.chart_row_cap)
+        return self.queries.chart_rows(self.tables[result_table].name, self.config.chart_row_cap)

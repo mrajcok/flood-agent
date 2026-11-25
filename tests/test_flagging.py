@@ -33,6 +33,16 @@ async def test_invented_ip_and_large_number_are_flagged(make_agent):
     assert kinds.index("FlagEvent") > max(i for i, k in enumerate(kinds) if k == "TextDelta")
 
 
+async def test_an_invented_imsi_or_msisdn_is_flagged_and_a_typed_one_is_not(make_agent):
+    """Diameter identifiers are plain digits, so the large-number rule covers them unchanged."""
+    llm = ScriptedLLM([TextChunk(
+        "You asked about IMSI 001019990000001 and MSISDN 99900000001; "
+        "I also see IMSI 001019990000002 and MSISDN 99900000002."
+    )])
+    events = await collect(await make_agent(llm), "Look up IMSI 001019990000001 and MSISDN 99900000001")
+    assert flags_of(events) == ["001019990000002", "99900000002"]
+
+
 async def test_values_the_llm_legitimately_knows_are_not_flagged(make_agent):
     llm = ScriptedLLM(
         [tool_call("run_query", sql=SQL + " LIMIT 1000000", title="t")],

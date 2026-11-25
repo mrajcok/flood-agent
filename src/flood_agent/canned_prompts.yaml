@@ -208,6 +208,26 @@
   expect:
     displays: [table]
 
+- id: diameter-failures
+  prompt: Which Diameter requests failed most?
+  steps:
+    - tool_calls:
+        - name: run_query
+          args:
+            sql: >-
+              SELECT command_code, result_code, experimental_result_code, COUNT(*) AS records FROM diameter
+              WHERE etime >= 1767225600000 AND etime < 1767830400000
+              AND COALESCE(result_code, 0) <> 2001 AND COALESCE(experimental_result_code, 0) <> 2001
+              GROUP BY command_code, result_code, experimental_result_code ORDER BY records DESC LIMIT 20
+            title: Failed Diameter requests by command and code
+    - text: "Here are the Diameter requests that failed most. A row with neither code is a timeout."
+      tool_calls:
+        - name: show_table
+          args:
+            result_table: "{result_table}"
+  expect:
+    displays: [table]
+
 - id: chained-query
   prompt: Total bytes by port, then show the top 3 ports from that result
   steps:

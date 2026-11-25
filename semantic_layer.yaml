@@ -15,7 +15,7 @@ tables:
         type: INTEGER
         description: IANA protocol number
         example: 6
-        enum: {6: TCP, 17: UDP, 1: ICMP}
+        enum: {6: TCP, 17: UDP, 1: ICMP, 132: SCTP}
       tcp_flags:
         type: INTEGER
         description: TCP flags bitmask OR'd over the flow; test a flag with e.g. `tcp_flags & 2 != 0` (SYN)
@@ -40,7 +40,7 @@ tables:
         type: INTEGER
         description: IANA protocol number of the transport
         example: 17
-        enum: {6: TCP, 17: UDP, 1: ICMP}
+        enum: {6: TCP, 17: UDP, 1: ICMP, 132: SCTP}
       sport: {type: INTEGER, description: Source port (usually 53), example: 53}
       dport: {type: INTEGER, description: Destination port, example: 51000}
       tid: {type: INTEGER, description: DNS transaction ID, shared by the rows of one response, example: 4711}
@@ -97,6 +97,78 @@ tables:
           first string only. Several values are separated by ^, escaped as \5E inside a value.
         example: "192.0.2.1"
       etime: {type: INTEGER, unit: epoch ms UTC, description: Response capture time (the Time Key), example: 1767225601000}
+  diameter:
+    description: >-
+      One row per Diameter Transaction Record: a request seen at the home network's DRA/DEA, with its
+      answer if one came. A timeout has null answer columns. A retransmitted request is its own row,
+      sharing end_to_end_id. Columns that don't apply to a record's interface or command are null.
+      Always bound etime.
+    columns:
+      stime: {type: INTEGER, unit: epoch ms UTC, description: Request time, example: 1767225600000}
+      etime: {type: INTEGER, unit: epoch ms UTC, description: "Answer time, or for a timeout the time it was declared, 5 s after stime (the Time Key)", example: 1767225601000}
+      latency_ms: {type: REAL, unit: ms, description: Answer delay; null for a timeout, example: 12.5}
+      status: {type: TEXT, description: "'Answered', 'Timeout' (no answer arrived) or 'Retransmission' (a request sent again after a timeout)", example: "Answered"}
+      session_id: {type: TEXT, description: "Diameter Session-Id: <origin host>;<high 32 bits>;<low 32 bits>", example: "host.example.org;12;34"}
+      hop_by_hop_id: {type: INTEGER, description: Hop-by-Hop Identifier (32-bit unsigned), example: 305419896}
+      end_to_end_id: {type: INTEGER, description: "End-to-End Identifier (32-bit unsigned), shared by a request and its retransmissions", example: 2596069104}
+      application_id:
+        type: INTEGER
+        description: The Diameter interface
+        example: 16777251
+        enum: {16777251: S6a, 16777238: Gx, 4: Gy}
+      command_code:
+        type: INTEGER
+        description: The command; the request and its answer share it
+        example: 316
+        enum: {316: ULR, 317: CLR, 318: AIR, 319: IDR, 320: DSR, 321: PUR, 323: NOR, 272: CCR}
+      origin_host: {type: TEXT, description: Host name of the requester, example: "mme.example.org"}
+      origin_realm: {type: TEXT, description: Realm of the requester, example: "epc.mnc001.mcc001.3gppnetwork.org"}
+      destination_host: {type: TEXT, description: "The request's Destination-Host if it sent one, else the answering host; null for a timeout that sent none", example: "hss.example.org"}
+      destination_realm: {type: TEXT, description: Realm the request was sent to, example: "epc.mnc001.mcc001.3gppnetwork.org"}
+      sip: {type: TEXT, description: "IPv4 address of the requester", example: "192.0.2.10"}
+      dip: {type: TEXT, description: "IPv4 address of the responder", example: "198.51.100.20"}
+      sport: {type: INTEGER, description: Requester's transport port, example: 51000}
+      dport: {type: INTEGER, description: Responder's transport port, example: 3868}
+      proto:
+        type: INTEGER
+        description: IANA protocol number of the transport
+        example: 132
+        enum: {6: TCP, 17: UDP, 1: ICMP, 132: SCTP}
+      result_code:
+        type: INTEGER
+        description: >-
+          The answer's Result-Code (base Diameter); null when the answer carries an
+          Experimental-Result instead, or for a timeout. A request failed if neither result_code nor
+          experimental_result_code is 2001. 5001 here is DIAMETER_AVP_UNSUPPORTED, unlike 5001 in
+          experimental_result_code.
+        example: 2001
+        enum: {2001: DIAMETER_SUCCESS, 3002: DIAMETER_UNABLE_TO_DELIVER, 3004: DIAMETER_TOO_BUSY, 4010: DIAMETER_END_USER_SERVICE_DENIED, 4012: DIAMETER_CREDIT_LIMIT_REACHED, 5001: DIAMETER_AVP_UNSUPPORTED, 5012: DIAMETER_UNABLE_TO_COMPLY, 5030: DIAMETER_USER_UNKNOWN}
+      experimental_result_code:
+        type: INTEGER
+        description: >-
+          The answer's Experimental-Result-Code (3GPP); null otherwise. 5001 here is
+          DIAMETER_ERROR_USER_UNKNOWN, unlike 5001 in result_code.
+        example: 5001
+        enum: {4181: DIAMETER_AUTHENTICATION_DATA_UNAVAILABLE, 5001: DIAMETER_ERROR_USER_UNKNOWN, 5004: DIAMETER_ERROR_ROAMING_NOT_ALLOWED, 5420: DIAMETER_ERROR_UNKNOWN_EPS_SUBSCRIPTION}
+      imsi: {type: TEXT, description: "The Subscriber's IMSI: digits, leading zeros kept", example: "001010000000000"}
+      msisdn: {type: TEXT, description: "The Subscriber's phone number, E.164 digits without +. On S6a only on a successfully answered ULR and on an IDR", example: "99912345678"}
+      imei: {type: TEXT, description: "Device identity, 15 digits; S6a ULR only", example: "000000000000000"}
+      home_plmn_id: {type: TEXT, description: "The Subscriber's home network, MCC+MNC digits. The home PLMN is '00101', so a Subscriber with any other value is an inbound roamer", example: "00101"}
+      visited_plmn_id: {type: TEXT, description: "Network serving the Subscriber, MCC+MNC digits; S6a ULR and AIR. A home Subscriber with another value here is an outbound roamer", example: "00101"}
+      ue_ip_address: {type: TEXT, description: "The Subscriber device's IPv4 address; Gx and Gy only", example: "192.0.2.33"}
+      apn: {type: TEXT, description: "Access Point Name; Gx and Gy only", example: "internet"}
+      cc_request_type: {type: INTEGER, description: "Credit-control request type; Gx and Gy only", example: 1}
+      cc_request_number: {type: INTEGER, description: "Number of the credit-control request within its session; Gx and Gy only", example: 0}
+      rat_type:
+        type: INTEGER
+        description: Radio access technology; S6a ULR and Gx
+        example: 1004
+        enum: {1000: UTRAN, 1001: GERAN, 1004: EUTRAN, 1005: EUTRAN-NB-IoT, 1006: NR, 1007: LTE-M}
+      cancellation_type:
+        type: INTEGER
+        description: Why a registration was cancelled; S6a CLR only
+        example: 0
+        enum: {0: MME_UPDATE_PROCEDURE, 1: SGSN_UPDATE_PROCEDURE, 2: SUBSCRIPTION_WITHDRAWAL, 3: UPDATE_PROCEDURE_IWF, 4: INITIAL_ATTACH_PROCEDURE}
 functions:
   now:
     signature: now()
@@ -164,6 +236,19 @@ metrics:
   per_minute_series:
     description: Time series bucketed per minute on the Time Key.
     sql: SELECT (etime / 60000) * 60000 AS minute, SUM(bytes) AS bytes FROM flows WHERE etime >= <start> AND etime < <end> GROUP BY minute ORDER BY minute
+  failure_rate:
+    description: >-
+      Share of Diameter Transaction Records per command that failed: neither result_code nor
+      experimental_result_code is 2001, so timeouts count as failures.
+    sql: >-
+      SELECT command_code, AVG(CASE WHEN result_code = 2001 OR experimental_result_code = 2001
+      THEN 0.0 ELSE 1.0 END) AS failure_rate FROM diameter
+      WHERE etime >= <start> AND etime < <end> GROUP BY command_code
+  timeouts_per_minute:
+    description: Diameter requests that got no answer, bucketed per minute on the Time Key.
+    sql: >-
+      SELECT (etime / 60000) * 60000 AS minute, COUNT(*) AS timeouts FROM diameter
+      WHERE etime >= <start> AND etime < <end> AND status = 'Timeout' GROUP BY minute ORDER BY minute
   flows_dns_join:
     description: >-
       Join Flow Records to DNS Response Records (each DNS response that belongs to a flow). Equal

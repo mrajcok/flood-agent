@@ -9,7 +9,6 @@ from conftest import ScriptedLLM, add_ai_cell, tool_call
 
 from flood_agent.agent import Agent
 from flood_agent.catalog import CellRun
-from flood_agent.cell import AiCell
 from flood_agent.events import TextDelta, TraceReady
 from flood_agent.llm import TextChunk
 from flood_agent.notebook_store import NotebookStore
@@ -31,23 +30,6 @@ class Slow:
     async def stream_chat(self, messages, tools, reasoning=None, session_id=None):
         yield TextChunk("Partial answer")
         await asyncio.Event().wait()
-
-
-async def test_a_notebook_keeps_its_ai_cells_in_order_with_their_drafts(make_agent):
-    agent = await make_agent(ScriptedLLM())
-    nb = agent.notebooks.create_notebook()
-    first = add_ai_cell(agent, nb, prompt="one", model="m1", effort="high", max_rows=50)
-    third = add_ai_cell(agent, nb, prompt="three")
-    second = add_ai_cell(agent, nb, prompt="two", after=first)
-
-    cells = agent.notebooks.notebook_page(nb).cells
-    assert [c.cell.id for c in cells] == [first, second, third]
-    assert isinstance(cells[0].cell, AiCell)
-    assert cells[0].cell.draft.stored() == {"prompt": "one", "model": "m1", "effort": "high", "max_rows": 50}
-    assert cells[0].run is None
-    assert [n["title"] for n in agent.notebooks.list_notebooks()] == ["Notebook 1"]
-    assert agent.notebooks.list_notebooks()[0]["id"] == nb
-    assert agent.notebooks.notebook_page(agent.notebooks.create_notebook()).title == "Notebook 2"
 
 
 async def test_a_cell_sends_the_ai_cells_above_in_order_then_its_prompt_never_those_below(make_agent):

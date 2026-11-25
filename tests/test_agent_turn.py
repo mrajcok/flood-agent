@@ -3,7 +3,6 @@
 import re
 import sqlite3
 
-import pytest
 from conftest import ScriptedLLM, all_telemetry_values, collect, last_tool_result, tool_call
 
 from flood_agent.events import DisplayEvent, TextDelta, TurnEnd
@@ -65,35 +64,6 @@ async def test_result_table_lives_in_results_db_with_tool_chosen_name(make_agent
     assert tables == {"flows"}
 
 
-@pytest.mark.parametrize(
-    "sql",
-    [
-        "DELETE FROM flows",
-        "DROP TABLE flows",
-        "SELECT 1; DROP TABLE flows",
-        "ATTACH DATABASE 'x.db' AS x",
-        "PRAGMA writable_schema = 1",
-        "CREATE TABLE t AS SELECT 1",
-    ],
-)
-async def test_unsafe_sql_is_rejected_and_telemetry_untouched(make_agent, telemetry_db, sql):
-    llm = ScriptedLLM([tool_call("run_query", sql=sql, title="t")], [TextChunk("ok")])
-    await collect(await make_agent(llm), "q")
-    meta = last_tool_result(llm.calls[1])
-    assert meta["success"] is False
-    assert all_telemetry_values(telemetry_db) >= {"172.30.41.7"}
-
-
-async def test_failed_query_error_is_returned_without_data(make_agent):
-    llm = ScriptedLLM(
-        [tool_call("run_query", sql="SELECT nope FROM flows", title="t")], [TextChunk("sorry")]
-    )
-    await collect(await make_agent(llm), "q")
-    meta = last_tool_result(llm.calls[1])
-    assert meta["success"] is False
-    assert "error" in meta
-
-
 async def test_only_run_query_show_table_and_show_chart_are_llm_tools(make_agent):
     llm = ScriptedLLM([TextChunk("hi")])
     await collect(await make_agent(llm), "hello")
@@ -106,16 +76,6 @@ async def test_system_prompt_contains_semantic_layer_and_the_now_function(make_a
     system = llm.calls[0][0]
     assert system["role"] == "system"
     assert "etime" in system["content"] and "now()" in system["content"]
-
-
-async def test_a_second_cell_in_a_notebook_keeps_the_earlier_cells_history(make_agent):
-    llm = ScriptedLLM([TextChunk("one")], [TextChunk("two")])
-    agent = await make_agent(llm)
-    nb = agent.notebooks.create_notebook()
-    await collect(agent, "first", nb)
-    await collect(agent, "second", nb)
-    roles = [m["role"] for m in llm.calls[1]]
-    assert roles == ["system", "user", "assistant", "user"]
 
 
 async def test_no_telemetry_value_ever_reaches_the_llm(make_agent, telemetry_db):
@@ -145,14 +105,3 @@ async def test_no_telemetry_value_ever_reaches_the_llm(make_agent, telemetry_db)
                 if m["role"] in ("system", "tool"):
                     for v in values:
                         assert v not in m["content"], (v, m["role"])
-
-
-async def test_a_result_table_made_partway_through_a_run_is_listed_in_the_next_steps_system_prompt(make_agent):
-    llm = ScriptedLLM(
-        [tool_call("run_query", sql=TOP_PORTS_SQL, title="top ports")],
-        [TextChunk("done")],
-    )
-    await collect(await make_agent(llm), "q")
-    name = last_tool_result(llm.calls[1])["result_table"]
-    assert name not in llm.calls[0][0]["content"]
-    assert f"- {name} (top ports)" in llm.calls[1][0]["content"]

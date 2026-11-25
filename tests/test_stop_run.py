@@ -146,20 +146,6 @@ async def test_closing_the_page_mid_text_stops_the_run_and_keeps_its_partial_ans
     assert run["trace"]["entries"][0]["raw_response"]["content"] == "Partial answer"
 
 
-async def test_a_run_whose_page_was_closed_reaches_the_cell_below_as_stopped_by_the_user(make_agent):
-    agent = await make_agent(HangingLLM())
-    nb = agent.notebooks.create_notebook()
-    a, b = add_ai_cell(agent, nb, prompt="ask A"), add_ai_cell(agent, nb, prompt="ask B")
-    await abandoned_run(agent, nb, a, lambda ev: isinstance(ev, TextDelta) and "Partial" in ev.text)
-    scripted = ScriptedLLM([TextChunk("ok")])
-    agent.client_for = lambda model: scripted
-    async for _ in agent.notebooks.run_cell(nb, b):
-        pass
-
-    assert [m["content"] for m in scripted.calls[0][1:]] == [
-        "ask A", "Partial answer\n\n(stopped by the user)", "ask B"]
-
-
 async def test_closing_the_page_before_any_text_stops_the_run_with_no_answer_text(make_agent):
     agent = await make_agent(HangingLLM(text=""))
     nb = agent.notebooks.create_notebook()

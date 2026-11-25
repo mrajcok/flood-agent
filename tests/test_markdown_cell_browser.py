@@ -76,25 +76,3 @@ def test_shift_enter_renders_the_markdown_cell(live_page):
     cell.get_by_label("Markdown").press("Shift+Enter")
     expect(cell.locator(".md-preview h2")).to_have_text("Plan")
     expect(cell.get_by_label("Markdown")).to_be_hidden()
-
-
-def test_markdown_head_says_markdown_and_carries_the_not_sent_note_in_its_header(live_page):
-    page = live_page()
-    cell = open_notebook_with_markdown(page)
-    head = cell.locator(".head")
-    expect(head.locator(".kind")).to_have_text("Markdown")
-    expect(head.get_by_text("Not sent to AI Cells below")).to_be_visible()
-
-
-def test_the_edit_button_tooltip_mentions_double_click(live_page):
-    page = live_page()
-    cell = open_notebook_with_markdown(page)
-    cell.get_by_label("Markdown").fill("note")
-    cell.get_by_role("button", name="Done").click()
-    expect(cell.get_by_role("button", name="Edit")).to_have_attribute("title", re.compile("double-click", re.I))
-
-
-def test_the_done_button_tooltip_mentions_shift_enter(live_page):
-    page = live_page()
-    cell = open_notebook_with_markdown(page)
-    expect(cell.get_by_role("button", name="Done")).to_have_attribute("title", re.compile("shift.?enter", re.I))

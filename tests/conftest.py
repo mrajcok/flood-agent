@@ -16,6 +16,7 @@ import time
 from contextlib import ExitStack, asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
 import anyio
 import pytest
@@ -343,6 +344,14 @@ async def make_agent(build_agent):
         await agent.aclose()
 
 
+@pytest.fixture
+def notebook_store(tmp_path) -> NotebookStore:
+    """Notebook storage on the app database this test's Agents use (`build_agent`, `make_agent`), for storage-level
+    setup and checks the Notebook module does not offer: starting or finishing a Run by hand, adding messages or an
+    older Cell, a Run's Displays and settings. Its clock is the wall clock, like the Agents'."""
+    return NotebookStore(config_for_test(tmp_path, None, None).app_db)
+
+
 @dataclass
 class NotebookParts:
     """The Notebook module on real Notebook storage and a real Table Catalog, with what a test sets up through."""
@@ -526,7 +535,7 @@ async def collect(
     model: str | None = None, effort: str | None = None,
 ):
     """Run `message` as a new AI Cell at the end of `notebook` (a new notebook if None) and return its events.
-    The cell's id is `agent.notebook_store.cells(notebook)[-1]["id"]` afterwards."""
+    The cell is the notebook's last afterwards."""
     notebook = notebook or agent.notebooks.create_notebook()
     cell = add_ai_cell(agent, notebook, prompt=message, model=model, effort=effort, max_rows=max_result_rows)
     return [e async for e in agent.notebooks.run_cell(notebook, cell)]
@@ -576,14 +585,35 @@ def register_table(catalog, name: str, cell_id: str = "cell-1", run: int = 1, *a
     catalog.register_for(CellRun(cell_id, f"run-{run}"), name, *args, **kwargs)
 
 
-def run_of(agent: Agent, notebook: str, index: int = -1) -> dict:
-    """The latest Run of the notebook's `index`th cell (default: the last), with its `messages`, `trace`, `status`."""
-    return agent.notebook_store.cells(notebook)[index]["run"]
+def run_of(agent: Agent, notebook: str, index: int = -1) -> Any:
+    """The latest Run of the notebook's `index`th cell (default: the last), with its `messages`, `trace`, `status`;
+    None if it has not run."""
+    return agent.notebooks.notebook_page(notebook).cells[index].run
+
+
+def cell_ids(agent: Agent, notebook: str) -> list[str]:
+    """The ids of the notebook's cells, in order."""
+    return [c.cell.id for c in agent.notebooks.notebook_page(notebook).cells]
+
+
+def latest_run(agent: Agent, notebook: str, cell: str) -> Any:
+    """The record of the cell's latest Run (number, status, settings, fingerprint, result...), or None."""
+    return agent.notebooks.page_cell(notebook, cell).run
+
+
+def draft_of(agent: Agent, notebook: str, cell: str) -> dict:
+    """The cell's Draft, as stored."""
+    return agent.notebooks.cell(notebook, cell).draft.stored()
+
+
+def displays_of(agent: Agent, notebook: str, cell: str) -> list[dict]:
+    """The Displays of the cell's latest Run, in order: {display_id, kind, result_table, **definition}."""
+    return [i for i in agent.notebooks.run_transcript(notebook, cell) if i["type"] == "display"]
 
 
 def tables_in(agent: Agent, notebook: str) -> list:
     """The live Result and Saved Tables any cell of the notebook made, oldest first."""
-    tables = [t for c in agent.notebook_store.cells(notebook) for t in agent.tables.tables_of_cell(c["id"])]
+    tables = [t for c in cell_ids(agent, notebook) for t in agent.tables.tables_of_cell(c)]
     return sorted(tables, key=lambda t: (t.created_at_ms, t.name))
 
 

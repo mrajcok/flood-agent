@@ -2,7 +2,7 @@
 
 from dataclasses import replace
 
-from conftest import ScriptedLLM, add_ai_cell, add_markdown_cell, add_sql_cell, tool_call
+from conftest import ScriptedLLM, add_ai_cell, add_markdown_cell, add_sql_cell, latest_run, tool_call
 
 from flood_agent.llm import TextChunk
 
@@ -87,7 +87,7 @@ async def test_refreshing_or_renaming_a_table_above_never_makes_a_cell_stale(mak
     below = add_ai_cell(agent, nb, prompt="second")
     await run(agent, nb, above)
     await run(agent, nb, below)
-    [table] = agent.tables.tables_of_run(above, agent.notebook_store.cell(above)["run"]["id"])
+    [table] = agent.tables.tables_of_run(above, latest_run(agent, nb, above)["id"])
     agent.refresh_table(table.name)
     assert agent.notebooks.stale_cells(nb) == set()
     agent.tables.update(table.name, new_name="renamed_ports")

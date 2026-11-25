@@ -3,7 +3,7 @@
 import asyncio
 
 import pytest
-from conftest import ScriptedLLM, add_ai_cell, collect, run_of, tables_in, text_of, tool_call
+from conftest import ScriptedLLM, add_ai_cell, collect, latest_run, run_of, tables_in, text_of, tool_call
 
 from flood_agent.catalog import CellRun
 from flood_agent.events import LlmCallStarted, TextDelta, TraceLive, TraceReady, TurnEnd
@@ -97,8 +97,8 @@ async def test_a_stopped_run_keeps_the_table_its_query_registered_with_that_run(
     await stopped_run(agent, nb, "ports please")
 
     (table,) = tables_in(agent, nb)
-    cell = agent.notebook_store.cells(nb)[0]
-    assert table.owner == CellRun(cell["id"], cell["run"]["id"])
+    cell = agent.notebooks.notebook_page(nb).cells[0]
+    assert table.owner == CellRun(cell.cell.id, cell.run["id"])
     assert (table.title, table.request) == ("Ports", "ports please")
 
 
@@ -210,4 +210,4 @@ async def test_an_ai_cell_cannot_run_once_its_runs_are_closed(make_agent):
 
     with pytest.raises(RuntimeError, match="closed"):
         [e async for e in agent.ai_cells.run(agent.notebooks.cell(nb, cell))]
-    assert agent.notebook_store.cell(cell)["run"] is None
+    assert latest_run(agent, nb, cell) is None

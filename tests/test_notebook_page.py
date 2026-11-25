@@ -244,22 +244,22 @@ def test_stopping_a_cell_that_is_not_running_is_harmless(build_agent, web_client
 POLLS = 'hx-trigger="every 2s"'  # a Cell shown as running re-fetches itself
 
 
-def test_the_stored_status_alone_says_whether_a_cell_is_running(build_agent, web_client):
+def test_the_stored_status_alone_says_whether_a_cell_is_running(build_agent, web_client, notebook_store):
     agent = build_agent(ScriptedLLM())
     client = web_client(agent)
     nb, cell = new_notebook(client)
-    run = agent.notebook_store.start_run(cell, "p", {"model": SONNET, "effort": None, "max_rows": 1000}, "f")
+    run = notebook_store.start_run(cell, "p", {"model": SONNET, "effort": None, "max_rows": 1000}, "f")
     assert POLLS in client.get(f"/n/{nb}/cells/{cell}").text
 
-    agent.notebook_store.finish_run(run, "ok")
+    notebook_store.finish_run(run, "ok")
     assert POLLS not in client.get(f"/n/{nb}/cells/{cell}").text
 
 
-def test_a_cell_cut_off_by_a_killed_app_shows_as_failed_after_a_restart(build_agent, web_client):
+def test_a_cell_cut_off_by_a_killed_app_shows_as_failed_after_a_restart(build_agent, web_client, notebook_store):
     killed = build_agent(ScriptedLLM())
     client = web_client(killed)
     nb, cell = new_notebook(client)
-    killed.notebook_store.start_run(cell, "p", {"model": SONNET, "effort": None, "max_rows": 1000}, "f")  # never finished
+    notebook_store.start_run(cell, "p", {"model": SONNET, "effort": None, "max_rows": 1000}, "f")  # never finished
 
     page = web_client(build_agent(ScriptedLLM())).get(f"/n/{nb}/cells/{cell}").text
     assert POLLS not in page

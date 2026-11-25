@@ -3,7 +3,7 @@
 import re
 from dataclasses import replace
 
-from conftest import ScriptedLLM, add_ai_cell, add_markdown_cell
+from conftest import ScriptedLLM, add_ai_cell, add_markdown_cell, cell_ids, draft_of, latest_run
 from test_notebook_page import new_notebook
 
 from flood_agent.events import FlagEvent
@@ -39,10 +39,10 @@ async def test_ticking_send_to_ai_changes_the_context_fingerprint(make_agent):
     note = add_markdown_cell(agent, nb, "note")
     cell = add_ai_cell(agent, nb, prompt="ask")
     await run(agent, nb, cell)
-    before = agent.notebook_store.cell(cell)["run"]["context_fingerprint"]
+    before = latest_run(agent, nb, cell)["context_fingerprint"]
     agent.notebooks.save_draft(nb, note, replace(agent.notebooks.cell(nb, note).draft, send_to_ai=True))
     await run(agent, nb, cell)
-    assert agent.notebook_store.cell(cell)["run"]["context_fingerprint"] != before
+    assert latest_run(agent, nb, cell)["context_fingerprint"] != before
 
 
 async def test_a_value_only_in_an_unticked_note_is_flagged_but_a_ticked_one_is_seen(make_agent):
@@ -80,8 +80,8 @@ def test_plus_markdown_inserts_an_unticked_empty_cell_after_the_given_one(build_
 
     assert "Not sent to AI Cells below" in html
     assert 'data-insert="markdown"' in client.get(f"/n/{nb}").text  # the insert strip offers it
-    assert [c["id"] for c in agent.notebook_store.cells(nb)] == [ai, md]
-    assert agent.notebook_store.cell(md)["draft"] == {"text": "", "send_to_ai": False, "displays": []}
+    assert cell_ids(agent, nb) == [ai, md]
+    assert draft_of(agent, nb, md) == {"text": "", "send_to_ai": False, "displays": []}
 
 
 def test_saving_a_markdown_cell_keeps_its_text_and_tick_and_shows_them_escaped_for_rendering(build_agent, web_client):
@@ -92,12 +92,12 @@ def test_saving_a_markdown_cell_keeps_its_text_and_tick_and_shows_them_escaped_f
 
     r = client.post(f"/n/{nb}/cells/{md}/markdown", data={"text": "## Plan <b>x</b>", "send_to_ai": "1"})
     assert r.status_code == 204
-    assert agent.notebook_store.cell(md)["draft"] == {"text": "## Plan <b>x</b>", "send_to_ai": True, "displays": []}
+    assert draft_of(agent, nb, md) == {"text": "## Plan <b>x</b>", "send_to_ai": True, "displays": []}
     shown = client.get(f"/n/{nb}/cells/{md}").text
     assert "## Plan &lt;b&gt;x&lt;/b&gt;" in shown and "<b>x</b>" not in shown
 
     client.post(f"/n/{nb}/cells/{md}/markdown", data={"text": "again"})
-    assert agent.notebook_store.cell(md)["draft"] == {"text": "again", "send_to_ai": False, "displays": []}
+    assert draft_of(agent, nb, md) == {"text": "again", "send_to_ai": False, "displays": []}
 
 
 def test_markdown_endpoint_rejects_an_ai_cell_and_unknown_kinds(build_agent, web_client):

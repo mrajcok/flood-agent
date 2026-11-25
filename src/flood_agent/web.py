@@ -41,8 +41,7 @@ from flood_agent.context_usage import context_usage
 from flood_agent.events import CountEvent, DisplayEvent, FlagEvent, LlmCallStarted, TextDelta, TraceLive, TurnEnd
 from flood_agent.lookup_tables import InvalidLookupTable
 from flood_agent.model_choices import NO_MODEL
-from flood_agent.notebook import NotebookBusy, PageCell, TablesChoice, UnknownCell, UnknownNotebook
-from flood_agent.notebook_store import COUNT_KIND
+from flood_agent.notebook import COUNT_KIND, NotebookBusy, PageCell, TablesChoice, UnknownCell, UnknownNotebook
 from flood_agent.queries import InvalidSort
 from flood_agent.show_commands import SHOW_COMMANDS
 from flood_agent.table_replacement import RefreshInProgress

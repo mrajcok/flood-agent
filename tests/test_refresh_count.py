@@ -40,7 +40,7 @@ def shown(client, nb):
 
 
 def set_stored_sql(agent, sql):
-    with closing(sqlite3.connect(agent.notebook_store.path)) as con, con:
+    with closing(sqlite3.connect(agent.config.app_db)) as con, con:
         con.execute("UPDATE run_displays SET definition=json_set(definition, '$.sql', ?)", (sql,))
 
 
@@ -129,7 +129,7 @@ def test_a_notebook_deleted_mid_refresh_is_not_found(build_agent, web_client, mo
     real = queries.run_count_query
 
     def delete_then_run(*args, **kwargs):
-        agent.notebook_store.delete_notebook(nb)
+        agent.notebooks.delete_notebook(nb)
         return real(*args, **kwargs)
 
     monkeypatch.setattr(queries, "run_count_query", delete_then_run)

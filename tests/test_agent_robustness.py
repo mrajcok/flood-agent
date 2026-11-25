@@ -112,12 +112,12 @@ async def test_unexpected_exception_is_reported_not_raised(make_agent):
     assert run_of(agent, nb)["trace"] is not None
 
 
-async def test_a_cell_below_is_sent_a_repaired_copy_of_a_corrupt_saved_run(make_agent):
+async def test_a_cell_below_is_sent_a_repaired_copy_of_a_corrupt_saved_run(make_agent, notebook_store):
     llm = ScriptedLLM([TextChunk("ok")])
     agent = await make_agent(llm)
     nb = agent.notebooks.create_notebook()
     first = add_ai_cell(agent, nb, prompt="hi")
-    run = agent.notebook_store.start_run(first, "hi", {"model": "m", "effort": None, "max_rows": 10}, "f")
+    run = notebook_store.start_run(first, "hi", {"model": "m", "effort": None, "max_rows": 10}, "f")
     call = lambda i: {"id": i, "type": "function", "function": {"name": "run_query", "arguments": "{}"}}  # noqa: E731
     for m in [
         {"role": "user", "content": "hi"},
@@ -129,19 +129,19 @@ async def test_a_cell_below_is_sent_a_repaired_copy_of_a_corrupt_saved_run(make_
         {"role": "assistant", "content": "fine"},
         {"role": "assistant", "content": "", "tool_calls": [call("d")]},  # trailing, unanswered
     ]:
-        agent.notebook_store.add_message(run, m)
-    agent.notebook_store.finish_run(run, "ok")
+        notebook_store.add_message(run, m)
+    notebook_store.finish_run(run, "ok")
     await collect(agent, "next", nb)
     msgs = llm.calls[0][1:-1]  # between the system prompt and the new prompt
     assert_valid_history(msgs)
     assert [m["role"] for m in msgs] == ["user", "user", "assistant", "tool", "assistant"]
 
 
-async def test_a_run_left_running_by_a_killed_app_is_failed_at_the_next_start(make_agent):
+async def test_a_run_left_running_by_a_killed_app_is_failed_at_the_next_start(make_agent, notebook_store):
     killed = await make_agent(ScriptedLLM())
     nb = killed.notebooks.create_notebook()
     cut_off = add_ai_cell(killed, nb, prompt="hi")
-    killed.notebook_store.start_run(cut_off, "hi", {"model": "m", "effort": None, "max_rows": 10}, "f")  # never finished
+    notebook_store.start_run(cut_off, "hi", {"model": "m", "effort": None, "max_rows": 10}, "f")  # never finished
 
     llm = ScriptedLLM([TextChunk("ok")])
     restarted = await make_agent(llm)  # a new app on the same app database

@@ -6,7 +6,7 @@ import re
 from dataclasses import replace
 
 import pytest
-from conftest import ScriptedLLM, add_ai_cell, last_tool_result, tool_call
+from conftest import ScriptedLLM, add_ai_cell, cell_ids, displays_of, draft_of, last_tool_result, tool_call
 from test_notebook_page import new_notebook
 from test_notebooks import run
 
@@ -34,7 +34,7 @@ async def ran_cell(make_agent, extra=()):
     nb = agent.notebooks.create_notebook()
     cell = add_ai_cell(agent, nb, prompt="top ports")
     await run(agent, nb, cell)
-    table = agent.notebook_store.displays(agent.notebook_store.cell(cell)["run"]["id"])[0]["result_table"]
+    table = displays_of(agent, nb, cell)[0]["result_table"]
     return agent, llm, nb, cell, table
 
 
@@ -42,8 +42,8 @@ async def test_copy_to_markdown_inserts_below_with_the_text_and_a_display_per_ta
     agent, _, nb, cell, table = await ran_cell(make_agent)
     new = agent.notebooks.copy_to_markdown_cell(nb, cell)
 
-    assert [c["id"] for c in agent.notebook_store.cells(nb)] == [cell, new]
-    draft = agent.notebook_store.cell(new)["draft"]
+    assert cell_ids(agent, nb) == [cell, new]
+    draft = draft_of(agent, nb, new)
     assert draft["text"] == "Port 8443 moved most."
     assert draft["send_to_ai"] is False
     assert [(d["kind"], d["table"]) for d in draft["displays"]] == [("table", table), ("chart", table)]
@@ -54,7 +54,7 @@ async def test_the_copy_still_has_its_displays_after_the_ai_cell_is_re_run(make_
     agent, _, nb, cell, table = await ran_cell(make_agent, extra=[[TextChunk("Different.")]])
     new = agent.notebooks.copy_to_markdown_cell(nb, cell)
     await run(agent, nb, cell)  # the re-run replaces the Run (its Displays); the earlier table stays, for the copy
-    draft = agent.notebook_store.cell(new)["draft"]
+    draft = draft_of(agent, nb, new)
     assert draft["text"] == "Port 8443 moved most." and len(draft["displays"]) == 2
     assert table in agent.tables
 
@@ -65,9 +65,9 @@ async def test_saving_renames_the_chosen_rt_tables_and_the_copy_uses_the_new_nam
     new = agent.notebooks.copy_to_markdown_cell(nb, cell, save={table: "top_ports"})
 
     assert agent.tables["top_ports"].kind == "saved" and table not in agent.tables
-    assert {d["table"] for d in agent.notebook_store.cell(new)["draft"]["displays"]} == {"top_ports"}
+    assert {d["table"] for d in draft_of(agent, nb, new)["displays"]} == {"top_ports"}
     # the AI Cell's own Displays followed the rename too
-    run_displays = agent.notebook_store.displays(agent.notebook_store.cell(cell)["run"]["id"])
+    run_displays = displays_of(agent, nb, cell)
     assert {d["result_table"] for d in run_displays} == {"top_ports"}
     assert agent.notebooks.markdown_copy_tables(nb, cell) == []
 
@@ -76,7 +76,7 @@ async def test_a_rename_elsewhere_updates_an_embedded_display_including_its_char
     agent, _, nb, cell, table = await ran_cell(make_agent)
     new = agent.notebooks.copy_to_markdown_cell(nb, cell)
     agent.tables.update(table, new_name="renamed")
-    displays = agent.notebook_store.cell(new)["draft"]["displays"]
+    displays = draft_of(agent, nb, new)["displays"]
     assert [d["table"] for d in displays] == ["renamed", "renamed"]
     assert displays[1]["spec"]["data"] == {"name": "renamed"}
 
@@ -104,7 +104,7 @@ async def test_a_bad_save_name_changes_nothing_and_adds_no_cell(make_agent):
     agent, _, nb, cell, table = await ran_cell(make_agent)
     with pytest.raises(ValueError):
         agent.notebooks.copy_to_markdown_cell(nb, cell, save={table: "rt_nope"})
-    assert len(agent.notebook_store.cells(nb)) == 1 and table in agent.tables
+    assert len(cell_ids(agent, nb)) == 1 and table in agent.tables
 
 
 def test_the_page_renders_embedded_displays_and_the_endpoints_copy(build_agent, web_client):

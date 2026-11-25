@@ -182,7 +182,7 @@ def test_lookup_telemetry_and_unknown_tables_are_not_refreshable(build_agent, we
 
 def test_the_llm_is_told_nothing(build_agent, web_client):
     client, agent, _, llm, (name,) = ask(build_agent, web_client, RECENT)
-    (nb,) = [n["id"] for n in agent.notebook_store.list_notebooks()]
+    (nb,) = [n["id"] for n in agent.notebooks.list_notebooks()]
     calls, messages = len(llm.calls), run_of(agent, nb)["messages"]
 
     refresh(client, name)
@@ -194,7 +194,7 @@ def test_refreshing_a_table_leaves_the_system_prompt_byte_identical(build_agent,
     """The prompt lists the tables of the cells above in creation order; a Refresh must not reorder them, or
     the next cell run misses the prompt cache."""
     client, agent, clock, _, (first, second) = ask(build_agent, web_client, RECENT, RECENT)
-    (nb,) = [n["id"] for n in agent.notebook_store.list_notebooks()]
+    (nb,) = [n["id"] for n in agent.notebooks.list_notebooks()]
     before = agent.semantic_layer.system_prompt(tables_in(agent, nb))
     clock.ms += HOUR
     assert refresh(client, first).status_code == 200

@@ -88,7 +88,7 @@ def test_the_count_control_is_disabled_while_a_refresh_runs(build_agent, live_pa
 
 def test_a_failed_count_refresh_keeps_the_number_and_shows_a_plain_error(build_agent, live_page, monkeypatch):
     agent, _, page = ask_for_recent_count(build_agent, live_page, monkeypatch)
-    with closing(sqlite3.connect(agent.notebook_store.path)) as con, con:
+    with closing(sqlite3.connect(agent.config.app_db)) as con, con:
         con.execute("UPDATE run_displays SET definition=json_set(definition, '$.sql', 'DROP TABLE flows')")
     line = page.locator(".count-display")
 

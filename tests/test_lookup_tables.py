@@ -107,7 +107,7 @@ def test_any_notebook_can_describe_and_join_against_it(build_agent, web_client, 
     client = web_client(agent)
     assert add(client, "hosts", f"ip,desc\n198.18.77.200,{SECRET}").status_code == 200
     # Creating it wrote nothing to any notebook.
-    assert agent.notebook_store.list_notebooks() == []
+    assert agent.notebooks.list_notebooks() == []
     run_cell(client)
     described = last_tool_result(llm.calls[1])
     assert described["success"] is True and described["kind"] == "lookup"

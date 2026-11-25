@@ -12,7 +12,7 @@ import threading
 from dataclasses import replace
 
 import pytest
-from conftest import DAY, Clock, ScriptedLLM, add_ai_cell, add_markdown_cell, add_sql_cell
+from conftest import DAY, Clock, ScriptedLLM, add_ai_cell, add_markdown_cell, add_sql_cell, displays_of, latest_run
 
 from flood_agent import queries
 from flood_agent.catalog import CellRun
@@ -37,12 +37,12 @@ async def run_sql(agent, notebook_id, cell_id):
 
 
 def run_of(agent, notebook_id, index):
-    return agent.notebook_store.cells(notebook_id)[index]["run"]
+    return agent.notebooks.notebook_page(notebook_id).cells[index].run
 
 
 def table_of(agent, nb, index):
-    cell = agent.notebook_store.cells(nb)[index]
-    [table] = agent.tables.tables_of_run(cell["id"], cell["run"]["id"])
+    cell = agent.notebooks.notebook_page(nb).cells[index]
+    [table] = agent.tables.tables_of_run(cell.cell.id, cell.run["id"])
     return table
 
 
@@ -68,7 +68,7 @@ async def test_a_select_runs_without_the_llm_into_a_table_shown_as_a_display(bui
     assert r["result"]["row_count"] == 2 and r["result"]["truncated_to"] == 2
     assert r["result"]["elapsed_s"] >= 0 and r["result"]["table"] == table.name
     assert len(rows_of(agent, table.name)) == 2
-    assert [d["result_table"] for d in agent.notebook_store.displays(r["id"])] == [table.name]
+    assert [d["result_table"] for d in displays_of(agent, nb, cell)] == [table.name]
 
 
 async def test_a_bare_count_gives_a_count_display_and_no_table(build_agent):
@@ -81,7 +81,7 @@ async def test_a_bare_count_gives_a_count_display_and_no_table(build_agent):
     r = run_of(agent, nb, 0)
     assert count.value > 0 and r["result"]["count"] == count.value
     assert agent.tables.tables_of_run(cell, r["id"]) == []
-    [d] = agent.notebook_store.displays(r["id"])
+    [d] = displays_of(agent, nb, cell)
     assert d["kind"] == "count" and d["value"] == count.value
 
 
@@ -104,7 +104,7 @@ async def test_statements_that_are_not_one_readable_select_are_refused(build_age
     for sql in ("DELETE FROM flows", "SELECT 1; SELECT 2", "SELECT * FROM results.secret"):
         cell = add_sql_cell(agent, nb, sql=sql)
         await run_sql(agent, nb, cell)
-        r = agent.notebook_store.cell(cell)["run"]
+        r = latest_run(agent, nb, cell)
         assert r["status"] == "failed", sql
         assert agent.tables.tables_of_run(cell, r["id"]) == []
         assert r["error"]
@@ -119,10 +119,10 @@ def test_a_query_ending_in_limit_is_recognised_but_a_limit_in_a_subquery_is_not(
         assert not queries.ends_with_limit(sql), sql
 
 
-async def test_an_old_sql_cell_saved_without_a_row_cap_runs_with_the_default_row_cap(build_agent):
+async def test_an_old_sql_cell_saved_without_a_row_cap_runs_with_the_default_row_cap(build_agent, notebook_store):
     agent = build_agent(ScriptedLLM())
     nb = agent.notebooks.create_notebook()
-    cell = agent.notebook_store.add_cell(nb, "sql", {"sql": "SELECT dport FROM flows"})
+    cell = notebook_store.add_cell(nb, "sql", {"sql": "SELECT dport FROM flows"})
     await run(agent, nb, cell)
 
     r = run_of(agent, nb, 0)
@@ -512,4 +512,4 @@ async def test_a_sql_cell_cannot_run_once_the_agent_is_closed(build_agent):
 
     with pytest.raises(RuntimeError, match="closed"):
         await run(agent, nb, cell)
-    assert agent.notebook_store.cell(cell)["run"] is None  # no Run was started
+    assert latest_run(agent, nb, cell) is None  # no Run was started

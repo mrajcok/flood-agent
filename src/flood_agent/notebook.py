@@ -32,6 +32,7 @@ from flood_agent.cell import (
 from flood_agent.cell_kinds import AI, MARKDOWN, SQL
 from flood_agent.events import Event
 from flood_agent.model_choices import ModelChoices
+from flood_agent.notebook_store import COUNT_KIND as COUNT_KIND  # re-exported: the web layer does not import storage
 from flood_agent.notebook_store import NotebookStore
 from flood_agent.sql_cell_run import SqlCellRuns
 
@@ -315,6 +316,17 @@ class Notebooks:
         is not running."""
         self._row(notebook_id, cell_id)
         return self._sql_cells.stop(cell_id) or self._ai_cells.stop(cell_id)
+
+    # --- Count Displays ------------------------------------------------------------------------------------------
+
+    def count_display(self, display_id: int) -> dict | None:
+        """A Run's Count Display definition ({title, value, sql, computed_at_ms}), or None if there is none with that id."""
+        return self._store.count_display(display_id)
+
+    def update_count(self, display_id: int, value: int, computed_at_ms: int) -> None:
+        """Overwrite a Count Display's number and "as of" time (a Refresh); nothing of its Run changes. KeyError if it
+        no longer exists."""
+        self._store.update_count(display_id, value, computed_at_ms)
 
     # --- checks -------------------------------------------------------------------------------------------------
 

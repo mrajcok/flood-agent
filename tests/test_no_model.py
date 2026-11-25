@@ -4,7 +4,7 @@ import html
 import json
 import re
 
-from conftest import ScriptedLLM, ask, post_run
+from conftest import ScriptedLLM, ask, cell_ids, post_run
 from fastapi.testclient import TestClient
 
 from flood_agent.__main__ import build_app, picker_entries
@@ -101,24 +101,24 @@ def test_with_no_key_the_model_picker_and_a_new_ai_cell_agree_on_no_model(build_
     client = web_client(agent)
 
     page = client.get("/").text  # "/" opens a new notebook with one new AI Cell
-    notebook = agent.notebook_store.list_notebooks()[0]["id"]
-    (cell,) = agent.notebook_store.cells(notebook)
+    notebook = agent.notebooks.list_notebooks()[0]["id"]
+    (cell,) = cell_ids(agent, notebook)
 
     assert re.search(r'data-model="([^"]*)"', page).group(1) == NO_MODEL
-    assert first_cell_model(page) == NO_MODEL and agent.notebooks.cell(notebook, cell["id"]).draft.settings.model == NO_MODEL
+    assert first_cell_model(page) == NO_MODEL and agent.notebooks.cell(notebook, cell).draft.settings.model == NO_MODEL
 
 
-def test_with_no_key_a_cell_with_no_stored_model_is_typed_as_no_model(build_agent):
+def test_with_no_key_a_cell_with_no_stored_model_is_typed_as_no_model(build_agent, notebook_store):
     agent = build_agent(ScriptedLLM(), api_key=False)
     notebook = agent.notebooks.create_notebook()
-    cell = agent.notebook_store.add_cell(notebook, AI, {"prompt": "hello"})  # an older Cell: no model stored
+    cell = notebook_store.add_cell(notebook, AI, {"prompt": "hello"})  # an older Cell: no model stored
 
     assert agent.notebooks.cell(notebook, cell).draft.settings.model == NO_MODEL
 
 
-def test_with_a_key_a_cell_with_no_stored_model_is_typed_with_the_configured_model(build_agent):
+def test_with_a_key_a_cell_with_no_stored_model_is_typed_with_the_configured_model(build_agent, notebook_store):
     agent = build_agent(ScriptedLLM())
     notebook = agent.notebooks.create_notebook()
-    cell = agent.notebook_store.add_cell(notebook, AI, {"prompt": "hello"})
+    cell = notebook_store.add_cell(notebook, AI, {"prompt": "hello"})
 
     assert agent.notebooks.cell(notebook, cell).draft.settings.model == GLM

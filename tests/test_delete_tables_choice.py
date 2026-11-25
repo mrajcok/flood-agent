@@ -2,7 +2,7 @@
 
 import re
 
-from conftest import DAY, Clock, ScriptedLLM, ask, last_tool_result, table_script, tool_call
+from conftest import DAY, Clock, ScriptedLLM, ask, last_tool_result, latest_run, table_script, tool_call
 
 from flood_agent.catalog import CellRun
 from flood_agent.llm import TextChunk
@@ -94,16 +94,16 @@ def test_cell_delete_rt_drops_that_cells_result_tables_only(build_agent, web_cli
     assert not readable(client, first) and readable(client, second)
 
 
-def test_ownership_is_the_recorded_run_not_the_first_mention(build_agent, web_client):
+def test_ownership_is_the_recorded_run_not_the_first_mention(build_agent, web_client, notebook_store):
     # cell one made rt_X and then used `kept`, a table cell two made and that was renamed since
     agent = build_agent(ScriptedLLM([TextChunk("hi")], [TextChunk("hi")]))
     client = web_client(agent)
     nb, one, _ = ask(client, "one")
     _, two, _ = ask(client, "two", nb)
-    run_one, run_two = (agent.notebook_store.cell(c)["run"]["id"] for c in (one, two))
+    run_one, run_two = (latest_run(agent, nb, c)["id"] for c in (one, two))
     agent.tables.register_for(CellRun(one, run_one), "rt_20260101_000000")
     agent.tables.register_for(CellRun(two, run_two), "kept")
-    agent.notebook_store.add_message(run_one, {"role": "assistant", "content": "first used kept here"})
+    notebook_store.add_message(run_one, {"role": "assistant", "content": "first used kept here"})
     assert client.get(f"/n/{nb}/cells/{one}/delete-preview").json() == {"result": 1, "saved": 0}
     assert client.get(f"/n/{nb}/cells/{two}/delete-preview").json() == {"result": 0, "saved": 1}
 

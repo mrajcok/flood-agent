@@ -3,7 +3,7 @@ refresh control, and a refresh leaves every Run and the context sent to cells be
 
 import re
 
-from conftest import Clock, ScriptedLLM, add_ai_cell, add_sql_cell, tool_call
+from conftest import Clock, ScriptedLLM, add_ai_cell, add_sql_cell, latest_run, tool_call
 from test_notebook_page import new_notebook, run_cell
 from test_notebooks import SQL
 
@@ -27,7 +27,7 @@ def test_an_ai_cells_count_display_refreshes_without_a_run_or_staleness(build_ag
     client, agent, clock, nb, cell, page = ai_count_cell(build_agent, web_client, monkeypatch)
     display_id = int(re.search(r'data-display-id="(\d+)"', page).group(1))
     below = add_ai_cell(agent, nb, prompt="and then?")
-    before = agent.notebook_store.cell(cell)["run"]
+    before = latest_run(agent, nb, cell)
 
     monkeypatch.setenv("FIXED_NOW_MS", "1700000003600")
     clock.ms += 3_600_000
@@ -36,7 +36,7 @@ def test_an_ai_cells_count_display_refreshes_without_a_run_or_staleness(build_ag
     assert r.status_code == 200 and r.json() == {"value": 1, "computed_at_ms": clock.ms}
     shown = client.get(f"/n/{nb}/cells/{cell}").text
     assert re.search(r'class="count-value"[^>]*>1<', shown)
-    after = agent.notebook_store.cell(cell)["run"]
+    after = latest_run(agent, nb, cell)
     assert (after["id"], after["number"], after["messages"], after["context_fingerprint"]) == (
         before["id"], before["number"], before["messages"], before["context_fingerprint"])
     assert below not in agent.notebooks.stale_cells(nb)
@@ -51,15 +51,15 @@ def test_refreshing_an_ai_cells_table_does_not_make_a_cell_below_stale_or_change
     run_cell(client, nb, cell)
     second = add_ai_cell(agent, nb, prompt="then")
     run_cell(client, nb, second, prompt="then")
-    run = agent.notebook_store.cell(cell)["run"]
+    run = latest_run(agent, nb, cell)
     [table] = agent.tables.tables_of_cell(cell)
 
     assert client.post(f"/api/results/{table.name}/refresh").status_code == 200
 
     assert agent.notebooks.stale_cells(nb) == set()
-    again = agent.notebook_store.cell(cell)["run"]
+    again = latest_run(agent, nb, cell)
     assert (again["id"], again["number"], again["messages"]) == (run["id"], run["number"], run["messages"])
-    assert agent.notebook_store.cell(second)["run"]["number"] == 2  # no refresh took a run number
+    assert latest_run(agent, nb, second)["number"] == 2  # no refresh took a run number
 
 
 def sql_cell(client, agent, nb, sql):
@@ -93,7 +93,7 @@ def test_a_sql_cell_says_refreshed_when_its_table_was_refreshed_elsewhere(build_
 
     foot = client.get(f"/n/{nb}/cells/{cell}").text.split('class="cell-foot sql-status"')[1]
     assert "refreshed <time" in foot
-    assert agent.notebook_store.cell(cell)["run"]["number"] == 1
+    assert latest_run(agent, nb, cell)["number"] == 1
 
 
 def test_the_earlier_tables_list_uses_the_generic_table_urls(build_agent, web_client):

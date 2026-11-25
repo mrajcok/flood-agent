@@ -2,7 +2,7 @@
 
 import re
 
-from conftest import ScriptedLLM, tool_call
+from conftest import ScriptedLLM, latest_run, tool_call
 from test_notebook_page import SONNET, new_notebook, run_cell
 from test_notebooks import SQL
 
@@ -36,11 +36,11 @@ def test_earlier_runs_tables_are_listed_collapsed_and_clearing_them_spares_saved
     nb, cell = new_notebook(client)
     run_cell(client, nb, cell)
     assert "Tables from earlier runs" not in client.get(f"/n/{nb}/cells/{cell}").text
-    first_run = agent.notebook_store.cell(cell)["run"]["id"]
+    first_run = latest_run(agent, nb, cell)["id"]
     rt, keep = agent.tables.tables_of_run(cell, first_run)
     agent.tables.update(keep.name, new_name="kept_ports")
     run_cell(client, nb, cell)
-    current = agent.tables.tables_of_run(cell, agent.notebook_store.cell(cell)["run"]["id"])[0].name
+    current = agent.tables.tables_of_run(cell, latest_run(agent, nb, cell)["id"])[0].name
 
     page = client.get(f"/n/{nb}/cells/{cell}").text
     assert "Tables from earlier runs (2)" in page

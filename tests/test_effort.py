@@ -58,7 +58,7 @@ def test_an_effort_the_model_does_not_offer_is_rejected_before_any_turn_starts(b
         assert response.status_code == 422 and "does not offer reasoning effort" in response.json()["detail"]
 
     assert llm.calls == [] and all(
-        c["run"] is None for n in agent.notebook_store.list_notebooks() for c in agent.notebook_store.cells(n["id"]))
+        c.run is None for n in agent.notebooks.list_notebooks() for c in agent.notebooks.notebook_page(n["id"]).cells)
 
 
 def test_a_supported_or_empty_effort_is_accepted(build_agent, web_client):

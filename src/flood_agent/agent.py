@@ -68,19 +68,20 @@ class Agent:
         self.client_for = client_for
         self.semantic_layer = SemanticLayer(config.semantic_layer)
         drop_pre_notebook_data(config.app_db, config.results_db)  # before anything creates the new schema
-        self.notebook_store = NotebookStore(config.app_db, config.clock)  # temporary: private to Notebooks soon
+        # Notebook storage is handed to the Notebook module and the Run modules only; the Agent keeps no hold of it.
+        store = NotebookStore(config.app_db, config.clock)
         self.tables = Catalog(
             config.app_db, config.clock, config.result_ttl_ms, telemetry_tables=self.semantic_layer.table_names(),
-            results_db=config.results_db, on_rename=self._follow_rename,
+            results_db=config.results_db, on_rename=store.follow_rename,  # Displays follow a table's new name
         )
         self.replacement = TableReplacement(self.tables, config.telemetry_db, config.results_db, config.query_timeout_s)
-        self.sql_cells = SqlCellRuns(self.notebook_store, self.tables, self.replacement, config.telemetry_db,
+        self.sql_cells = SqlCellRuns(store, self.tables, self.replacement, config.telemetry_db,
                                      config.results_db, config.query_timeout_s, config.clock)
         # `client_for` is looked up on each Run, so a client swapped in later is the one used.
-        self.ai_cells = AiCellRuns(self.notebook_store, self.tables, self.semantic_layer, lambda model: self.client_for(model),
+        self.ai_cells = AiCellRuns(store, self.tables, self.semantic_layer, lambda model: self.client_for(model),
                                    self._ensure_connection, lambda: self._connection is not None, config.choices.spec_of, config.max_llm_steps,
                                    config.max_failed_attempts, config.clock)
-        self.notebooks = Notebooks(self.notebook_store, self.tables, self.sql_cells, self.ai_cells, config.choices)
+        self.notebooks = Notebooks(store, self.tables, self.sql_cells, self.ai_cells, config.choices)
         self._connection: McpConnection | None = None
         self._restart_lock = asyncio.Lock()
         self._refreshing: set[tuple[str, str | int]] = set()  # ("count", id) being refreshed now (tables: see table_replacement)
@@ -88,8 +89,8 @@ class Agent:
         self.tables.sweep()
         # A Run still running now was cut off by the app being killed. One app process per app database, so
         # none of these is really in progress (eval runs and the caching smoke test use their own app database).
-        for run_id in self.notebook_store.running_runs():
-            self.notebook_store.finish_run(run_id, "failed", APP_STOPPED)
+        for run_id in store.running_runs():
+            store.finish_run(run_id, "failed", APP_STOPPED)
 
     async def start(self) -> None:
         """Launch the long-lived MCP server. Needed before `run_cell`, not for row fetches
@@ -162,10 +163,6 @@ class Agent:
         in-process instead."""
         return stdio_transport(self._server_params())
 
-    def _follow_rename(self, con, old: str, new: str) -> None:
-        """Every Display, in a Run or a Markdown Cell, follows a table's new name."""
-        self.notebook_store.follow_rename(con, old, new)
-
     def fetch_rows(self, result_table: str, columns: list[str] | None = None, **page_args) -> dict:
         """Internal data path used by the row-JSON endpoint. Not an LLM tool.
 
@@ -222,7 +219,7 @@ class Agent:
         {"value", "computed_at_ms"}. KeyError if unknown, `RefreshInProgress` if already refreshing,
         `RefreshFailed` (plain message) if the query fails, in which case the old number is kept.
         A Refresh is never a Run."""
-        definition = self.notebook_store.count_display(display_id)
+        definition = self.notebooks.count_display(display_id)
         if definition is None:
             raise KeyError(display_id)
         label = f'Count Display "{definition["title"]}"'
@@ -234,7 +231,7 @@ class Agent:
             if not result["success"]:
                 raise RefreshFailed(self._refresh_error(label, result))
             computed_at_ms = self.config.clock()
-            self.notebook_store.update_count(display_id, result["count"], computed_at_ms)
+            self.notebooks.update_count(display_id, result["count"], computed_at_ms)
             return {"value": result["count"], "computed_at_ms": computed_at_ms}
 
     def iter_all_rows(self, result_table: str):

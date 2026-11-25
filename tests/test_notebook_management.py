@@ -4,22 +4,29 @@ import asyncio
 from dataclasses import replace
 
 import pytest
-from conftest import ScriptedLLM, add_ai_cell, add_markdown_cell, add_sql_cell
+from conftest import Clock, ScriptedLLM, add_ai_cell, add_markdown_cell, add_sql_cell
 from test_cell_operations import _cell_with_rt_and_saved
 from test_notebook_page import new_notebook
 from test_notebooks import Slow, run
 
 from flood_agent.llm import TextChunk
-from flood_agent.notebook import NotebookBusy
+from flood_agent.notebook import NotebookBusy, UnknownNotebook
+
+
+def gone(agent, nb) -> bool:
+    """Whether the Notebook is deleted: unknown, and no longer listed."""
+    with pytest.raises(UnknownNotebook):
+        agent.notebooks.notebook_page(nb)
+    return nb not in [n["id"] for n in agent.notebooks.list_notebooks()]
 
 
 async def test_rename_changes_the_title_but_not_the_activity_order(make_agent):
     agent = await make_agent(ScriptedLLM())
     first, second = agent.notebooks.create_notebook(), agent.notebooks.create_notebook()
-    before = [n["id"] for n in agent.notebook_store.list_notebooks()]
+    before = [n["id"] for n in agent.notebooks.list_notebooks()]
     agent.notebooks.rename_notebook(first, "  Port scans  ")
-    assert agent.notebook_store.title_of(first) == "Port scans"
-    assert [n["id"] for n in agent.notebook_store.list_notebooks()] == before
+    assert agent.notebooks.notebook_page(first).title == "Port scans"
+    assert [n["id"] for n in agent.notebooks.list_notebooks()] == before
     with pytest.raises(ValueError):
         agent.notebooks.rename_notebook(first, "   ")
     with pytest.raises(KeyError):
@@ -28,17 +35,19 @@ async def test_rename_changes_the_title_but_not_the_activity_order(make_agent):
 
 
 async def test_the_list_is_ordered_by_last_edit_or_run(make_agent):
-    agent = await make_agent(ScriptedLLM([TextChunk("Hi.")]))
+    clock = Clock()
+    agent = await make_agent(ScriptedLLM([TextChunk("Hi.")]), clock=clock)
     old = agent.notebooks.create_notebook()
+    clock.ms += 1
     new = agent.notebooks.create_notebook()
     a = add_ai_cell(agent, old, prompt="a")
-    agent.notebook_store._now = lambda: 10**13  # a later clock: the run touches `old`
+    clock.ms += 1  # a later clock: the edit touches `old`
     agent.notebooks.save_draft(old, a, replace(agent.notebooks.cell(old, a).draft, prompt="b"))
-    assert [n["id"] for n in agent.notebook_store.list_notebooks()] == [old, new]
-    agent.notebook_store._now = lambda: 10**13 + 5
+    assert [n["id"] for n in agent.notebooks.list_notebooks()] == [old, new]
+    clock.ms += 1
     x = add_ai_cell(agent, new, prompt="x")
     agent.notebooks.save_draft(new, x, replace(agent.notebooks.cell(new, x).draft, prompt="y"))
-    assert [n["id"] for n in agent.notebook_store.list_notebooks()] == [new, old]
+    assert [n["id"] for n in agent.notebooks.list_notebooks()] == [new, old]
 
 
 async def test_search_matches_titles_and_cell_text_but_never_answers(make_agent):
@@ -50,10 +59,10 @@ async def test_search_matches_titles_and_cell_text_but_never_answers(make_agent)
     add_markdown_cell(agent, by_note, text="Notes on **a1b2**")
     cell = add_ai_cell(agent, by_answer, prompt="something else")
     await run(agent, by_answer, cell)
-    found = {n["id"] for n in agent.notebook_store.list_notebooks("A1b2")}
+    found = {n["id"] for n in agent.notebooks.list_notebooks("A1b2")}
     assert found == {by_title, by_prompt, by_sql, by_note}
-    assert agent.notebook_store.list_notebooks("zebra") == []
-    assert len(agent.notebook_store.list_notebooks("  ")) == 5  # blank: everything
+    assert agent.notebooks.list_notebooks("zebra") == []
+    assert len(agent.notebooks.list_notebooks("  ")) == 5  # blank: everything
 
 
 async def test_deleting_a_notebook_keeps_or_deletes_its_rt_tables_and_always_keeps_saved(make_agent):
@@ -62,16 +71,14 @@ async def test_deleting_a_notebook_keeps_or_deletes_its_rt_tables_and_always_kee
     agent.notebooks.delete_notebook(nb, "delete_rt")
     assert rt.name not in agent.tables and current.name not in agent.tables
     assert "kept_ports" in agent.tables
-    assert not agent.notebook_store.exists(nb)
-    with pytest.raises(KeyError):
-        agent.notebook_store.cell(a)
+    assert gone(agent, nb)
 
 
 async def test_deleting_with_the_keep_choice_leaves_the_tables_to_expire(make_agent):
     agent, nb, a, rt, current = await _cell_with_rt_and_saved(make_agent)
     agent.notebooks.delete_notebook(nb, "keep")
     assert rt.name in agent.tables and current.name in agent.tables and "kept_ports" in agent.tables
-    assert not agent.notebook_store.exists(nb)
+    assert gone(agent, nb)
 
 
 async def test_a_notebook_with_a_running_cell_cannot_be_deleted(make_agent):
@@ -86,7 +93,7 @@ async def test_a_notebook_with_a_running_cell_cannot_be_deleted(make_agent):
     agent.notebooks.stop_cell(nb, a)
     await task
     agent.notebooks.delete_notebook(nb)
-    assert not agent.notebook_store.exists(nb)
+    assert gone(agent, nb)
 
 
 # --- through the page's routes -----------------------------------------------------------------------

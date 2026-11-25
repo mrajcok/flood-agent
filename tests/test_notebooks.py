@@ -9,6 +9,7 @@ from conftest import ScriptedLLM, add_ai_cell, tool_call
 
 from flood_agent.agent import Agent
 from flood_agent.catalog import CellRun
+from flood_agent.cell import AiCell
 from flood_agent.events import TextDelta, TraceReady
 from flood_agent.llm import TextChunk
 from flood_agent.notebook import NotebookBusy
@@ -22,7 +23,7 @@ async def run(agent, notebook_id, cell_id):
 
 
 def run_of(agent, notebook_id, index):
-    return agent.notebook_store.cells(notebook_id)[index]["run"]
+    return agent.notebooks.notebook_page(notebook_id).cells[index].run
 
 
 class Slow:
@@ -40,14 +41,14 @@ async def test_a_notebook_keeps_its_ai_cells_in_order_with_their_drafts(make_age
     third = add_ai_cell(agent, nb, prompt="three")
     second = add_ai_cell(agent, nb, prompt="two", after=first)
 
-    cells = agent.notebook_store.cells(nb)
-    assert [c["id"] for c in cells] == [first, second, third]
-    assert cells[0]["kind"] == "ai"
-    assert cells[0]["draft"] == {"prompt": "one", "model": "m1", "effort": "high", "max_rows": 50}
-    assert cells[0]["run"] is None
-    assert [n["title"] for n in agent.notebook_store.list_notebooks()] == ["Notebook 1"]
-    assert agent.notebook_store.list_notebooks()[0]["id"] == nb
-    assert agent.notebook_store.title_of(agent.notebooks.create_notebook()) == "Notebook 2"
+    cells = agent.notebooks.notebook_page(nb).cells
+    assert [c.cell.id for c in cells] == [first, second, third]
+    assert isinstance(cells[0].cell, AiCell)
+    assert cells[0].cell.draft.stored() == {"prompt": "one", "model": "m1", "effort": "high", "max_rows": 50}
+    assert cells[0].run is None
+    assert [n["title"] for n in agent.notebooks.list_notebooks()] == ["Notebook 1"]
+    assert agent.notebooks.list_notebooks()[0]["id"] == nb
+    assert agent.notebooks.notebook_page(agent.notebooks.create_notebook()).title == "Notebook 2"
 
 
 async def test_a_cell_sends_the_ai_cells_above_in_order_then_its_prompt_never_those_below(make_agent):
@@ -202,8 +203,8 @@ async def test_a_pre_notebook_database_is_upgraded_by_dropping_its_old_data(buil
         assert "conversation_id" not in {r[1] for r in con.execute("PRAGMA table_info(result_tables)")}
 
     again = Agent(config, agent.client_for)  # a second start changes nothing
-    assert again.tables.names() == ["rt_new"] and len(again.notebook_store.list_notebooks()) == 1
-    assert again.notebook_store.cells(again.notebook_store.list_notebooks()[0]["id"])[0]["id"] == cell
+    assert again.tables.names() == ["rt_new"] and len(again.notebooks.list_notebooks()) == 1
+    assert again.notebooks.notebook_page(again.notebooks.list_notebooks()[0]["id"]).cells[0].cell.id == cell
 
 
 async def test_runs_are_numbered_in_the_order_they_start_within_a_notebook(make_agent):
@@ -220,16 +221,16 @@ async def test_runs_are_numbered_in_the_order_they_start_within_a_notebook(make_
     assert run_of(agent, other, 0)["number"] == 1
 
 
-async def test_the_last_settings_run_are_those_of_the_most_recently_started_run(make_agent):
+async def test_the_last_settings_run_are_those_of_the_most_recently_started_run(make_agent, notebook_store):
     agent = await make_agent(ScriptedLLM([TextChunk("a")], [TextChunk("b")]))
-    assert agent.notebook_store.last_settings() is None
+    assert notebook_store.last_settings() is None
     nb = agent.notebooks.create_notebook()
     one = add_ai_cell(agent, nb, prompt="one", effort="high", max_rows=50)
     two = add_ai_cell(agent, nb, prompt="two", effort="low", max_rows=7)
     await run(agent, nb, one)
     await run(agent, nb, two)
-    assert agent.notebook_store.last_settings() == run_of(agent, nb, 1)["settings"]
-    assert agent.notebook_store.last_settings()["max_rows"] == 7
+    assert notebook_store.last_settings() == run_of(agent, nb, 1)["settings"]
+    assert notebook_store.last_settings()["max_rows"] == 7
 
 
 def test_finishing_a_run_as_failed_needs_an_error_and_no_other_status_may_have_one(tmp_path):

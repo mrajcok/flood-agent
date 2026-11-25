@@ -19,7 +19,7 @@ from flood_agent.cell import (
     starting_sql_draft,
     typed_cell,
 )
-from flood_agent.notebooks import DEFAULT_MAX_ROWS, NotebookStore
+from flood_agent.notebook_store import DEFAULT_MAX_ROWS, NotebookStore
 
 DEFAULT_MODEL = "default/model"
 

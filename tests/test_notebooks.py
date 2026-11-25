@@ -12,7 +12,7 @@ from flood_agent.catalog import CellRun
 from flood_agent.cell import save_draft
 from flood_agent.events import TextDelta, TraceReady
 from flood_agent.llm import TextChunk
-from flood_agent.notebooks import NotebookStore
+from flood_agent.notebook_store import NotebookStore
 
 SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
 

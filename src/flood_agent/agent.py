@@ -25,7 +25,7 @@ from flood_agent.events import Event
 from flood_agent.llm import ModelSpec
 from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
 from flood_agent.mcp_server import ServerSettings
-from flood_agent.notebooks import DEFAULT_MAX_ROWS, NotebookStore
+from flood_agent.notebook_store import DEFAULT_MAX_ROWS, NotebookStore
 from flood_agent.semantic_layer import SemanticLayer
 from flood_agent.sql_cell_run import SqlCellRuns
 from flood_agent.table_replacement import RefreshInProgress, ReplacementFailed, TableReplacement

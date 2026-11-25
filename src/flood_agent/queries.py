@@ -13,6 +13,7 @@ import time
 from contextlib import closing, contextmanager
 from datetime import datetime
 from pathlib import Path
+from typing import Callable, Iterator
 
 from flood_agent import table_names
 
@@ -91,6 +92,24 @@ _KEYWORDS = _FORBIDDEN_WORDS | {
 
 class QueryRejected(Exception):
     pass
+
+
+class QueryFailed(Exception):
+    """The database failed a query runner operation. The message holds no value from the database or the SQL; the
+    database's own error is the cause."""
+
+
+class _TimedOut(sqlite3.OperationalError):
+    """The query timeout ended a statement. The message is ours, so it is safe as it stands."""
+
+
+@contextmanager
+def _database_errors():
+    """Turn a database error into the runner's own."""
+    try:
+        yield
+    except sqlite3.Error as e:
+        raise QueryFailed(str(e) if isinstance(e, _TimedOut) else sanitize_error(str(e))) from e
 
 
 LIMIT_IN_SQL_CELL = (
@@ -436,7 +455,7 @@ def explain_query(
                 rows = con.execute(f"EXPLAIN QUERY PLAN {select}").fetchall()
             except sqlite3.Error as e:
                 if timed_out():
-                    raise sqlite3.OperationalError(_TIMEOUT_GUIDANCE.format(s=timeout_s)) from e
+                    raise _TimedOut(_TIMEOUT_GUIDANCE.format(s=timeout_s)) from e
                 raise
     finally:
         con.close()
@@ -643,3 +662,89 @@ def iter_all_rows(results_db: Path, name: str):
             con.close()
 
     return all_cols, gen()
+
+
+class QueryRunner:
+    """How callers query: built once with the Telemetry Database, the results database, the query timeout and
+    `readable`, which returns the tables a query may read now (ADR 0003: every live Result Table, Saved Table and
+    Lookup Table). Each operation takes only what varies per call.
+
+    A database error is raised as `QueryFailed`; `run` and `count` instead report a failure of the query itself
+    in the dict they return. The operations that take a table name do not check that it is live: the caller has."""
+
+    def __init__(self, telemetry_db: Path, results_db: Path, timeout_s: float, readable: Callable[[], set[str]]):
+        self._telemetry_db, self._results_db = telemetry_db, results_db
+        self._timeout_s, self._readable = timeout_s, readable
+
+    def run(self, sql: str, max_rows: int, title: str = "", stop: threading.Event | None = None) -> dict:
+        """Run a SELECT into a new Result Table and return its result, as `run_query` describes."""
+        with _database_errors():
+            return run_query(self._telemetry_db, self._results_db, sql, self._timeout_s, max_rows, self._readable(),
+                             title, stop)
+
+    def count(self, sql: str, stop: threading.Event | None = None) -> dict:
+        """Run a count query and return its result, as `run_count_query` describes."""
+        with _database_errors():
+            return run_count_query(self._telemetry_db, self._results_db, sql, self._timeout_s, self._readable(), stop)
+
+    def explain(self, sql: str) -> list[dict]:
+        """The Query Plan of a SELECT, as `explain_query` describes. `QueryRejected` or `QueryFailed`."""
+        with _database_errors():
+            return explain_query(self._telemetry_db, self._results_db, sql, self._timeout_s, self._readable())
+
+    def describe(self, name: str) -> dict | None:
+        """A results-database table's columns and row count; None if it is not there."""
+        with _database_errors():
+            return describe_results_table(self._results_db, name)
+
+    def table_columns(self, name: str, telemetry: bool) -> list[dict] | None:
+        """A table's columns as `table_columns` describes, from the database `telemetry` says; None if not there."""
+        with _database_errors():
+            return table_columns(self._telemetry_db, self._results_db, name, telemetry)
+
+    def row_count(self, name: str) -> int | None:
+        """A results-database table's row count; None if it is not there."""
+        with _database_errors():
+            return result_table_row_count(self._results_db, name)
+
+    def result_columns(self, name: str) -> list[str] | None:
+        """A Result Table's column names; None if it is not there."""
+        with _database_errors():
+            return result_table_columns(self._results_db, name)
+
+    def fetch_rows(self, name: str, columns: list[str] | None = None, page: int = 1, page_size: int = 50,
+                   sort: str | None = None, descending: bool = False) -> dict:
+        """One page of a table's rows, as `fetch_rows` describes. KeyError if not there, `InvalidSort`."""
+        with _database_errors():
+            return fetch_rows(self._results_db, name, columns, page, page_size, sort, descending)
+
+    def all_rows(self, name: str) -> tuple[list[str], Iterator[tuple]]:
+        """(columns, row iterator) for a whole table. KeyError if not there."""
+        with _database_errors():
+            columns, rows = iter_all_rows(self._results_db, name)
+
+        def guarded():
+            with _database_errors():
+                yield from rows
+
+        return columns, guarded()
+
+    def chart_rows(self, name: str, limit: int) -> list[dict]:
+        """A table's first `limit` rows (the chart row cap) as JSON objects. KeyError if not there."""
+        with _database_errors():
+            return fetch_records(self._results_db, name, limit)
+
+    def drop(self, name: str) -> None:
+        """Drop a results-database table if it is there."""
+        with _database_errors():
+            drop_table(self._results_db, name)
+
+    def swap(self, temp: str, name: str) -> None:
+        """Replace table `name` with `temp`, as `swap_table` describes."""
+        with _database_errors():
+            swap_table(self._results_db, temp, name)
+
+    def rename(self, old: str, new: str) -> None:
+        """Rename a results-database table; ValueError (changing nothing) if `new` is taken."""
+        with _database_errors():
+            rename_table(self._results_db, old, new)

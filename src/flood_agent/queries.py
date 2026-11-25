@@ -688,9 +688,8 @@ class QueryRunner:
         read and nothing is created. Runs under the same rails as `run` (validation, read-only connection,
         authorizer, timeout). Raises `QueryRejected` or `QueryFailed`; their messages are for the user, never
         the LLM."""
-        readable = self._readable()
         with _database_errors():
-            return _explain_query(self._telemetry_db, self._results_db, sql, self._timeout_s, readable)
+            return _explain_query(self._telemetry_db, self._results_db, sql, self._timeout_s, self._readable())
 
     def describe(self, name: str) -> dict | None:
         """A results-database table's columns and row count; None if it is not there."""

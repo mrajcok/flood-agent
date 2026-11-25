@@ -8,6 +8,10 @@ import pytest
 from flood_agent import queries
 
 
+def _locked_app_database() -> set[str]:
+    raise sqlite3.OperationalError("the app database is locked")
+
+
 def test_a_table_made_readable_after_the_runner_was_built_can_be_read(query_runner):
     readable: set[str] = set()
     runner = query_runner(readable)
@@ -46,14 +50,15 @@ def test_a_database_error_is_the_runners_own_error(query_runner, tmp_path, opera
 @pytest.mark.parametrize("operation", [
     lambda runner: runner.run("SELECT 1", max_rows=10),
     lambda runner: runner.count("SELECT COUNT(*) FROM flows"),
-    lambda runner: runner.explain("SELECT * FROM flows"),
 ])
-def test_a_failure_to_read_the_readable_set_is_not_a_query_failure(query_runner, operation):
-    def readable() -> set[str]:
-        raise sqlite3.OperationalError("the app database is locked")
-
+def test_run_and_count_do_not_turn_a_failure_to_read_the_readable_set_into_a_query_failure(query_runner, operation):
     with pytest.raises(sqlite3.OperationalError):
-        operation(query_runner(readable))
+        operation(query_runner(_locked_app_database))
+
+
+def test_explain_reports_a_failure_to_read_the_readable_set_as_a_query_failure(query_runner):
+    with pytest.raises(queries.QueryFailed):
+        query_runner(_locked_app_database).explain("SELECT * FROM flows")
 
 
 def test_drop_swap_and_rename_change_the_tables_in_the_results_database(query_runner):

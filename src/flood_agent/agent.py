@@ -88,6 +88,7 @@ def build_parts(config: AgentConfig, semantic_layer: SemanticLayer, client_for: 
     tables = Catalog(
         config.app_db, config.clock, config.result_ttl_ms, telemetry_tables=semantic_layer.table_names(),
         results_db=config.results_db, on_rename=store.follow_rename,  # Displays follow a table's new name
+        runner=runner,
     )
     replacement = TableReplacement(tables, config.telemetry_db, config.results_db, config.query_timeout_s)
     sql_cells = SqlCellRuns(store, tables, replacement, config.telemetry_db, config.results_db,

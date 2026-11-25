@@ -5,12 +5,10 @@ import re
 import sqlite3
 import threading
 from contextlib import closing
-from dataclasses import replace
 
 from conftest import Clock, ScriptedLLM, run_of, tool_call
 from conftest import ask as run_in_notebook
 
-from flood_agent import queries
 from flood_agent.llm import TextChunk
 
 HOUR = 3_600_000
@@ -58,12 +56,13 @@ def test_refresh_gives_a_new_number_and_a_new_as_of_time_that_survive_a_reload(b
     assert shown(client, nb) == (1, clock.ms)
 
 
-def test_a_query_that_times_out_fails_plainly_and_keeps_the_old_number(build_agent, web_client, monkeypatch):
+def test_a_query_that_times_out_fails_plainly_and_keeps_the_old_number(
+        build_agent, web_client, monkeypatch, query_runner):
     monkeypatch.setenv("FIXED_NOW_MS", "1700000003000")
     client, agent, clock, _, nb, display_id = ask(build_agent, web_client)
     before = shown(client, nb)
     set_stored_sql(agent, SLOW)
-    agent.config = replace(agent.config, query_timeout_s=0.01)
+    agent.queries = query_runner(agent.tables.readable, timeout_s=0.01)
     clock.ms += HOUR
 
     r = refresh(client, display_id)
@@ -84,15 +83,15 @@ def test_the_stored_query_goes_through_the_same_one_number_and_safety_checks(bui
 
 
 def test_a_second_refresh_while_one_runs_is_a_conflict(build_agent, web_client, monkeypatch):
-    client, _, _, _, _, display_id = ask(build_agent, web_client)
-    started, release, real = threading.Event(), threading.Event(), queries.run_count_query
+    client, agent, _, _, _, display_id = ask(build_agent, web_client)
+    started, release, real = threading.Event(), threading.Event(), agent.queries.count
 
     def slow(*args, **kwargs):
         started.set()
         assert release.wait(5)
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(queries, "run_count_query", slow)
+    monkeypatch.setattr(agent.queries, "count", slow)
     first = []
     t = threading.Thread(target=lambda: first.append(refresh(client, display_id)))
     t.start()
@@ -103,7 +102,7 @@ def test_a_second_refresh_while_one_runs_is_a_conflict(build_agent, web_client, 
         release.set()
         t.join(5)
     assert first[0].status_code == 200
-    monkeypatch.setattr(queries, "run_count_query", real)
+    monkeypatch.setattr(agent.queries, "count", real)
     assert refresh(client, display_id).status_code == 200  # the guard is released
 
 
@@ -126,12 +125,12 @@ def test_the_llm_is_told_nothing_and_its_earlier_text_is_left_alone(build_agent,
 
 def test_a_notebook_deleted_mid_refresh_is_not_found(build_agent, web_client, monkeypatch):
     client, agent, _, _, nb, display_id = ask(build_agent, web_client)
-    real = queries.run_count_query
+    real = agent.queries.count
 
     def delete_then_run(*args, **kwargs):
         agent.notebooks.delete_notebook(nb)
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(queries, "run_count_query", delete_then_run)
+    monkeypatch.setattr(agent.queries, "count", delete_then_run)
     r = refresh(client, display_id)
     assert r.status_code == 404 and r.json()["detail"] == "unknown Count Display"

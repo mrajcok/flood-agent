@@ -139,7 +139,7 @@ async def test_trace_never_reaches_the_llm(make_agent):
 
     follow = ScriptedLLM([TextChunk("fine")])
     agent.client_for = lambda model: follow
-    await collect(agent, "second", agent.notebooks.list_notebooks()[0]["id"])
+    await collect(agent, "second", agent.notebook_store.list_notebooks()[0]["id"])
     sent = llm.all_sent_text() + follow.all_sent_text()
     for secret in [raw, executed, "executed_sql", "raw_error", "prompt_tokens", "duration_ms", "query_metadata"]:
         assert secret not in sent, secret

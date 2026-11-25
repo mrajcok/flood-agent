@@ -137,16 +137,16 @@ def _resolve_data(node, table: str, url: dict):
 
 
 class AiCellRuns:
-    """Runs AI Cells and stops them. Built once by the Agent; the Agent keeps the rule that one Cell runs per
-    Notebook at a time, and supervises the MCP connection this gets from `connection`."""
+    """Runs AI Cells and stops them. Built once by the Agent; the Notebook module keeps the rule that one Cell runs
+    per Notebook at a time, and the Agent supervises the MCP connection this gets from `connection`."""
 
     def __init__(
         self, notebooks: NotebookStore, tables: Catalog, semantic_layer: SemanticLayer, client_for: ClientFactory,
-        connection: ConnectionProvider, spec_of: Callable[[str], ModelSpec | None],
+        connection: ConnectionProvider, started: Callable[[], bool], spec_of: Callable[[str], ModelSpec | None],
         max_llm_steps: int, max_failed_attempts: int, clock: Callable[[], int],
     ):
         self.notebooks, self.tables, self.semantic_layer = notebooks, tables, semantic_layer
-        self.client_for, self._connection = client_for, connection
+        self.client_for, self._connection, self._started = client_for, connection, started
         self.spec_of = spec_of
         self.max_llm_steps, self.max_failed_attempts, self.clock = max_llm_steps, max_failed_attempts, clock
         self.tasks: set[asyncio.Task] = set()  # every running Run's producer task
@@ -162,6 +162,8 @@ class AiCellRuns:
         the user's stop does (what it had streamed is kept) and waited for. RuntimeError after `aclose`."""
         if self._closed:
             raise RuntimeError("AI Cell Runs are closed")
+        if not self._started():  # before the Run is recorded
+            raise RuntimeError("Agent not started: call `await agent.start()` or use `async with agent`")
         task, queue, release = self._start(cell)
         try:
             async with aclosing(self._consume(task, queue)) as events:  # closed with this stream, not later

@@ -1,7 +1,7 @@
 """An AI Cell Run starts from the AI Cell context above it, lists its Result Tables afresh before every LLM step,
 and records them against its Cell and Run."""
 
-from conftest import ScriptedLLM, run_of, tool_call
+from conftest import ScriptedLLM, add_ai_cell, add_markdown_cell, run_of, tool_call
 
 from flood_agent.ai_cell_context import parse_system_prompt
 from flood_agent.catalog import CellRun
@@ -13,11 +13,11 @@ SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER B
 async def test_an_ai_cell_run_starts_from_the_context_above_and_records_its_tables_against_its_cell_and_run(make_agent):
     llm = ScriptedLLM([TextChunk("Looking."), tool_call("run_query", sql=SQL, title="Ports")], [TextChunk("Done.")])
     agent = await make_agent(llm)
-    nb = agent.create_notebook()
-    agent.add_markdown_cell(nb, "hi", send_to_ai=True)
-    cell = agent.add_ai_cell(nb, prompt="ports please")
+    nb = agent.notebooks.create_notebook()
+    add_markdown_cell(agent, nb, "hi", send_to_ai=True)
+    cell = add_ai_cell(agent, nb, prompt="ports please")
 
-    [e async for e in agent.run_cell(nb, cell)]
+    [e async for e in agent.notebooks.run_cell(nb, cell)]
 
     first, second = llm.calls
     assert [(m["role"], m["content"]) for m in first[1:]] == [

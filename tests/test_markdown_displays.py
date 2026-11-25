@@ -6,11 +6,10 @@ import re
 from dataclasses import replace
 
 import pytest
-from conftest import ScriptedLLM, last_tool_result, tool_call
+from conftest import ScriptedLLM, add_ai_cell, last_tool_result, tool_call
 from test_notebook_page import new_notebook
 from test_notebooks import run
 
-from flood_agent.cell import save_draft
 from flood_agent.llm import TextChunk
 
 SQL = "SELECT dport, bytes FROM flows WHERE bytes = 987654"
@@ -32,19 +31,19 @@ def answer_with_table_and_chart():
 async def ran_cell(make_agent, extra=()):
     llm = ScriptedLLM(*answer_with_table_and_chart(), *extra)
     agent = await make_agent(llm)
-    nb = agent.create_notebook()
-    cell = agent.add_ai_cell(nb, prompt="top ports")
+    nb = agent.notebooks.create_notebook()
+    cell = add_ai_cell(agent, nb, prompt="top ports")
     await run(agent, nb, cell)
-    table = agent.notebooks.displays(agent.notebooks.cell(cell)["run"]["id"])[0]["result_table"]
+    table = agent.notebook_store.displays(agent.notebook_store.cell(cell)["run"]["id"])[0]["result_table"]
     return agent, llm, nb, cell, table
 
 
 async def test_copy_to_markdown_inserts_below_with_the_text_and_a_display_per_table_and_chart(make_agent):
     agent, _, nb, cell, table = await ran_cell(make_agent)
-    new = agent.copy_to_markdown_cell(nb, cell)
+    new = agent.notebooks.copy_to_markdown_cell(nb, cell)
 
-    assert [c["id"] for c in agent.notebooks.cells(nb)] == [cell, new]
-    draft = agent.notebooks.cell(new)["draft"]
+    assert [c["id"] for c in agent.notebook_store.cells(nb)] == [cell, new]
+    draft = agent.notebook_store.cell(new)["draft"]
     assert draft["text"] == "Port 8443 moved most."
     assert draft["send_to_ai"] is False
     assert [(d["kind"], d["table"]) for d in draft["displays"]] == [("table", table), ("chart", table)]
@@ -53,40 +52,40 @@ async def test_copy_to_markdown_inserts_below_with_the_text_and_a_display_per_ta
 
 async def test_the_copy_still_has_its_displays_after_the_ai_cell_is_re_run(make_agent):
     agent, _, nb, cell, table = await ran_cell(make_agent, extra=[[TextChunk("Different.")]])
-    new = agent.copy_to_markdown_cell(nb, cell)
+    new = agent.notebooks.copy_to_markdown_cell(nb, cell)
     await run(agent, nb, cell)  # the re-run replaces the Run (its Displays); the earlier table stays, for the copy
-    draft = agent.notebooks.cell(new)["draft"]
+    draft = agent.notebook_store.cell(new)["draft"]
     assert draft["text"] == "Port 8443 moved most." and len(draft["displays"]) == 2
     assert table in agent.tables
 
 
 async def test_saving_renames_the_chosen_rt_tables_and_the_copy_uses_the_new_names(make_agent):
     agent, _, nb, cell, table = await ran_cell(make_agent)
-    assert agent.markdown_copy_tables(nb, cell) == [table]
-    new = agent.copy_to_markdown_cell(nb, cell, save={table: "top_ports"})
+    assert agent.notebooks.markdown_copy_tables(nb, cell) == [table]
+    new = agent.notebooks.copy_to_markdown_cell(nb, cell, save={table: "top_ports"})
 
     assert agent.tables["top_ports"].kind == "saved" and table not in agent.tables
-    assert {d["table"] for d in agent.notebooks.cell(new)["draft"]["displays"]} == {"top_ports"}
+    assert {d["table"] for d in agent.notebook_store.cell(new)["draft"]["displays"]} == {"top_ports"}
     # the AI Cell's own Displays followed the rename too
-    run_displays = agent.notebooks.displays(agent.notebooks.cell(cell)["run"]["id"])
+    run_displays = agent.notebook_store.displays(agent.notebook_store.cell(cell)["run"]["id"])
     assert {d["result_table"] for d in run_displays} == {"top_ports"}
-    assert agent.markdown_copy_tables(nb, cell) == []
+    assert agent.notebooks.markdown_copy_tables(nb, cell) == []
 
 
 async def test_a_rename_elsewhere_updates_an_embedded_display_including_its_chart_spec(make_agent):
     agent, _, nb, cell, table = await ran_cell(make_agent)
-    new = agent.copy_to_markdown_cell(nb, cell)
+    new = agent.notebooks.copy_to_markdown_cell(nb, cell)
     agent.tables.update(table, new_name="renamed")
-    displays = agent.notebooks.cell(new)["draft"]["displays"]
+    displays = agent.notebook_store.cell(new)["draft"]["displays"]
     assert [d["table"] for d in displays] == ["renamed", "renamed"]
     assert displays[1]["spec"]["data"] == {"name": "renamed"}
 
 
 async def test_a_ticked_copy_sends_the_text_and_table_names_but_no_rows(make_agent):
     agent, llm, nb, cell, table = await ran_cell(make_agent, extra=[[TextChunk("ok")]])
-    new = agent.copy_to_markdown_cell(nb, cell)
-    save_draft(agent.notebooks, new, replace(agent.cell(new).draft, send_to_ai=True))
-    below = agent.add_ai_cell(nb, prompt="next")
+    new = agent.notebooks.copy_to_markdown_cell(nb, cell)
+    agent.notebooks.save_draft(nb, new, replace(agent.notebooks.cell(nb, new).draft, send_to_ai=True))
+    below = add_ai_cell(agent, nb, prompt="next")
     await run(agent, nb, below)
     note = [m["content"] for m in llm.calls[-1] if str(m.get("content")).startswith("[Markdown note]")]
     assert note == [f"[Markdown note] Port 8443 moved most.\n[Display: table {table}]\n[Display: chart {table}]"]
@@ -95,8 +94,8 @@ async def test_a_ticked_copy_sends_the_text_and_table_names_but_no_rows(make_age
 
 async def test_an_unticked_copy_sends_nothing(make_agent):
     agent, llm, nb, cell, _ = await ran_cell(make_agent, extra=[[TextChunk("ok")]])
-    agent.copy_to_markdown_cell(nb, cell)
-    below = agent.add_ai_cell(nb, prompt="next")
+    agent.notebooks.copy_to_markdown_cell(nb, cell)
+    below = add_ai_cell(agent, nb, prompt="next")
     await run(agent, nb, below)
     assert not any(str(m.get("content")).startswith("[Markdown note]") for m in llm.calls[-1])
 
@@ -104,8 +103,8 @@ async def test_an_unticked_copy_sends_nothing(make_agent):
 async def test_a_bad_save_name_changes_nothing_and_adds_no_cell(make_agent):
     agent, _, nb, cell, table = await ran_cell(make_agent)
     with pytest.raises(ValueError):
-        agent.copy_to_markdown_cell(nb, cell, save={table: "rt_nope"})
-    assert len(agent.notebooks.cells(nb)) == 1 and table in agent.tables
+        agent.notebooks.copy_to_markdown_cell(nb, cell, save={table: "rt_nope"})
+    assert len(agent.notebook_store.cells(nb)) == 1 and table in agent.tables
 
 
 def test_the_page_renders_embedded_displays_and_the_endpoints_copy(build_agent, web_client):

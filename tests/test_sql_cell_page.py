@@ -47,7 +47,7 @@ def test_the_edited_not_run_marker_on_a_sql_cell_is_the_typed_cells_answer(build
     sql = "SELECT dport FROM flows"
     client.post(f"/n/{nb}/cells/{cell}/run", data={"sql": sql, "max_rows": "10"})
     client.get(f"/n/{nb}/cells/{cell}/stream")
-    assert not agent.cell(cell).edited and not edited()
+    assert not agent.notebooks.cell(nb, cell).edited and not edited()
     client.post(f"/n/{nb}/cells/{cell}/draft", data={"sql": "SELECT sip FROM flows", "max_rows": "10"})
     page = client.get(f"/n/{nb}/cells/{cell}").text
-    assert agent.cell(cell).edited and 'data-edited="true"' in page and "edited, not run" in page
+    assert agent.notebooks.cell(nb, cell).edited and 'data-edited="true"' in page and "edited, not run" in page

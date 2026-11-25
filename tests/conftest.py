@@ -14,7 +14,7 @@ import sys
 import threading
 import time
 from contextlib import ExitStack, asynccontextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import anyio
@@ -26,13 +26,22 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
 
 from flood_agent.agent import Agent, AgentConfig
-from flood_agent.catalog import CellRun
+from flood_agent.ai_cell_run import AiCellRuns
+from flood_agent.catalog import Catalog, CellRun
+from flood_agent.cell import AiDraft, AiRunSettings, MarkdownDraft, SqlDraft, SqlRunSettings
+from flood_agent.cell_kinds import AI, MARKDOWN
+from flood_agent.cell_kinds import SQL as SQL_KIND
 from flood_agent.config import Settings
 from flood_agent.events import TextDelta
 from flood_agent.generator import generate
 from flood_agent.llm import TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_server import ServerSettings, create_server
 from flood_agent.model_choices import ModelChoices
+from flood_agent.notebook import Notebooks, Position
+from flood_agent.notebook_store import DEFAULT_MAX_ROWS, NotebookStore
+from flood_agent.semantic_layer import SemanticLayer
+from flood_agent.sql_cell_run import SqlCellRuns
+from flood_agent.table_replacement import TableReplacement
 from flood_agent.web import create_app
 
 # SQLite fsyncs on every commit, and on a disk filesystem (WSL's ext4 especially) that was over
@@ -334,6 +343,74 @@ async def make_agent(build_agent):
         await agent.aclose()
 
 
+@dataclass
+class NotebookParts:
+    """The Notebook module on real Notebook storage and a real Table Catalog, with what a test sets up through."""
+
+    notebooks: Notebooks
+    store: NotebookStore
+    tables: Catalog
+    results_db: Path
+    clock: "Clock"
+
+
+@pytest.fixture
+def notebook_parts(tmp_path, telemetry_db, semantic_layer_path):
+    """`notebook_parts(api_key=True)` -> NotebookParts on a temporary database: no HTTP client, no MCP server (an AI
+    Cell cannot be Run). `api_key=False`: as if no API key were set, so only No model can be used."""
+    def _build(api_key: bool = True) -> NotebookParts:
+        cfg, clock = config_for_test(tmp_path, telemetry_db, semantic_layer_path, api_key), Clock()
+        store = NotebookStore(cfg.app_db, clock)
+        layer = SemanticLayer(cfg.semantic_layer)
+        tables = Catalog(cfg.app_db, clock, cfg.result_ttl_ms, telemetry_tables=layer.table_names(),
+                         results_db=cfg.results_db, on_rename=store.follow_rename)
+        replacement = TableReplacement(tables, cfg.telemetry_db, cfg.results_db, cfg.query_timeout_s)
+        sql_cells = SqlCellRuns(store, tables, replacement, cfg.telemetry_db, cfg.results_db, cfg.query_timeout_s,
+                                clock)
+
+        async def no_connection():
+            raise RuntimeError("no MCP server here")
+
+        ai_cells = AiCellRuns(store, tables, layer, lambda model: ScriptedLLM(), no_connection, lambda: False,
+                              cfg.choices.spec_of, cfg.max_llm_steps, cfg.max_failed_attempts, clock)
+        notebooks = Notebooks(store, tables, sql_cells, ai_cells, cfg.choices)
+        return NotebookParts(notebooks, store, tables, cfg.results_db, clock)
+
+    return _build
+
+
+def add_ai_cell(agent: Agent, notebook_id: str, prompt: str = "", model: str | None = None,
+                effort: str | None = None, max_rows: int = DEFAULT_MAX_ROWS, after: str | None = None,
+                position: Position | None = None) -> str:
+    """Add an AI Cell (after `after`, else at `position`, else at the end) whose Draft holds this prompt and these
+    settings (the default model when `model` is None)."""
+    nbs = agent.notebooks
+    cell = nbs.add_cell(notebook_id, AI, position or ("after" if after else "end"), after)
+    settings = AiRunSettings(model or agent.config.choices.default_model, effort, max_rows)
+    nbs.save_draft(notebook_id, cell, AiDraft(prompt, settings))
+    return cell
+
+
+def add_sql_cell(agent: Agent, notebook_id: str, sql: str = "", max_rows: int = DEFAULT_MAX_ROWS,
+                 after: str | None = None, command: str = "", table: str = "",
+                 position: Position | None = None) -> str:
+    """Add a SQL Cell (after `after`, else at `position`, else at the end) whose Draft holds this SQL, row cap and
+    command (with its table)."""
+    nbs = agent.notebooks
+    cell = nbs.add_cell(notebook_id, SQL_KIND, position or ("after" if after else "end"), after)
+    nbs.save_draft(notebook_id, cell, SqlDraft(sql, SqlRunSettings(max_rows, command), table))
+    return cell
+
+
+def add_markdown_cell(agent: Agent, notebook_id: str, text: str = "", send_to_ai: bool = False,
+                      after: str | None = None, position: Position | None = None) -> str:
+    """Add a Markdown Cell (after `after`, else at `position`, else at the end) with this text and Send to AI."""
+    nbs = agent.notebooks
+    cell = nbs.add_cell(notebook_id, MARKDOWN, position or ("after" if after else "end"), after)
+    nbs.save_draft(notebook_id, cell, MarkdownDraft(text, send_to_ai, ()))
+    return cell
+
+
 @pytest.fixture
 def web_client():
     """`web_client(agent)` -> a TestClient used as a context manager, so the app lifespan runs
@@ -449,10 +526,10 @@ async def collect(
     model: str | None = None, effort: str | None = None,
 ):
     """Run `message` as a new AI Cell at the end of `notebook` (a new notebook if None) and return its events.
-    The cell's id is `agent.notebooks.cells(notebook)[-1]["id"]` afterwards."""
-    notebook = notebook or agent.create_notebook()
-    cell = agent.add_ai_cell(notebook, prompt=message, model=model, effort=effort, max_rows=max_result_rows)
-    return [e async for e in agent.run_cell(notebook, cell)]
+    The cell's id is `agent.notebook_store.cells(notebook)[-1]["id"]` afterwards."""
+    notebook = notebook or agent.notebooks.create_notebook()
+    cell = add_ai_cell(agent, notebook, prompt=message, model=model, effort=effort, max_rows=max_result_rows)
+    return [e async for e in agent.notebooks.run_cell(notebook, cell)]
 
 
 SQL = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
@@ -501,12 +578,12 @@ def register_table(catalog, name: str, cell_id: str = "cell-1", run: int = 1, *a
 
 def run_of(agent: Agent, notebook: str, index: int = -1) -> dict:
     """The latest Run of the notebook's `index`th cell (default: the last), with its `messages`, `trace`, `status`."""
-    return agent.notebooks.cells(notebook)[index]["run"]
+    return agent.notebook_store.cells(notebook)[index]["run"]
 
 
 def tables_in(agent: Agent, notebook: str) -> list:
     """The live Result and Saved Tables any cell of the notebook made, oldest first."""
-    tables = [t for c in agent.notebooks.cells(notebook) for t in agent.tables.tables_of_cell(c["id"])]
+    tables = [t for c in agent.notebook_store.cells(notebook) for t in agent.tables.tables_of_cell(c["id"])]
     return sorted(tables, key=lambda t: (t.created_at_ms, t.name))
 
 

@@ -2,7 +2,7 @@
 
 import re
 
-from conftest import GatedLLM, ScriptedLLM, add_below, last_tool_result, tool_call
+from conftest import GatedLLM, ScriptedLLM, add_ai_cell, add_below, last_tool_result, tool_call
 from playwright.sync_api import expect
 from test_notebooks import SQL
 from test_stop_run import HangingLLM
@@ -247,8 +247,8 @@ def test_with_no_key_every_real_model_is_disabled_in_the_chip(build_agent, live_
 def test_running_a_real_model_without_an_api_key_shows_the_refusal_in_the_cell(build_agent, live_page):
     llm = ScriptedLLM([TextChunk("never")])
     agent = build_agent(llm, api_key=False)
-    notebook = agent.create_notebook()
-    agent.add_ai_cell(notebook, prompt="hello", model="anthropic/claude-sonnet-5.5")
+    notebook = agent.notebooks.create_notebook()
+    add_ai_cell(agent, notebook, prompt="hello", model="anthropic/claude-sonnet-5.5")
     page = live_page(f"/n/{notebook}", agent=agent)
     cell = page.locator(".cellblock").first
 

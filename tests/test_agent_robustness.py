@@ -6,7 +6,7 @@ import asyncio
 import json
 
 import pytest
-from conftest import ScriptedLLM, collect, last_tool_result, mcp_children, run_of, tables_in, tool_call
+from conftest import ScriptedLLM, add_ai_cell, collect, last_tool_result, mcp_children, run_of, tables_in, tool_call
 
 from flood_agent import ai_cell_run
 from flood_agent.events import DisplayEvent, TextDelta, TraceReady, TurnEnd, TurnError
@@ -81,7 +81,7 @@ async def test_failed_llm_step_keeps_history_valid_surfaces_error_and_saves_trac
 
     llm = ScriptedLLM([tool_call("run_query", "c1", sql=SQL, title="t")], boom)
     agent = await make_agent(llm)
-    nb = agent.create_notebook()
+    nb = agent.notebooks.create_notebook()
     events = await collect(agent, "q", nb)
 
     assert "upstream exploded" in text_of(events)
@@ -104,7 +104,7 @@ async def test_unexpected_exception_is_reported_not_raised(make_agent):
         raise RuntimeError("kaboom")
 
     agent = await make_agent(ScriptedLLM(boom))
-    nb = agent.create_notebook()
+    nb = agent.notebooks.create_notebook()
     events = await collect(agent, "q", nb)
     (err,) = [e for e in events if isinstance(e, TurnError)]
     assert "RuntimeError" in err.detail and "kaboom" in err.detail
@@ -115,9 +115,9 @@ async def test_unexpected_exception_is_reported_not_raised(make_agent):
 async def test_a_cell_below_is_sent_a_repaired_copy_of_a_corrupt_saved_run(make_agent):
     llm = ScriptedLLM([TextChunk("ok")])
     agent = await make_agent(llm)
-    nb = agent.create_notebook()
-    first = agent.add_ai_cell(nb, prompt="hi")
-    run = agent.notebooks.start_run(first, "hi", {"model": "m", "effort": None, "max_rows": 10}, "f")
+    nb = agent.notebooks.create_notebook()
+    first = add_ai_cell(agent, nb, prompt="hi")
+    run = agent.notebook_store.start_run(first, "hi", {"model": "m", "effort": None, "max_rows": 10}, "f")
     call = lambda i: {"id": i, "type": "function", "function": {"name": "run_query", "arguments": "{}"}}  # noqa: E731
     for m in [
         {"role": "user", "content": "hi"},
@@ -129,8 +129,8 @@ async def test_a_cell_below_is_sent_a_repaired_copy_of_a_corrupt_saved_run(make_
         {"role": "assistant", "content": "fine"},
         {"role": "assistant", "content": "", "tool_calls": [call("d")]},  # trailing, unanswered
     ]:
-        agent.notebooks.add_message(run, m)
-    agent.notebooks.finish_run(run, "ok")
+        agent.notebook_store.add_message(run, m)
+    agent.notebook_store.finish_run(run, "ok")
     await collect(agent, "next", nb)
     msgs = llm.calls[0][1:-1]  # between the system prompt and the new prompt
     assert_valid_history(msgs)
@@ -139,9 +139,9 @@ async def test_a_cell_below_is_sent_a_repaired_copy_of_a_corrupt_saved_run(make_
 
 async def test_a_run_left_running_by_a_killed_app_is_failed_at_the_next_start(make_agent):
     killed = await make_agent(ScriptedLLM())
-    nb = killed.create_notebook()
-    cut_off = killed.add_ai_cell(nb, prompt="hi")
-    killed.notebooks.start_run(cut_off, "hi", {"model": "m", "effort": None, "max_rows": 10}, "f")  # never finished
+    nb = killed.notebooks.create_notebook()
+    cut_off = add_ai_cell(killed, nb, prompt="hi")
+    killed.notebook_store.start_run(cut_off, "hi", {"model": "m", "effort": None, "max_rows": 10}, "f")  # never finished
 
     llm = ScriptedLLM([TextChunk("ok")])
     restarted = await make_agent(llm)  # a new app on the same app database
@@ -158,7 +158,7 @@ async def test_steps_exhausted_tells_the_user_and_saves_the_trace(make_agent):
         [tool_call("run_query", "c2", sql=SQL, title="t")],
     )
     agent = await make_agent(llm, max_llm_steps=2)
-    nb = agent.create_notebook()
+    nb = agent.notebooks.create_notebook()
     events = await collect(agent, "q", nb)
     assert ai_cell_run.STEP_LIMIT_MESSAGE in text_of(events)
     assert any(isinstance(e, TraceReady) for e in events) and isinstance(events[-1], TurnEnd)
@@ -182,7 +182,7 @@ async def test_one_mcp_server_serves_several_runs_across_two_notebooks(build_age
     (server,) = mcp_children()
     try:
         for _ in range(2):
-            for _nb in (agent.create_notebook(), agent.create_notebook()):
+            for _nb in (agent.notebooks.create_notebook(), agent.notebooks.create_notebook()):
                 llm.steps = script().steps
                 events = await collect(agent, "q", _nb)
                 assert isinstance(events[-1], TurnEnd)
@@ -225,8 +225,8 @@ async def test_consumer_stopping_early_leaves_the_server_running_and_the_next_tu
     await agent.start()
     try:
         (server,) = mcp_children()
-        nb = agent.create_notebook()
-        gen = agent.run_cell(nb, agent.add_ai_cell(nb, prompt="q"))
+        nb = agent.notebooks.create_notebook()
+        gen = agent.notebooks.run_cell(nb, add_ai_cell(agent, nb, prompt="q"))
         async for event in gen:
             if isinstance(event, TextDelta):
                 break
@@ -297,7 +297,7 @@ async def test_server_dying_mid_turn_is_a_tool_error_and_the_turn_still_ends_cle
     agent = build_agent(llm)
     await agent.start()
     try:
-        nb = agent.create_notebook()
+        nb = agent.notebooks.create_notebook()
         events = await asyncio.wait_for(collect(agent, "q", nb), 30)
         assert any(isinstance(e, TraceReady) for e in events) and isinstance(events[-1], TurnEnd)
         trace = next(e for e in events if isinstance(e, TraceReady)).trace
@@ -334,7 +334,7 @@ async def test_failed_restart_is_a_turn_error_with_an_error_trace_entry(build_ag
 
 
 async def first_notebook_table(agent, llm):
-    nb = agent.create_notebook()
+    nb = agent.notebooks.create_notebook()
     llm.steps = [[tool_call("run_query", "c1", sql=SQL, title="t")], [TextChunk("ok")]]
     await collect(agent, "first", nb)
     return tables_in(agent, nb)[0].name
@@ -461,8 +461,8 @@ async def test_agent_aclose_cancels_and_awaits_in_flight_turns(build_agent):
 
     agent = build_agent(ScriptedLLM(hang))
     await agent.start()
-    nb = agent.create_notebook()
-    gen = agent.run_cell(nb, agent.add_ai_cell(nb, prompt="q"))
+    nb = agent.notebooks.create_notebook()
+    gen = agent.notebooks.run_cell(nb, add_ai_cell(agent, nb, prompt="q"))
     first = asyncio.create_task(gen.__anext__())
     await asyncio.wait_for(started.wait(), 10)
     producers = set(agent.ai_cells.tasks)

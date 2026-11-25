@@ -318,7 +318,8 @@ def generate(db_path, seed: int = 1, scale: float = 1.0) -> list[dict]:
     amp_count, tunnel_count = _generate_dns(con, seed, dns_flows, amp_dns_flows, tunnel_flows)
     attacks["amplification"].update(dns_question=AMP_QUESTION, dns_qtype=AMP_QTYPE, dns_response_count=amp_count)
     attacks["dns_tunnel"].update(flow_count=len(tunnel_flows), dns_response_count=tunnel_count)
-    diameter_attacks = diameter_generator.generate_diameter(con, seed, scale)
+    ue_candidates = set(clients) - {TUNNEL_CLIENT}  # an attack's host is no Subscriber
+    diameter_attacks = diameter_generator.generate_diameter(con, seed, scale, ue_candidates)
     con.executescript(INDEXES)
     con.commit()
     con.close()

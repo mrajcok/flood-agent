@@ -1,4 +1,4 @@
-"""The generator's `diameter` table: S6a signaling, seen through `generate()` and the database."""
+"""The generator's `diameter` table and its S6a signaling, seen through `generate()` and the database."""
 
 import hashlib
 import json
@@ -10,6 +10,7 @@ import pytest
 from flood_agent.generator import END_MS, START_MS, generate
 
 SCALE = 0.05  # enough records for every kind of transaction, timeouts included
+S6A = "application_id = 16777251"
 # `flows` and `dns_metadata` for seed 7 at scale 0.01, as generated before Diameter existed.
 FLOWS_BEFORE_DIAMETER = "2cdeded6d52f53d61d6443443b7ef660837b99955b65e2173c2e6bbb4fa47dbc"
 DNS_BEFORE_DIAMETER = "8e67784a5e7506baa74738f4903c55a210b4d72e26d91158e6f5a90db811fa48"
@@ -48,7 +49,7 @@ def test_diameter_has_its_columns_in_etime_order_and_indexed(db):
         rows(db, f"PRAGMA index_info({name})")[0][2]
         for (name,) in rows(db, "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='diameter'")
     }
-    assert {"etime", "imsi"} <= indexed
+    assert {"etime", "imsi", "ue_ip_address"} <= indexed
 
 
 def test_same_seed_gives_an_identical_diameter_table(db, tmp_path):
@@ -154,7 +155,7 @@ def realm_of(plmn):
 
 
 def test_every_s6a_record_crosses_between_an_mme_and_the_subscribers_hss(db):
-    for r in records(db, outside_attacks(db)):
+    for r in records(db, f"{S6A} AND {outside_attacks(db)}"):
         from_hss = r["command_code"] in (317, 319, 320)  # CLR, IDR, DSR
         hss_realm = r["origin_realm"] if from_hss else r["destination_realm"]
         mme_realm = r["destination_realm"] if from_hss else r["origin_realm"]
@@ -174,13 +175,13 @@ def test_each_attach_is_an_air_then_a_ulr_that_describes_the_device(db):
         if r["status"] != "Timeout" and r["result_code"] == 2001:
             assert r["msisdn"].isdigit()
     first = {}
-    for r in sorted(records(db), key=lambda r: r["stime"]):
+    for r in sorted(records(db, S6A), key=lambda r: r["stime"]):
         first.setdefault(r["imsi"], r)
     assert {r["command_code"] for r in first.values()} == {318}
 
 
 def test_the_traffic_mix_has_every_s6a_command_mostly_attaches(db):
-    counts = dict(rows(db, "SELECT command_code, COUNT(*) FROM diameter GROUP BY command_code"))
+    counts = dict(rows(db, f"SELECT command_code, COUNT(*) FROM diameter WHERE {S6A} GROUP BY command_code"))
     assert set(counts) == {316, 317, 318, 319, 320, 321, 323}
     assert counts[318] + counts[316] > 0.75 * sum(counts.values())
     assert 11 * 250 < sum(counts.values()) < 16 * 250  # per Subscriber over the week
@@ -188,10 +189,10 @@ def test_the_traffic_mix_has_every_s6a_command_mostly_attaches(db):
 
 def test_columns_that_do_not_apply_are_null(db):
     for column in ("ue_ip_address", "apn", "cc_request_type", "cc_request_number"):
-        assert records(db, f"application_id = 16777251 AND {column} IS NOT NULL") == []
+        assert records(db, f"{S6A} AND {column} IS NOT NULL") == []
     for column, commands in (("imei", "316"), ("rat_type", "316"), ("visited_plmn_id", "316, 318"),
                              ("msisdn", "316, 319"), ("cancellation_type", "317")):
-        assert records(db, f"command_code NOT IN ({commands}) AND {column} IS NOT NULL") == [], column
+        assert records(db, f"{S6A} AND command_code NOT IN ({commands}) AND {column} IS NOT NULL") == [], column
 
 
 def test_normal_cancellations_follow_a_move_to_another_mme(db):

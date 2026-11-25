@@ -288,6 +288,20 @@
   question: How many Diameter Transaction Records are there in total? Return a single number.
   sql: SELECT COUNT(*) AS records FROM diameter
 
+- id: diameter-by-interface
+  question: How many Diameter Transaction Records are there for each interface? Return application_id and the count.
+  sql: SELECT application_id, COUNT(*) AS records FROM diameter GROUP BY application_id
+
+- id: diameter-subscriber-for-flow
+  question: >-
+    Which IMSI held the UE IP address 10.1.0.208 at 2026-01-03 12:00:00 UTC? Return the IMSI.
+  sql: >-
+    WITH s AS (SELECT session_id, MIN(imsi) AS imsi, MIN(CASE WHEN cc_request_type = 1 THEN stime END) AS session_start,
+    COALESCE(MAX(CASE WHEN cc_request_type = 3 THEN etime END), MAX(etime)) AS session_end FROM diameter
+    WHERE application_id = 16777238 AND ue_ip_address = '10.1.0.208'
+    AND etime >= 1767441600000 - 86400000 AND etime < 1767441600000 + 86400000 GROUP BY session_id)
+    SELECT imsi FROM s WHERE 1767441600000 BETWEEN session_start AND session_end
+
 - id: diameter-inbound-roamers
   question: How many distinct inbound roaming Subscribers appear in the Diameter data? Return a single number.
   sql: SELECT COUNT(DISTINCT imsi) AS subscribers FROM diameter WHERE home_plmn_id <> '00101'

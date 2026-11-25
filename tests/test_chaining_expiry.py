@@ -14,7 +14,7 @@ async def run_first(make_agent, request="bytes per port please", **cfg):
     """Cell 1: run_query only. Returns (agent, llm, notebook id, result table name)."""
     llm = ScriptedLLM([tool_call("run_query", sql=BY_PORT, title="Bytes per port")], [TextChunk("done")])
     agent = await make_agent(llm, **cfg)
-    nb = agent.create_notebook()
+    nb = agent.notebooks.create_notebook()
     await collect(agent, request, nb)
     return agent, llm, nb, last_tool_result(llm.calls[1])["result_table"]
 

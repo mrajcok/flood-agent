@@ -19,12 +19,12 @@ def test_the_edited_not_run_marker_on_an_ai_cell_is_the_typed_cells_answer(build
     client = web_client(agent)
     nb, cell = new_notebook(client)
     run_cell(client, nb, cell, prompt="original", effort="high", max_rows="1000")
-    assert not agent.cell(cell).edited and not edited(client.get(f"/n/{nb}/cells/{cell}").text)
+    assert not agent.notebooks.cell(nb, cell).edited and not edited(client.get(f"/n/{nb}/cells/{cell}").text)
 
     client.post(f"/n/{nb}/cells/{cell}/draft", data={"prompt": "changed", "model": SONNET, "effort": "high",
                                                      "max_rows": "1000"})
     page = client.get(f"/n/{nb}/cells/{cell}").text
-    assert agent.cell(cell).edited and edited(page) and "edited, not run" in page and "Old answer." in page
+    assert agent.notebooks.cell(nb, cell).edited and edited(page) and "edited, not run" in page and "Old answer." in page
 
 
 def test_earlier_runs_tables_are_listed_collapsed_and_clearing_them_spares_saved_tables(build_agent, web_client):
@@ -36,11 +36,11 @@ def test_earlier_runs_tables_are_listed_collapsed_and_clearing_them_spares_saved
     nb, cell = new_notebook(client)
     run_cell(client, nb, cell)
     assert "Tables from earlier runs" not in client.get(f"/n/{nb}/cells/{cell}").text
-    first_run = agent.notebooks.cell(cell)["run"]["id"]
+    first_run = agent.notebook_store.cell(cell)["run"]["id"]
     rt, keep = agent.tables.tables_of_run(cell, first_run)
     agent.tables.update(keep.name, new_name="kept_ports")
     run_cell(client, nb, cell)
-    current = agent.tables.tables_of_run(cell, agent.notebooks.cell(cell)["run"]["id"])[0].name
+    current = agent.tables.tables_of_run(cell, agent.notebook_store.cell(cell)["run"]["id"])[0].name
 
     page = client.get(f"/n/{nb}/cells/{cell}").text
     assert "Tables from earlier runs (2)" in page

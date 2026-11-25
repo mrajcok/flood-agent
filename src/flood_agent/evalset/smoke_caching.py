@@ -220,7 +220,7 @@ async def run_notebook(model: str, questions: list[Question], settings: Settings
                   lambda _model: recorder)
     error, reply, cells = None, "", []
     async with agent:
-        notebook_id = agent.create_notebook("caching smoke check")
+        notebook_id = agent.notebooks.create_notebook("caching smoke check")
         for q in questions:
             await add_cells_above(agent, notebook_id, q.above)
             first_call = len(tee.calls)

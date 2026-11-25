@@ -100,10 +100,10 @@ def test_ownership_is_the_recorded_run_not_the_first_mention(build_agent, web_cl
     client = web_client(agent)
     nb, one, _ = ask(client, "one")
     _, two, _ = ask(client, "two", nb)
-    run_one, run_two = (agent.notebooks.cell(c)["run"]["id"] for c in (one, two))
+    run_one, run_two = (agent.notebook_store.cell(c)["run"]["id"] for c in (one, two))
     agent.tables.register_for(CellRun(one, run_one), "rt_20260101_000000")
     agent.tables.register_for(CellRun(two, run_two), "kept")
-    agent.notebooks.add_message(run_one, {"role": "assistant", "content": "first used kept here"})
+    agent.notebook_store.add_message(run_one, {"role": "assistant", "content": "first used kept here"})
     assert client.get(f"/n/{nb}/cells/{one}/delete-preview").json() == {"result": 1, "saved": 0}
     assert client.get(f"/n/{nb}/cells/{two}/delete-preview").json() == {"result": 0, "saved": 1}
 

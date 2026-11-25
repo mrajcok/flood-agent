@@ -148,7 +148,7 @@ _Outcome = _ShowRows | _Count | _TableMade | _Failed | _Stopped
 
 
 class SqlCellRuns:
-    """Runs SQL Cells and stops them. Built once by the Agent; the Agent keeps the rule that one Cell runs per
+    """Runs SQL Cells and stops them. Built once by the Agent; the Notebook module keeps the rule that one Cell runs per
     Notebook at a time."""
 
     def __init__(self, notebooks: NotebookStore, tables: Catalog, replacement: TableReplacement,

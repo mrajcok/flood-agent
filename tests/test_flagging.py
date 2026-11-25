@@ -74,7 +74,7 @@ async def test_row_count_in_query_metadata_is_not_flagged(make_agent):
 
 async def test_assistants_own_earlier_prose_does_not_whitelist_a_value(make_agent):
     agent = await make_agent(ScriptedLLM([TextChunk("It was 203.0.113.99.")], [TextChunk("Again 203.0.113.99.")]))
-    nb = agent.create_notebook()
+    nb = agent.notebooks.create_notebook()
     first = await collect(agent, "q1", nb)
     second = await collect(agent, "q2", nb)
     assert flags_of(first) == ["203.0.113.99"] and flags_of(second) == ["203.0.113.99"]
@@ -83,7 +83,7 @@ async def test_assistants_own_earlier_prose_does_not_whitelist_a_value(make_agen
 async def test_flags_never_reach_the_llm(make_agent):
     llm = ScriptedLLM([TextChunk("Host 203.0.113.99 sent 4.2M packets.")], [TextChunk("fine")])
     agent = await make_agent(llm)
-    nb = agent.create_notebook()
+    nb = agent.notebooks.create_notebook()
     await collect(agent, "first", nb)
     await collect(agent, "second", nb)
     # Everything except the LLM's own earlier prose must be flag-free.

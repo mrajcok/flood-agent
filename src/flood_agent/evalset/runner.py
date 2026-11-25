@@ -127,7 +127,7 @@ async def _run_question(model, q, ref, telemetry_db, semantic_layer, client_fact
     start = time.perf_counter()
     try:
         async with agent:
-            notebook_id = agent.create_notebook(q.id)  # each question is a new notebook
+            notebook_id = agent.notebooks.create_notebook(q.id)  # each question is a new notebook
             await add_cells_above(agent, notebook_id, q.above)
             cell_id, events = await run_ai_cell(agent, notebook_id, q.question, EVAL_MAX_RESULT_ROWS)
             async for event in events:
@@ -145,7 +145,7 @@ async def _run_question(model, q, ref, telemetry_db, semantic_layer, client_fact
     if error:
         ok, reason, extra, matched, n = False, "turn failed", 0, None, 0
     else:
-        run = agent.notebooks.cell(cell_id)["run"] if cell_id else None  # the judge reads the cell's current-Run tables
+        run = agent.notebook_store.cell(cell_id)["run"] if cell_id else None  # the judge reads the cell's current-Run tables
         names = [t.name for t in agent.tables.tables_of_run(cell_id, run["id"])] if cell_id and run else []
         ok, reason, extra, matched, n = _judge(q, ref, results_db, names, counts)
     return QuestionResult(

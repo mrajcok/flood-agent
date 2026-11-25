@@ -43,7 +43,7 @@ async def test_a_run_uses_the_client_of_the_model_chosen_for_it(make_agent):
     agent = await make_agent(llm)
     factory = RecordingFactory(llm)
     agent.client_for = factory
-    notebook = agent.create_notebook()
+    notebook = agent.notebooks.create_notebook()
 
     first = await collect_with_model(agent, "q1", notebook, SONNET)
     second = await collect_with_model(agent, "q2", notebook, GLM)

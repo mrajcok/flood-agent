@@ -41,7 +41,7 @@ async def test_llm_title_still_appears_in_the_system_prompt(make_agent):
         [TextChunk("again")],
     )
     agent = await make_agent(llm)
-    notebook = agent.create_notebook()
+    notebook = agent.notebooks.create_notebook()
     await collect(agent, "q", notebook)
     await collect(agent, "q2", notebook)
     system = llm.calls[2][0]["content"]

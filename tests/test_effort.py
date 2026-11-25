@@ -58,7 +58,7 @@ def test_an_effort_the_model_does_not_offer_is_rejected_before_any_turn_starts(b
         assert response.status_code == 422 and "does not offer reasoning effort" in response.json()["detail"]
 
     assert llm.calls == [] and all(
-        c["run"] is None for n in agent.notebooks.list_notebooks() for c in agent.notebooks.cells(n["id"]))
+        c["run"] is None for n in agent.notebook_store.list_notebooks() for c in agent.notebook_store.cells(n["id"]))
 
 
 def test_a_supported_or_empty_effort_is_accepted(build_agent, web_client):
@@ -75,7 +75,7 @@ SESSION_MODELS = [SONNET, "openai/gpt-5.6-terra", "qwen/qwen3.8-27b", "deepseek/
 async def test_requests_share_a_session_id_within_a_notebook_and_differ_between_notebooks(build_agent, model):
     agent, seen = provider_bodies(build_agent)
     async with agent:
-        first, second = agent.create_notebook(), agent.create_notebook()
+        first, second = agent.notebooks.create_notebook(), agent.notebooks.create_notebook()
         for notebook in (first, second, first):
             await turn(agent, model, None, notebook)
 

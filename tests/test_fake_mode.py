@@ -53,7 +53,7 @@ async def test_the_too_many_rows_prompt_shows_a_table_truncated_to_the_row_cap(m
 async def test_every_canned_prompt_produces_its_declared_outcome(canned, make_agent, telemetry_db):
     llm = Recorder(fake_client())
     agent = await make_agent(llm, api_key=False)
-    notebook = agent.create_notebook()
+    notebook = agent.notebooks.create_notebook()
     parent = parent_of(canned, CANNED)
     if parent:
         await collect(agent, parent.prompt, notebook, max_result_rows=FAKE_CAP)
@@ -113,7 +113,7 @@ async def test_a_failed_query_after_an_earlier_success_does_not_show_the_earlier
 ):
     agent = await make_agent(fake_client(), api_key=False)
     top_dest = next(c for c in CANNED if c.id == "top-destinations")
-    notebook = agent.create_notebook()
+    notebook = agent.notebooks.create_notebook()
     await collect(agent, top_dest.prompt, notebook)
     with sqlite3.connect(telemetry_db) as con:
         con.execute("DROP TABLE flows")
@@ -133,7 +133,7 @@ async def test_a_follow_up_whose_parent_query_failed_says_the_query_failed_not_r
     follow_up = next(c for c in CANNED if c.after)
     parent = parent_of(follow_up, CANNED)
     assert parent
-    notebook = agent.create_notebook()
+    notebook = agent.notebooks.create_notebook()
     await collect(agent, parent.prompt, notebook, max_result_rows=FAKE_CAP)
 
     events = await collect(agent, follow_up.prompt, notebook)
@@ -206,7 +206,7 @@ async def test_a_follow_up_after_an_unrelated_prompt_replies_parent_first_and_ma
     unrelated = next(c for c in CANNED if c.id == "flow-count")
     assert parent and parent is not unrelated
     agent = await make_agent(fake_client(), api_key=False)
-    notebook = agent.create_notebook()
+    notebook = agent.notebooks.create_notebook()
     await collect(agent, unrelated.prompt, notebook)
 
     events = await collect(agent, follow_up.prompt, notebook)

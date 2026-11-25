@@ -157,7 +157,7 @@ class NotebookStore:
 
     def delete_notebook(self, notebook_id: str) -> None:
         """Remove a notebook with its cells, Runs, messages and Displays. (Its tables are the Catalog's: see
-        `Agent.delete_notebook`.) KeyError if unknown."""
+        `Notebooks.delete_notebook`.) KeyError if unknown."""
         for cell in self.cells(notebook_id):
             self.delete_cell(cell["id"])
         with closing(self._connect()) as con, con:
@@ -216,7 +216,7 @@ class NotebookStore:
             self._touch(con, row["notebook_id"])
 
     def delete_cell(self, cell_id: str) -> None:
-        """Remove a cell with its Run, messages and Displays. (Its tables are the Catalog's: see `Agent.delete_cell`.)"""
+        """Remove a cell with its Run, messages and Displays. (Its tables are the Catalog's: see `Notebooks.delete_cell`.)"""
         with closing(self._connect()) as con, con:
             row = con.execute("SELECT notebook_id FROM cells WHERE id=?", (cell_id,)).fetchone()
             if row is None:

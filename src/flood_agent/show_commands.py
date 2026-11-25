@@ -24,7 +24,7 @@ class ShowFailed(Exception):
 
 def is_show_statement(sql: str) -> bool:
     """True if `sql` starts with SHOW or DESCRIBE (comments aside): it belongs in the Command drop-down."""
-    words, _ = queries._scan(sql)
+    words = queries.leading_words(sql)
     return bool(words) and words[0] in ("show", "describe", "desc")
 
 

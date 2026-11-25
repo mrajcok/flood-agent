@@ -1,7 +1,7 @@
 """Result Table chaining across cells and expiry, through the Agent notebook seam and thin HTTP layer."""
 
 import pytest
-from conftest import Clock, ScriptedLLM, all_telemetry_values, ask, collect, last_tool_result, query_limits, tool_call
+from conftest import Clock, ScriptedLLM, all_telemetry_values, ask, collect, last_tool_result, tool_call
 
 from flood_agent.events import DisplayEvent
 from flood_agent.llm import TextChunk
@@ -150,21 +150,27 @@ async def test_same_run_chain_selects_from_table_created_earlier_in_the_run(make
     assert agent.fetch_rows(d.result_table)["rows"] == [[8443]]
 
 
-def test_single_composed_authorizer_enforces_action_list_and_table_scope(telemetry_db, tmp_path, monkeypatch):
+def test_single_composed_authorizer_enforces_action_list_and_table_scope(query_runner, tmp_path, monkeypatch):
     """With the SELECT guard patched out, the one authorizer still rejects DDL/DML/ATTACH/PRAGMA
-    and reads of Result Tables outside the allowed set, while the CTAS and own-table reads work."""
+    and reads of Result Tables outside the readable set, while the CTAS and own-table reads work."""
     import sqlite3
 
     from flood_agent import queries
 
-    results = tmp_path / "results.db"
     monkeypatch.setattr(queries, "validate_select", lambda sql: sql)
-    first = queries.run_query(telemetry_db, results, "SELECT dport FROM flows", **query_limits(), allowed_tables=set())
+    readable: set[str] = set()
+    runner = query_runner(readable)
+
+    def run(sql):
+        return runner.run(sql, max_rows=1_000_000)
+
+    first = run("SELECT dport FROM flows")
     assert first["success"] is True  # CTAS into results still works
     own = first["result_table"]
-    other = queries.run_query(telemetry_db, results, "SELECT dport FROM flows", **query_limits(), allowed_tables=set())["result_table"]
-    assert queries.run_query(telemetry_db, results, f"SELECT * FROM {own}", **query_limits(), allowed_tables={own})["success"]
-    assert not queries.run_query(telemetry_db, results, f"SELECT * FROM {other}", **query_limits(), allowed_tables={own})["success"]
+    other = run("SELECT dport FROM flows")["result_table"]
+    readable.add(own)
+    assert run(f"SELECT * FROM {own}")["success"]
+    assert not run(f"SELECT * FROM {other}")["success"]
     for sql in [
         "SELECT 1) ; DROP TABLE flows; --",
         "SELECT 1) ; ATTACH DATABASE ':memory:' AS e; --",
@@ -172,8 +178,8 @@ def test_single_composed_authorizer_enforces_action_list_and_table_scope(telemet
         f"SELECT 1) ; DROP TABLE results.{own}; --",
         "SELECT 1) ; CREATE TABLE main.evil(a); --",
     ]:
-        assert queries.run_query(telemetry_db, results, sql, **query_limits(), allowed_tables={own})["success"] is False
-    con = sqlite3.connect(results)
+        assert run(sql)["success"] is False
+    con = sqlite3.connect(tmp_path / "results.db")
     assert {r[0] for r in con.execute("SELECT name FROM sqlite_master")} >= {own, other}
 
 

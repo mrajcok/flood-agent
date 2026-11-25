@@ -307,12 +307,6 @@ def config_for_test(tmp_path, telemetry_db, semantic_layer, api_key: bool = True
     )
 
 
-def query_limits() -> dict:
-    """timeout_s and max_rows for calling queries.run_query directly."""
-    cfg = default_agent_config()
-    return {"timeout_s": cfg.query_timeout_s, "max_rows": 1_000_000}
-
-
 @pytest.fixture
 def query_runner(tmp_path, telemetry_db):
     """`query_runner(readable=set(), timeout_s=None)` -> a QueryRunner over the test Telemetry Database and this

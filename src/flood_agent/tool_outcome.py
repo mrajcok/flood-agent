@@ -119,7 +119,7 @@ def _decode(text: str) -> Outcome:
 
 
 def from_query_result(result: dict) -> Outcome:
-    """The outcome of a `queries.run_query` / `run_count_query` result dict. Only the fields a kind names are
+    """The outcome of a `QueryRunner.run` / `count` result dict. Only the fields a kind names are
     copied, so a stray key in the dict goes nowhere."""
     if result.get("success"):
         if "count" in result:

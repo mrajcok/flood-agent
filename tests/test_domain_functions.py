@@ -4,19 +4,22 @@ from pathlib import Path
 
 import pytest
 
-from flood_agent import queries
 from flood_agent.semantic_layer import SemanticLayer
 
 FUNCTIONS = ("ENDSWITH", "STARTSWITH", "SPLIT_PART", "REGEXP_SUBSTR", "REGEXP_COUNT", "REVERSE")
 
 
-def value(telemetry_db, tmp_path, expr):
-    """Evaluate a scalar SQL expression on the dev connection."""
-    con = queries.open_connection(telemetry_db, tmp_path / "results.db")
-    try:
-        return con.execute(f"SELECT {expr}").fetchone()[0]
-    finally:
-        con.close()
+@pytest.fixture
+def value(query_runner):
+    """`value(expr)`: a scalar SQL expression, evaluated by a query."""
+    runner = query_runner()
+
+    def _value(expr):
+        made = runner.run(f"SELECT {expr}", max_rows=1)
+        assert made["success"], made
+        return next(runner.all_rows(made["result_table"])[1])[0]
+
+    return _value
 
 
 @pytest.mark.parametrize(
@@ -37,8 +40,8 @@ def value(telemetry_db, tmp_path, expr):
         ("REVERSE('abc')", "cba"),
     ],
 )
-def test_documented_results(telemetry_db, tmp_path, expr, expected):
-    assert value(telemetry_db, tmp_path, expr) == expected
+def test_documented_results(value, expr, expected):
+    assert value(expr) == expected
 
 
 @pytest.mark.parametrize(
@@ -50,8 +53,8 @@ def test_documented_results(telemetry_db, tmp_path, expr, expected):
         "REGEXP_COUNT(NULL, 'a')", "REGEXP_COUNT('a', NULL)", "REVERSE(NULL)",
     ],
 )
-def test_a_null_argument_returns_null(telemetry_db, tmp_path, expr):
-    assert value(telemetry_db, tmp_path, expr) is None
+def test_a_null_argument_returns_null(value, expr):
+    assert value(expr) is None
 
 
 @pytest.mark.parametrize(
@@ -63,16 +66,14 @@ def test_a_null_argument_returns_null(telemetry_db, tmp_path, expr):
         "REGEXP_COUNT(5, 'a')", "REGEXP_COUNT('a', 5)", "REVERSE(5)", "REVERSE(X'ab')",
     ],
 )
-def test_a_non_text_argument_returns_null(telemetry_db, tmp_path, expr):
-    assert value(telemetry_db, tmp_path, expr) is None
+def test_a_non_text_argument_returns_null(value, expr):
+    assert value(expr) is None
 
 
-def test_the_functions_work_on_any_text_column(telemetry_db, tmp_path):
-    result = queries.run_count_query(
-        telemetry_db, tmp_path / "results.db", "SELECT COUNT(*) FROM flows WHERE STARTSWITH(sip, '1')", 5.0
-    )
+def test_the_functions_work_on_any_text_column(query_runner, value):
+    result = query_runner().count("SELECT COUNT(*) FROM flows WHERE STARTSWITH(sip, '1')")
     assert result["success"] and result["count"] >= 1
-    assert value(telemetry_db, tmp_path, "(SELECT REVERSE(sip) FROM flows LIMIT 1)") is not None
+    assert value("(SELECT REVERSE(sip) FROM flows LIMIT 1)") is not None
 
 
 def test_the_semantic_layer_lists_them_and_the_prompt_carries_them():

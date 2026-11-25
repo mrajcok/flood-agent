@@ -119,7 +119,7 @@ charts with a time x axis, Ctrl+scroll to zoom that axis, drag to pan and double
 - `llm.py` - `LLMClient` protocol and the OpenRouter implementation.
 - `fake_llm.py` + `canned_prompts.yaml` - the Fake Mode `LLMClient` and its Canned Prompts.
 - `mcp_server.py` - stdio MCP server; the only LLM tools are `run_query`, `run_count_query`, `show_table` and `show_chart`.
-- `queries.py` - read-only Telemetry Database access, CTAS into the results DB, internal row access.
+- `queries.py` - the query runner (`QueryRunner`): read-only Telemetry Database access, CTAS into the results DB, internal row access.
 - `web.py` + `templates/` - FastAPI, Jinja, htmx (SSE), Alpine table and chart components.
 - `semantic_layer.yaml` - hand-authored Semantic Layer rendered into the system prompt.
 

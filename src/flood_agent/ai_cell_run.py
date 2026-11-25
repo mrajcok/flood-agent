@@ -37,7 +37,7 @@ from flood_agent.events import (
 from flood_agent.llm import LLMClient, LLMError, ModelSpec, TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_connection import McpConnection
 from flood_agent.mcp_protocol import QUERY_TOOLS
-from flood_agent.notebooks import COUNT_KIND, NotebookStore, RunStatus
+from flood_agent.notebook_store import COUNT_KIND, NotebookStore, RunStatus
 from flood_agent.semantic_layer import SemanticLayer
 from flood_agent.tool_outcome import Counted, DisplayMade, Failed, Outcome, ResultTableMade, Stopped, decode, project
 from flood_agent.trace import TraceBuilder, context_tokens

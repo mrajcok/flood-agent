@@ -19,7 +19,7 @@ from flood_agent.catalog import CellRun
 from flood_agent.cell import SqlRunSettings, save_draft
 from flood_agent.events import CountEvent, DisplayEvent, TurnEnd
 from flood_agent.llm import TextChunk
-from flood_agent.notebooks import DEFAULT_MAX_ROWS
+from flood_agent.notebook_store import DEFAULT_MAX_ROWS
 
 SELECT = "SELECT dport, SUM(bytes) AS total_bytes FROM flows GROUP BY dport ORDER BY total_bytes DESC"
 SLOW = ("WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 400000000) "

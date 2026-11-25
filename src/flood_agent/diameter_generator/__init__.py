@@ -10,17 +10,19 @@ end: the records of the sources before it stay as they were. An attack draws fro
 - `network`: the Networks, their Nodes and the Subscribers
 - `records`: the Record (one row) and the World, which records each request and its answer
 - `s6a`: the baseline MME-HSS traffic
+- `hss_flood`: the HSS signaling flood attack
 """
 
 import sqlite3
 
-from flood_agent.diameter_generator import s6a
+from flood_agent.diameter_generator import hss_flood, s6a
 from flood_agent.diameter_generator.records import COLUMNS, INDEXES, SCHEMA, World
 
 __all__ = ["INDEXES", "SCHEMA", "generate_diameter"]
 
 SOURCES = (
     s6a.baseline,
+    hss_flood.hss_flood,
 )
 
 

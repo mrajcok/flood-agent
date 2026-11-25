@@ -81,6 +81,7 @@ def test_ips_are_ipv4_dotted_decimal_and_circuits_opaque(built):
 
 def test_four_attacks_recorded_with_parameters(built):
     db, attacks = built
+    attacks = [a for a in attacks if not a["type"].startswith("diameter_")]  # the attacks on `flows`
     assert {a["type"] for a in attacks} == {"syn_flood", "amplification", "port_scan", "dns_tunnel"}
     lo, hi = rows(db, "SELECT MIN(etime), MAX(etime) FROM flows")[0]
     for a in attacks:

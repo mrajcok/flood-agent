@@ -26,8 +26,10 @@ def generated_once(cache_root: Path) -> Path:
     """The generator's output (it is deterministic), cached across xdist workers and runs, keyed
     by the generator's source, the real Semantic Layer and the seed and scale. Generating takes
     over a second; each worker would otherwise pay it."""
+    package = Path(generator.__file__).parent
+    sources = [*package.glob("generator*.py"), *sorted(package.glob("diameter_generator/*.py"))]
     key = hashlib.sha256(
-        Path(generator.__file__).read_bytes() + REAL_SL.read_bytes() + f"{SEED} {SCALE}".encode()
+        b"".join(p.read_bytes() for p in sorted(sources)) + REAL_SL.read_bytes() + f"{SEED} {SCALE}".encode()
     ).hexdigest()[:16]
     done = cache_root / key
     if not done.is_dir():
@@ -51,9 +53,9 @@ def built(tmp_path_factory, request):
     return db, json.loads(Path(str(db) + ".attacks.json").read_text()), d
 
 
-def test_golden_set_is_about_thirty_unique_questions():
+def test_golden_set_is_a_few_dozen_unique_questions():
     ids = [q.id for q in QUESTIONS]
-    assert 28 <= len(ids) <= 43
+    assert 28 <= len(ids) <= 50
     assert len(set(ids)) == len(ids)
     assert sum(1 for q in QUESTIONS if q.crosscheck) >= 8  # many target the attacks
 
@@ -90,6 +92,14 @@ def test_attack_answers_agree_with_attacks_json(q, built):
 
 DNS_IDS = {"dns-total-records", "dns-top-names", "dns-records-by-rtype", "dns-tunnel",
            "amp-dns-name", "dns-ipv6-cidr", "dns-suffix"}
+
+
+def test_diameter_questions_count_something(built):
+    db, _, d = built
+    by_id = {q.id: q for q in QUESTIONS}
+    for name in ("diameter-total", "diameter-inbound-roamers", "diameter-timeouts"):
+        _, rows = run_reference(db, d / "scratch.db", by_id[name].sql)
+        assert rows[0][0] > 0, name
 
 
 def test_dns_questions_are_in_the_set_and_the_two_joins_are_crosschecked():

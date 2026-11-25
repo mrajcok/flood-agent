@@ -281,3 +281,16 @@
 - id: dns-suffix
   question: How many DNS Response Records have a question name under example.org (ignoring letter case)? Return a single number.
   sql: SELECT COUNT(*) AS records FROM dns_metadata WHERE ENDSWITH(LOWER(question), '.example.org')
+
+# ---- Diameter ----------------------------------------------------------------------
+- id: diameter-total
+  question: How many Diameter Transaction Records are there in total? Return a single number.
+  sql: SELECT COUNT(*) AS records FROM diameter
+
+- id: diameter-inbound-roamers
+  question: How many distinct inbound roaming Subscribers appear in the Diameter data? Return a single number.
+  sql: SELECT COUNT(DISTINCT imsi) AS subscribers FROM diameter WHERE home_plmn_id <> '00101'
+
+- id: diameter-timeouts
+  question: How many Diameter transactions timed out? Return a single number.
+  sql: SELECT COUNT(*) AS timeouts FROM diameter WHERE status = 'Timeout'

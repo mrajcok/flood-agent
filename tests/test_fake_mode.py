@@ -414,6 +414,20 @@ async def test_the_dns_amplification_prompt_puts_the_abused_name_first(make_agen
     assert "amp.example.net" in agent.fetch_rows(shown[0].result_table)["rows"][0]
 
 
+@pytest.mark.generated_data
+async def test_the_diameter_failures_prompt_lists_only_failed_requests(make_agent):
+    agent = await make_agent(fake_client(), api_key=False)
+    canned = next(c for c in CANNED if c.prompt == "Which Diameter requests failed most?")
+
+    events = await collect(agent, canned.prompt)
+
+    (shown,) = [e for e in events if isinstance(e, DisplayEvent)]
+    table = agent.fetch_rows(shown.result_table)
+    assert table["columns"] == ["command_code", "result_code", "experimental_result_code", "records"]
+    assert table["rows"]
+    assert all(2001 not in (result, experimental) for _, result, experimental, _ in table["rows"])
+
+
 def test_the_dns_prompts_are_in_the_picker():
     prompts = {c.prompt for c in CANNED}
     assert {"Which DNS names were queried most?", "Chart DNS records per hour by record type",

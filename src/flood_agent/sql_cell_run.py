@@ -26,7 +26,7 @@ from flood_agent.ai_cell_context import SHOW_CELL_LABEL, SQL_CELL_LABEL, STOPPED
 from flood_agent.catalog import Catalog, CellRun, Table, TableExpired
 from flood_agent.cell import SqlCell
 from flood_agent.events import CountEvent, DisplayEvent, Event, TurnEnd, TurnError
-from flood_agent.notebooks import COUNT_KIND, NotebookStore, RunStatus
+from flood_agent.notebook_store import COUNT_KIND, NotebookStore, RunStatus
 from flood_agent.show_commands import ShowFailed, run_show
 from flood_agent.table_replacement import RefreshInProgress, ReplacementFailed, Rerun, TableReplacement
 

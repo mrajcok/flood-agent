@@ -17,7 +17,7 @@ from dataclasses import dataclass, replace
 
 from flood_agent import queries
 from flood_agent.cell_kinds import AI, MARKDOWN, SQL
-from flood_agent.notebooks import DEFAULT_MAX_ROWS, NotebookStore
+from flood_agent.notebook_store import DEFAULT_MAX_ROWS, NotebookStore
 from flood_agent.show_commands import DESCRIBE_TABLE, SHOW_IN_TEXTBOX, is_show_statement, statement_of
 
 

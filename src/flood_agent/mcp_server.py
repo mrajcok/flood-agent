@@ -30,7 +30,7 @@ from mcp.server.fastmcp import Context, FastMCP
 from flood_agent import logs, queries
 from flood_agent.catalog import CatalogView
 from flood_agent.mcp_protocol import META_MAX_RESULT_ROWS
-from flood_agent.notebooks import rename_data_source
+from flood_agent.notebook_store import rename_data_source
 from flood_agent.tool_outcome import DisplayMade, Failed, TableDescribed, encode, from_query_result
 
 

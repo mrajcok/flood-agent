@@ -35,14 +35,13 @@ from flood_agent.cell import (
     SqlCell,
     SqlDraft,
     SqlRunSettings,
-    typed_cell,
 )
 from flood_agent.cell_kinds import AI, MARKDOWN, SQL
 from flood_agent.context_usage import context_usage
 from flood_agent.events import CountEvent, DisplayEvent, FlagEvent, LlmCallStarted, TextDelta, TraceLive, TurnEnd
 from flood_agent.lookup_tables import InvalidLookupTable
 from flood_agent.model_choices import NO_MODEL
-from flood_agent.notebook import NotebookBusy, TablesChoice, UnknownCell, UnknownNotebook
+from flood_agent.notebook import NotebookBusy, PageCell, TablesChoice, UnknownCell, UnknownNotebook
 from flood_agent.notebook_store import COUNT_KIND
 from flood_agent.queries import InvalidSort
 from flood_agent.show_commands import SHOW_COMMANDS
@@ -189,7 +188,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool 
 
     def sidebar(current_notebook: str | None = None) -> dict:
         return {
-            "notebooks": agent.notebook_store.list_notebooks(), "current_notebook_id": current_notebook,
+            "notebooks": agent.notebooks.list_notebooks(), "current_notebook_id": current_notebook,
             "picker": picker or [], "dev": dev,
         }
 
@@ -248,10 +247,10 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool 
         label = next((m["label"] for m in models if m["id"] == model), model)
         return f"{label} · {effort or 'no effort'} · ≤ {max_rows:,} rows"
 
-    def output_items(run: dict, refreshable_counts: bool = True) -> list[dict]:
-        """What a finished (or stopped) Run shows under its prompt: the answer's text and its Displays, in order.
-        An AI Cell's Count Displays refresh; a SQL Cell's do not (its Run is its refresh)."""
-        transcript = agent.notebook_store.transcript(run["id"])
+    def output_items(cell: AiCell | SqlCell, refreshable_counts: bool = True) -> list[dict]:
+        """What a Cell's finished (or stopped) Run shows under its prompt: the answer's text and its Displays, in
+        order. An AI Cell's Count Displays refresh; a SQL Cell's do not (its Run is its refresh)."""
+        transcript = agent.notebooks.run_transcript(cell.notebook_id, cell.id)
         shown = {i["result_table"] for i in transcript if i["type"] == "display" and i["result_table"]}
         expired = shown - agent.tables.live_among(shown)
         items: list[dict] = []
@@ -314,7 +313,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool 
         view = runnable_view(cell, run, starting, stale, s.model, s.effort or "", kind=AI, prompt=cell.prompt)
         if starting or run is None or cell.run is None:
             return view
-        view["output"] = output_items(run)
+        view["output"] = output_items(cell)
         ran = cell.run.settings
         view["ran"] = {"prompt": cell.run.prompt, "model": ran.model, "effort": ran.effort or "",
                        "max_rows": ran.max_rows}
@@ -339,7 +338,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool 
                              command=d.settings.command, table=d.table)
         if starting or run is None or cell.run is None:
             return view
-        view["output"] = output_items(run, refreshable_counts=False)
+        view["output"] = output_items(cell, refreshable_counts=False)
         view["result"] = run["result"]
         view["ran_utc"] = time.strftime("%H:%M UTC", time.gmtime(run["started_at"] / 1000))
         view["started_at_ms"] = run["started_at"]
@@ -348,21 +347,20 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool 
                        "max_rows": cell.run.settings.max_rows}
         return view
 
-    def cell_view(row: dict, starting: bool = False, stale: bool = False) -> dict:
-        """What the cell template needs, for a row from Notebook storage. `starting`: its run has been asked for and
-        its stream not yet opened, so it shows as running with no output."""
-        cell = typed_cell(row, default_model)
+    def cell_view(shown: PageCell, starting: bool = False) -> dict:
+        """What the cell template needs. `starting`: its run has been asked for and its stream not yet opened, so it
+        shows as running with no output."""
+        cell = shown.cell
         if isinstance(cell, MarkdownCell):
             return markdown_view(cell)
         if isinstance(cell, AiCell):
-            return ai_view(cell, row["run"], starting, stale)
-        return sql_view(cell, row["run"], starting, stale)
+            return ai_view(cell, shown.run, starting, shown.stale)
+        return sql_view(cell, shown.run, starting, shown.stale)
 
     def cell_html(notebook_id: str, cell_id: str, template: str, starting: bool = False) -> str:
-        cell = agent.notebook_store.cell(cell_id)
-        stale = cell["id"] in agent.notebooks.stale_cells(notebook_id)
+        shown = agent.notebooks.page_cell(notebook_id, cell_id)
         return TEMPLATES.get_template(template).render(
-            cell=cell_view(cell, starting, stale), notebook_id=notebook_id, **model_picker())
+            cell=cell_view(shown, starting), notebook_id=notebook_id, **model_picker())
 
     def posted_draft(cell: AiCell | SqlCell, form: DraftForm) -> AiDraft | SqlDraft:
         """The typed Draft an AI or SQL Cell's form posted (422 for a model, Effort, row cap or command it can't have)."""
@@ -382,7 +380,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool 
     @app.get("/")
     def home():
         """The landing page: the notebook with the most recent activity, or a new one if there is none yet."""
-        existing = agent.notebook_store.list_notebooks()
+        existing = agent.notebooks.list_notebooks()
         return RedirectResponse(f"/n/{existing[0]['id'] if existing else new_notebook()}", status_code=303)
 
     @app.post("/notebooks")
@@ -393,7 +391,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool 
     @app.get("/api/notebooks")
     def search_notebooks(q: str = ""):
         """The notebooks (id, title) whose title or cell text contains `q`, most recent activity first."""
-        return [{"id": n["id"], "title": n["title"]} for n in agent.notebook_store.list_notebooks(q)]
+        return [{"id": n["id"], "title": n["title"]} for n in agent.notebooks.list_notebooks(q)]
 
     @app.post("/n/{notebook_id}/rename")
     def rename_notebook(notebook_id: str, title: str = Form("")):
@@ -414,22 +412,16 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool 
 
     @app.get("/n/{notebook_id}", response_class=HTMLResponse)
     def open_notebook(request: Request, notebook_id: str):
-        if not agent.notebook_store.exists(notebook_id):
-            raise HTTPException(404, "unknown notebook")
-        stale = agent.notebooks.stale_cells(notebook_id)
-        cells = [cell_view(c, stale=c["id"] in stale) for c in agent.notebook_store.cells(notebook_id)]
+        page = agent.notebooks.notebook_page(notebook_id)
         return TEMPLATES.TemplateResponse(request, "notebook.html", {
-            **sidebar(notebook_id), **model_picker(), "notebook_id": notebook_id,
-            "title": agent.notebook_store.title_of(notebook_id), "cells": cells, "stale_ids": sorted(stale),
+            **sidebar(notebook_id), **model_picker(), "notebook_id": notebook_id, "title": page.title,
+            "cells": [cell_view(c) for c in page.cells], "stale_ids": sorted(page.stale_ids),
         })
 
     @app.get("/n/{notebook_id}/stale")
     def stale_cells(notebook_id: str) -> list[str]:
         """The ids of the notebook's stale AI Cells: the page re-reads them after anything that can change one."""
-        if not agent.notebook_store.exists(notebook_id):
-            raise HTTPException(404, "unknown notebook")
-        stale = agent.notebooks.stale_cells(notebook_id)
-        return [c["id"] for c in agent.notebook_store.cells(notebook_id) if c["id"] in stale]
+        return agent.notebooks.notebook_page(notebook_id).stale_ids
 
     @app.post("/n/{notebook_id}/cells", response_class=HTMLResponse)
     def add_cell(notebook_id: str, kind: str = Form(AI), after: str | None = Form(None), at: str = Form(""),
@@ -481,7 +473,6 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool 
 
     @app.get("/n/{notebook_id}/cells/{cell_id}", response_class=HTMLResponse)
     def get_cell(notebook_id: str, cell_id: str):
-        agent.notebooks.cell(notebook_id, cell_id)
         return cell_html(notebook_id, cell_id, "notebook_cell.html")
 
     @app.post("/n/{notebook_id}/cells/{cell_id}/draft", status_code=204)

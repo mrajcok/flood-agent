@@ -71,13 +71,15 @@ def stale_cells(cells: list[dict]) -> set[str]:
     """The ids of the AI Cells that are Stale: the context each would be sent now differs from the one its latest
     Run was sent. SQL Cells (which store no fingerprint), cells that never ran, cells still running and Runs with
     no stored fingerprint are never Stale."""
-    stale = set()
-    for cell in cells:
-        run = cell["run"]
-        if cell["kind"] == AI and run and run["status"] != "running" and run["context_fingerprint"]:
-            if context_above(cells, cell["id"]).fingerprint != run["context_fingerprint"]:
-                stale.add(cell["id"])
-    return stale
+    return {cell["id"] for i, cell in enumerate(cells) if is_stale(cell, cells[:i])}
+
+
+def is_stale(cell: dict, above: list[dict]) -> bool:
+    """Whether one Cell is Stale (see `stale_cells`), from it and the Cells `above` it only."""
+    run = cell["run"]
+    if cell["kind"] != AI or not run or run["status"] == "running" or not run["context_fingerprint"]:
+        return False
+    return context_above(above, cell["id"]).fingerprint != run["context_fingerprint"]
 
 
 def markdown_note(draft: dict) -> str:

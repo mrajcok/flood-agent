@@ -8,7 +8,7 @@ through this module and the two Run modules only.
 """
 
 from contextlib import aclosing
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import AsyncGenerator, AsyncIterator, Literal, cast
 
 from flood_agent import ai_cell_context, table_names
@@ -57,6 +57,30 @@ Position = Literal["after", "start", "end"]
 TITLE_LENGTH = 60
 
 
+@dataclass(frozen=True)
+class PageCell:
+    """A Cell as the page shows it. `run` is its latest Run's record (number, status, times, error, result, trace),
+    None if it has not run."""
+
+    cell: Cell
+    run: dict | None
+    stale: bool
+
+
+@dataclass(frozen=True)
+class NotebookPage:
+    """A Notebook as its page shows it: its title and its Cells in order."""
+
+    id: str
+    title: str
+    cells: tuple[PageCell, ...]
+
+    @property
+    def stale_ids(self) -> list[str]:
+        """The ids of its Stale Cells, in order."""
+        return [c.cell.id for c in self.cells if c.stale]
+
+
 class Notebooks:
     def __init__(self, store: NotebookStore, tables: Catalog, sql_cells: SqlCellRuns, ai_cells: AiCellRuns,
                  choices: ModelChoices):
@@ -100,8 +124,39 @@ class Notebooks:
 
     def stale_cells(self, notebook_id: str) -> set[str]:
         """The ids of the Notebook's AI Cells that are Stale (see `ai_cell_context.stale_cells`)."""
-        self._known_notebook(notebook_id)
-        return ai_cell_context.stale_cells(self._store.cells(notebook_id))
+        return ai_cell_context.stale_cells(self._known_notebook(notebook_id))
+
+    def list_notebooks(self, query: str = "") -> list[dict]:
+        """The Notebooks ({id, title, created_at, last_activity_at}), most recent activity first. A non-blank `query`
+        keeps those whose title or any Cell's Draft text contains it, ignoring case."""
+        return self._store.list_notebooks(query)
+
+    # --- reads for the page -------------------------------------------------------------------------------------
+
+    def notebook_page(self, notebook_id: str) -> "NotebookPage":
+        """The Notebook as its page shows it: its title and its typed Cells in order, each with its latest Run and
+        whether it is Stale."""
+        cells = self._known_notebook(notebook_id)
+        return NotebookPage(notebook_id, self._store.title_of(notebook_id),
+                            tuple(self._page_cell(c, cells[:i]) for i, c in enumerate(cells)))
+
+    def page_cell(self, notebook_id: str, cell_id: str) -> "PageCell":
+        """One Cell as the page shows it: typed, with its latest Run and whether it is Stale. Stale is worked out from
+        the Cell and the Cells above it only, and agrees with `notebook_page`."""
+        cells = self._known_notebook(notebook_id)
+        index = next((i for i, c in enumerate(cells) if c["id"] == cell_id), None)
+        if index is None:
+            raise UnknownCell(cell_id)
+        return self._page_cell(cells[index], cells[:index])
+
+    def run_transcript(self, notebook_id: str, cell_id: str) -> list[dict]:
+        """The transcript of the Cell's latest Run (its messages and Displays, in order); empty if it has not run."""
+        run = self._row(notebook_id, cell_id)["run"]
+        return self._store.transcript(run["id"]) if run else []
+
+    def _page_cell(self, row: dict, above: list[dict]) -> "PageCell":
+        return PageCell(typed_cell(row, self._choices.default_model), row["run"],
+                        ai_cell_context.is_stale(row, above))
 
     # --- Cells --------------------------------------------------------------------------------------------------
 

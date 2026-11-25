@@ -32,6 +32,7 @@ from flood_agent.events import TextDelta
 from flood_agent.generator import generate
 from flood_agent.llm import TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_server import ServerSettings, create_server
+from flood_agent.model_choices import ModelChoices
 from flood_agent.web import create_app
 
 # SQLite fsyncs on every commit, and on a disk filesystem (WSL's ext4 especially) that was over
@@ -268,15 +269,29 @@ def isolated_settings(monkeypatch):
 
 
 @functools.cache
+def default_settings() -> Settings:
+    """Built once per worker: constructing Settings costs about 3 ms."""
+    return Settings.from_defaults()
+
+
+@functools.cache
 def default_agent_config() -> AgentConfig:
-    """Built once per worker: constructing Settings costs about 3 ms. Callers get copies (`replace`)."""
-    return Settings.from_defaults().agent_config()
+    """Callers get copies (`replace`)."""
+    return default_settings().agent_config()
 
 
-def config_for_test(tmp_path, telemetry_db, semantic_layer, **overrides) -> AgentConfig:
-    """The defaults.toml settings, pointed at this test's files."""
+@functools.cache
+def model_choices_for_test(api_key: bool = True) -> ModelChoices:
+    """The defaults.toml model choices, as if an API key were set (or not, with `api_key=False`)."""
+    settings = default_settings()
+    return ModelChoices.build(tuple(settings.models), settings.default_model, has_api_key=api_key)
+
+
+def config_for_test(tmp_path, telemetry_db, semantic_layer, api_key: bool = True, **overrides) -> AgentConfig:
+    """The defaults.toml settings, pointed at this test's files, with an API key set unless `api_key=False`."""
     return replace(
         default_agent_config(),
+        choices=model_choices_for_test(api_key),
         telemetry_db=telemetry_db,
         results_db=tmp_path / "results.db",
         app_db=tmp_path / "app.db",
@@ -293,10 +308,12 @@ def query_limits() -> dict:
 
 @pytest.fixture
 def build_agent(tmp_path, telemetry_db, semantic_layer_path):
-    """Factory for an Agent that is NOT started (web tests: the app lifespan starts it)."""
+    """Factory for an Agent that is NOT started (web tests: the app lifespan starts it). `api_key=False`: as if no
+    API key were set, so only No model can be used."""
 
-    def _build(llm, **overrides) -> Agent:
-        return Agent(config_for_test(tmp_path, telemetry_db, semantic_layer_path, **overrides), lambda model: llm)
+    def _build(llm, api_key: bool = True, **overrides) -> Agent:
+        return Agent(config_for_test(tmp_path, telemetry_db, semantic_layer_path, api_key, **overrides),
+                     lambda model: llm)
 
     return _build
 

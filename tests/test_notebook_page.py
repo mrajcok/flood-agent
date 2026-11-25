@@ -7,8 +7,8 @@ import time
 from conftest import ScriptedLLM, ask, main_pane, table_script, tool_call
 from test_notebooks import SQL, Slow
 
-from flood_agent.agent import NO_MODEL
 from flood_agent.llm import TextChunk
+from flood_agent.model_choices import NO_MODEL
 
 SONNET = "anthropic/claude-sonnet-5.5"
 

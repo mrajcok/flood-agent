@@ -233,8 +233,8 @@ def test_the_chip_lists_the_curated_models_in_order_and_each_models_effort_level
     assert levels() == ["max", "high", "low", "none"]
 
 
-def test_with_no_key_every_real_model_is_disabled_in_the_chip(live_page):
-    page = live_page(has_api_key=False)
+def test_with_no_key_every_real_model_is_disabled_in_the_chip(build_agent, live_page):
+    page = live_page(agent=build_agent(ScriptedLLM(), api_key=False))
     cell = open_new_notebook(page)
     cell.locator(".chip").click()
     options = cell.get_by_label("Model").locator("option")
@@ -246,10 +246,10 @@ def test_with_no_key_every_real_model_is_disabled_in_the_chip(live_page):
 
 def test_running_a_real_model_without_an_api_key_shows_the_refusal_in_the_cell(build_agent, live_page):
     llm = ScriptedLLM([TextChunk("never")])
-    agent = build_agent(llm)
+    agent = build_agent(llm, api_key=False)
     notebook = agent.create_notebook()
     agent.add_ai_cell(notebook, prompt="hello", model="anthropic/claude-sonnet-5.5")
-    page = live_page(f"/n/{notebook}", agent=agent, has_api_key=False)
+    page = live_page(f"/n/{notebook}", agent=agent)
     cell = page.locator(".cellblock").first
 
     run(cell)

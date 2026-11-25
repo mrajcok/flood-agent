@@ -22,9 +22,9 @@ from flood_agent.catalog import Catalog, Table, canonical
 from flood_agent.cell import AiCell, CannotRun, Cell, MarkdownCell, SqlCell, typed_cell
 from flood_agent.cell_kinds import AI, MARKDOWN, SQL
 from flood_agent.events import Event
-from flood_agent.llm import ModelSpec
 from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
 from flood_agent.mcp_server import ServerSettings
+from flood_agent.model_choices import ModelChoices
 from flood_agent.notebooks import DEFAULT_MAX_ROWS, NotebookStore
 from flood_agent.semantic_layer import SemanticLayer
 from flood_agent.sql_cell_run import SqlCellRuns
@@ -59,8 +59,7 @@ class AgentConfig:
     results_db: Path
     app_db: Path
     semantic_layer: Path
-    model: str  # the default model: runs a turn that names none
-    models: tuple[ModelSpec, ...]  # the curated list; window_of looks a model's window up here
+    choices: ModelChoices  # the models that can be used here and the default model
     result_ttl_ms: int  # Result Tables expire this long after they are made
     query_timeout_s: float
     chart_row_cap: int
@@ -69,21 +68,9 @@ class AgentConfig:
     clock: Callable[[], int] = lambda: int(time.time() * 1000)  # epoch ms; injectable for tests
     fixed_now_ms: int | None = None  # pins SQL now() in the MCP server process (evals); None is the wall clock
 
-    def spec_of(self, model_id: str) -> ModelSpec | None:
-        """The curated model with this id; None for an id outside the list (NO_MODEL included)."""
-        return next((m for m in self.models if m.id == model_id), None)
-
-    def window_of(self, model: str) -> int:
-        """The context window of a curated model; 0 for an id outside the list (NO_MODEL: no context window)."""
-        spec = self.spec_of(model)
-        return spec.context_window if spec else 0
-
 
 APP_STOPPED = "The app stopped during this Run."
 """The value-free reason a Run left running by a killed app is failed with when the app next starts."""
-
-NO_MODEL = "no-model"
-"""The Model Choice id for Fake Mode: a prompt sent with it is answered by the scripted stand-in."""
 
 
 class Agent:
@@ -102,7 +89,7 @@ class Agent:
                                      config.results_db, config.query_timeout_s, config.clock)
         # `client_for` is looked up on each Run, so a client swapped in later is the one used.
         self.ai_cells = AiCellRuns(self.notebooks, self.tables, self.semantic_layer, lambda model: self.client_for(model),
-                                   self._ensure_connection, config.spec_of, config.max_llm_steps,
+                                   self._ensure_connection, config.choices.spec_of, config.max_llm_steps,
                                    config.max_failed_attempts, config.clock)
         self._connection: McpConnection | None = None
         self._restart_lock = asyncio.Lock()
@@ -371,8 +358,9 @@ class Agent:
                 del self._running_cells[notebook_id]
 
     def cell(self, cell_id: str) -> Cell:
-        """The Cell, typed, with the configured default model standing in for a missing one. KeyError if unknown."""
-        return typed_cell(self.notebooks.cell(cell_id), self.config.model)
+        """The Cell, typed, with the default model (No model without an API key) standing in for a missing one.
+        KeyError if unknown."""
+        return typed_cell(self.notebooks.cell(cell_id), self.config.choices.default_model)
 
     def stale_cells(self, notebook_id: str) -> set[str]:
         """The ids of the notebook's AI Cells that are Stale (see `ai_cell_context.stale_cells`)."""

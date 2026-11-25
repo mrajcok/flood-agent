@@ -8,10 +8,10 @@ from conftest import ScriptedLLM, ask, post_run
 from fastapi.testclient import TestClient
 
 from flood_agent.__main__ import build_app, picker_entries
-from flood_agent.agent import NO_MODEL
 from flood_agent.config import Settings
 from flood_agent.fake_llm import FakeClient, load_canned_prompts
 from flood_agent.llm import TextChunk
+from flood_agent.model_choices import NO_MODEL
 
 SONNET, GLM = "anthropic/claude-sonnet-5.5", "z-ai/glm-5.3"
 CANNED = load_canned_prompts()
@@ -48,7 +48,7 @@ def test_a_blank_model_field_means_the_default_model(build_agent, web_client):
 
 
 def test_no_model_is_listed_last_and_is_always_selectable(build_agent, web_client):
-    page = web_client(build_agent(ScriptedLLM()), has_api_key=False).get("/").text
+    page = web_client(build_agent(ScriptedLLM(), api_key=False)).get("/").text
 
     models = json.loads(html.unescape(re.search(r"models: (\[.*?\]), busy", page, re.S).group(1)))
     assert models[-1]["label"] == "No model" and models[-1]["disabled"] is False
@@ -56,7 +56,7 @@ def test_no_model_is_listed_last_and_is_always_selectable(build_agent, web_clien
 
 
 def test_without_a_key_the_page_preselects_no_model(build_agent, web_client):
-    page = web_client(build_agent(ScriptedLLM()), has_api_key=False).get("/").text
+    page = web_client(build_agent(ScriptedLLM(), api_key=False)).get("/").text
 
     assert first_cell_model(page) == NO_MODEL
 
@@ -93,3 +93,31 @@ def test_the_app_starts_without_a_key_and_answers_no_model_prompts(tmp_path, tel
 
     assert "no language model is involved" in body
     assert refused.status_code == 422 and "OPENROUTER_API_KEY" in refused.json()["detail"]
+
+
+def test_with_no_key_the_model_picker_and_a_new_ai_cell_agree_on_no_model(build_agent, web_client):
+    agent = build_agent(ScriptedLLM(), api_key=False)
+    client = web_client(agent)
+
+    page = client.get("/").text  # "/" opens a new notebook with one new AI Cell
+    notebook = agent.notebooks.list_notebooks()[0]["id"]
+    (cell,) = agent.notebooks.cells(notebook)
+
+    assert re.search(r'data-model="([^"]*)"', page).group(1) == NO_MODEL
+    assert first_cell_model(page) == NO_MODEL and agent.cell(cell["id"]).draft.settings.model == NO_MODEL
+
+
+def test_with_no_key_a_cell_with_no_stored_model_is_typed_as_no_model(build_agent):
+    agent = build_agent(ScriptedLLM(), api_key=False)
+    notebook = agent.create_notebook()
+    cell = agent.add_ai_cell(notebook, "hello")  # an older Cell: no model stored
+
+    assert agent.cell(cell).draft.settings.model == NO_MODEL
+
+
+def test_with_a_key_a_cell_with_no_stored_model_is_typed_with_the_configured_model(build_agent):
+    agent = build_agent(ScriptedLLM())
+    notebook = agent.create_notebook()
+    cell = agent.add_ai_cell(notebook, "hello")
+
+    assert agent.cell(cell).draft.settings.model == GLM

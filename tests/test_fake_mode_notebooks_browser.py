@@ -7,9 +7,9 @@ from playwright.sync_api import expect
 from test_notebook_browser import open_new_notebook, run, write_prompt
 
 from flood_agent.__main__ import picker_entries
-from flood_agent.agent import NO_MODEL
 from flood_agent.fake_llm import FakeClient, load_canned_prompts, parent_of
 from flood_agent.llm import TextChunk
+from flood_agent.model_choices import NO_MODEL
 
 CANNED = load_canned_prompts()
 FOLLOW = next(c for c in CANNED if c.after)
@@ -94,8 +94,8 @@ def test_the_picker_filters_as_you_type_and_enter_runs_the_highlighted_prompt(li
     expect(cell.get_by_role("option")).to_have_count(0)
 
 
-def test_with_no_key_a_new_cell_starts_on_no_model_with_the_picker(live_page):
-    page = live_page(has_api_key=False, picker=picker_entries(CANNED))
+def test_with_no_key_a_new_cell_starts_on_no_model_with_the_picker(build_agent, live_page):
+    page = live_page(agent=build_agent(ScriptedLLM(), api_key=False), picker=picker_entries(CANNED))
     cell = open_new_notebook(page)
     expect(cell.locator(".chip")).to_contain_text("No model")
     expect(cell.get_by_label(PICKER)).to_be_visible()

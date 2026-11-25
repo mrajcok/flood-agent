@@ -294,13 +294,23 @@
 
 - id: diameter-subscriber-for-flow
   question: >-
-    Which IMSI held the UE IP address 10.1.0.208 at 2026-01-03 12:00:00 UTC? Return the IMSI.
+    Which Subscriber held the client IP address 10.3.131.107 when its flows between 2026-01-03 10:00 and 13:00 UTC
+    ended? Return the IMSI.
   sql: >-
-    WITH s AS (SELECT session_id, MIN(imsi) AS imsi, MIN(CASE WHEN cc_request_type = 1 THEN stime END) AS session_start,
-    COALESCE(MAX(CASE WHEN cc_request_type = 3 THEN etime END), MAX(etime)) AS session_end FROM diameter
-    WHERE application_id = 16777238 AND ue_ip_address = '10.1.0.208'
-    AND etime >= 1767441600000 - 86400000 AND etime < 1767441600000 + 86400000 GROUP BY session_id)
-    SELECT imsi FROM s WHERE 1767441600000 BETWEEN session_start AND session_end
+    WITH s AS (SELECT session_id, MIN(ue_ip_address) AS ue_ip_address, MIN(imsi) AS imsi,
+    MIN(CASE WHEN cc_request_type = 1 THEN stime END) AS session_start,
+    COALESCE(MAX(CASE WHEN cc_request_type = 3 THEN etime END), MAX(etime)) AS session_end
+    FROM diameter WHERE application_id = 16777238
+    AND etime >= 1767434400000 - 86400000 AND etime < 1767445200000 + 86400000 GROUP BY session_id)
+    SELECT DISTINCT imsi FROM (
+    SELECT s.imsi, f.sip, f.dip FROM flows f JOIN s ON f.sip = s.ue_ip_address
+    WHERE f.etime >= 1767434400000 AND f.etime < 1767445200000
+    AND f.etime BETWEEN s.session_start AND s.session_end
+    UNION ALL
+    SELECT s.imsi, f.sip, f.dip FROM flows f JOIN s ON f.dip = s.ue_ip_address
+    WHERE f.etime >= 1767434400000 AND f.etime < 1767445200000
+    AND f.etime BETWEEN s.session_start AND s.session_end)
+    WHERE sip = '10.3.131.107' OR dip = '10.3.131.107'
 
 - id: diameter-inbound-roamers
   question: How many distinct inbound roaming Subscribers appear in the Diameter data? Return a single number.

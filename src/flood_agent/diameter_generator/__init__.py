@@ -27,7 +27,7 @@ SOURCES = (
     s6a.baseline,
     sessions.data_sessions,
     clr_spoof.attack,
-    hss_flood.hss_flood,
+    hss_flood.attack,
 )
 
 

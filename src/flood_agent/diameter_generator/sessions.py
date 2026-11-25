@@ -8,7 +8,14 @@ Subscriber. Every other session gets an address from 10.64.0.0/16, which `flows`
 from bisect import bisect_left
 from itertools import count
 
-from flood_agent.diameter_generator.network import DIAMETER_PORT, Node, Subscriber
+from flood_agent.diameter_generator.network import (
+    DIAMETER_PORT,
+    Node,
+    Subscriber,
+    ephemeral_port,
+    new_session_id,
+    subnet_of,
+)
 from flood_agent.diameter_generator.records import CCR, GX, GY, SUCCESS, Record, World
 from flood_agent.diameter_generator.s6a import MINUTE_WEIGHTS
 from flood_agent.generator_clock import END_MS, MIN_MS, START_MS
@@ -33,12 +40,12 @@ Servers = tuple[tuple[int, Node], ...]  # each interface, with the server the PC
 def _nodes(world: World) -> tuple[Node, Servers]:
     """The PCEF, PCRF and OCS of the home network."""
     hss = world.home.hss
-    subnet = hss.ip.rsplit(".", 1)[0]
+    subnet = subnet_of(hss.ip)
 
     def node(name: str, last: int, port: int) -> Node:
         return Node(f"{name}.{world.home.realm}", world.home.realm, f"{subnet}.{last}", port, hss.proto)
 
-    pcef = node("pgw01", 40, world.rng.randrange(32768, 61000))
+    pcef = node("pgw01", 40, ephemeral_port(world.rng))
     return pcef, ((GX, node("pcrf01", 30, DIAMETER_PORT)), (GY, node("ocs01", 31, DIAMETER_PORT)))
 
 
@@ -60,7 +67,7 @@ def _credit_control(
 
     Returns the answered CCR-I and CCR-T."""
     rng = world.rng
-    session_id = f"{pcef.host};{rng.getrandbits(32)};{rng.getrandbits(32)}"
+    session_id = new_session_id(rng, pcef.host)
     numbers = count()
 
     def request(stime: int, request_type: int, **more) -> Record:

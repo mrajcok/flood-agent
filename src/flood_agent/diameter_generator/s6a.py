@@ -4,6 +4,7 @@ A home Subscriber's requests go to the home HSS, from a home MME or, for an outb
 partner's. An inbound roamer's go from a home MME to its partner's HSS.
 """
 
+from collections.abc import Callable
 from itertools import accumulate
 
 from flood_agent.diameter_generator.network import Node, Subscriber
@@ -17,10 +18,10 @@ CANCEL_MME_UPDATE = 0  # cancellation_type
 # What a Subscriber does in the week: some attaches, then a few of the rest.
 ATTACHES = (3, 6)
 OTHERS = (1, 4)
-OTHER_WEIGHTS = {"move": 30, NOR: 30, PUR: 20, IDR: 15, DSR: 5}
-HSS_REQUESTS = (IDR, DSR)
+OTHER_WEIGHTS = {"move": 30, "notify": 30, "purge": 20, "insert data": 15, "delete data": 5}
 MINUTE_WEIGHTS = list(accumulate(diurnal(m) for m in range(TOTAL_MINUTES)))  # the daily load curve
 LAST_START = END_MS - MIN_MS  # leaves time for the answers within the generated week
+EVENT_GAP_MS = 60_000  # from the start of an event other than an attach to the next one's
 
 
 def attach(world: World, subscriber: Subscriber, mme: Node, stime: int) -> Record:
@@ -77,6 +78,39 @@ def _move(world: World, subscriber: Subscriber, old: Node, stime: int) -> Node:
     return new
 
 
+# An event of a Subscriber's week, begun at `stime` with `mme` serving it. Returns the MME serving it
+# afterwards, and when it is free for its next event.
+Event = Callable[[World, Subscriber, Node, int], tuple[Node, int]]
+
+
+def _attach_event(world: World, subscriber: Subscriber, mme: Node, stime: int) -> tuple[Node, int]:
+    return mme, attach(world, subscriber, mme, stime).etime + 1000
+
+
+def _move_event(world: World, subscriber: Subscriber, mme: Node, stime: int) -> tuple[Node, int]:
+    return _move(world, subscriber, mme, stime), stime + EVENT_GAP_MS
+
+
+def _one_request(send: Callable[[World, Subscriber, int, Node, int], object], command: int) -> Event:
+    """The event of one request, sent by `send`."""
+
+    def event(world: World, subscriber: Subscriber, mme: Node, stime: int) -> tuple[Node, int]:
+        send(world, subscriber, command, mme, stime)
+        return mme, stime + EVENT_GAP_MS
+
+    return event
+
+
+EVENTS: dict[str, Event] = {
+    "attach": _attach_event,
+    "move": _move_event,
+    "notify": _one_request(_mme_request, NOR),
+    "purge": _one_request(_mme_request, PUR),
+    "insert data": _one_request(_hss_request, IDR),
+    "delete data": _one_request(_hss_request, DSR),
+}
+
+
 def baseline(world: World) -> None:
     rng = world.rng
     for subscriber in world.subscribers:
@@ -92,12 +126,4 @@ def baseline(world: World) -> None:
             stime = max(drawn, free_from)
             if stime >= LAST_START:
                 break
-            if event == "attach":
-                free_from = attach(world, subscriber, mme, stime).etime + 1000
-                continue
-            if isinstance(event, int):  # a command_code
-                send = _hss_request if event in HSS_REQUESTS else _mme_request
-                send(world, subscriber, event, mme, stime)
-            else:
-                mme = _move(world, subscriber, mme, stime)
-            free_from = stime + 60_000
+            mme, free_from = EVENTS[event](world, subscriber, mme, stime)

@@ -2,29 +2,25 @@
 
 import time
 
-from flood_agent import queries
 from flood_agent.mcp_server import ServerSettings
 from flood_agent.semantic_layer import SemanticLayer
 
 
-def count(telemetry_db, tmp_path, sql):
-    return queries.run_count_query(telemetry_db, tmp_path / "results.db", sql, 5.0)
-
-
-def test_now_is_the_wall_clock_in_epoch_ms(telemetry_db, tmp_path):
+def test_now_is_the_wall_clock_in_epoch_ms(query_runner):
+    count = query_runner().count
     before = int(time.time() * 1000)
     # flows hold 2023 timestamps, so "the last hour" is empty and "before now" is all of them
-    assert count(telemetry_db, tmp_path, "SELECT COUNT(*) FROM flows WHERE etime > now() - 3600000") == {
+    assert count("SELECT COUNT(*) FROM flows WHERE etime > now() - 3600000") == {
         "success": True, "count": 0,
     }
-    assert count(telemetry_db, tmp_path, "SELECT COUNT(*) FROM flows WHERE etime < now()")["count"] == 3
-    assert count(telemetry_db, tmp_path, f"SELECT COUNT(*) FROM (SELECT now() AS n) WHERE n >= {before}")["count"] == 1
+    assert count("SELECT COUNT(*) FROM flows WHERE etime < now()")["count"] == 3
+    assert count(f"SELECT COUNT(*) FROM (SELECT now() AS n) WHERE n >= {before}")["count"] == 1
 
 
-def test_a_fixed_now_can_be_set_for_reproducible_runs(telemetry_db, tmp_path, monkeypatch):
+def test_a_fixed_now_can_be_set_for_reproducible_runs(query_runner, monkeypatch):
     monkeypatch.setenv("FIXED_NOW_MS", "1700000003000")  # just after the test flows' etimes
     sql = "SELECT COUNT(*) FROM flows WHERE etime > now() - 500"
-    assert count(telemetry_db, tmp_path, sql)["count"] == 1
+    assert query_runner().count(sql)["count"] == 1
 
 
 def test_the_server_passes_a_fixed_now_to_its_process():

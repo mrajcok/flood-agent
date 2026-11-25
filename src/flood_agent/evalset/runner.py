@@ -26,7 +26,6 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from flood_agent import queries
 from flood_agent.agent import Agent
 from flood_agent.config import Settings
 from flood_agent.evalset.client import UsageMeter
@@ -36,6 +35,7 @@ from flood_agent.evalset.notebook import add_cells_above, eval_model_choices, ru
 from flood_agent.events import TraceEntry, TraceReady, TurnError
 from flood_agent.generator import END_MS
 from flood_agent.llm import OpenRouterClient
+from flood_agent.queries import QueryRunner
 
 # Row cap for eval runs (the UI picker is the only other source of a cap); large so no golden answer is truncated.
 EVAL_MAX_RESULT_ROWS = 1_000_000
@@ -81,14 +81,16 @@ def _count_answers(trace: dict | None) -> list[int]:
     return counts
 
 
-def _judge(q: Question, ref, results_db: Path, names: list[str], counts: list[int]) -> tuple[bool, str, int, str | None, int]:
+def _judge(
+    q: Question, ref, runner: QueryRunner, names: list[str], counts: list[int]
+) -> tuple[bool, str, int, str | None, int]:
     if not names and not counts:
         return False, "no Result Table or count answer was produced", 0, None, 0
     ref_cols, ref_rows = ref
     tol = q.tolerance if q.tolerance is not None else DEFAULT_TOLERANCE
     last: Comparison | None = None
     for name in names:
-        cols, rows = queries.iter_all_rows(results_db, name)
+        cols, rows = runner.all_rows(name)
         c = compare(ref_cols, ref_rows, cols, list(rows), q.ordered, tol)
         if c.ok:
             return True, "", c.extra_columns, name, len(names)
@@ -147,7 +149,7 @@ async def _run_question(model, q, ref, telemetry_db, semantic_layer, client_fact
     else:
         run = agent.notebooks.page_cell(notebook_id, cell_id).run if notebook_id and cell_id else None  # its current Run
         names = [t.name for t in agent.tables.tables_of_run(cell_id, run["id"])] if cell_id and run else []
-        ok, reason, extra, matched, n = _judge(q, ref, results_db, names, counts)
+        ok, reason, extra, matched, n = _judge(q, ref, agent.queries, names, counts)
     return QuestionResult(
         q.id, model, ok, reason, retries, latency, usage.get("cost"), usage.get("prompt_tokens"),
         usage.get("completion_tokens"), extra, error, matched, n, len(counts),

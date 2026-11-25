@@ -28,10 +28,10 @@ def clock():
 
 
 @pytest.fixture
-def world(tmp_path, clock):
+def world(tmp_path, clock, query_runner):
     """(catalog, cell id): a Catalog with a 1-hour default Retention over a fresh app database."""
     app_db = tmp_path / "app.db"
-    catalog = Catalog(app_db, clock, default_retention_ms=HOUR)
+    catalog = Catalog(app_db, clock, default_retention_ms=HOUR, runner=query_runner())
     return catalog, "cell-1"
 
 
@@ -84,12 +84,13 @@ def test_table_expired_is_not_a_key_error():
     assert not issubclass(TableExpired, KeyError)
 
 
-def test_retention_is_fixed_at_registration(tmp_path, clock):
+def test_retention_is_fixed_at_registration(tmp_path, clock, query_runner):
     app_db = tmp_path / "app.db"
     cid = "cell-1"
-    register_table(Catalog(app_db, clock, default_retention_ms=HOUR), "rt_a", cid, 1)
+    runner = query_runner()
+    register_table(Catalog(app_db, clock, default_retention_ms=HOUR, runner=runner), "rt_a", cid, 1)
 
-    changed = Catalog(app_db, clock, default_retention_ms=DAY)  # the configured default changed later
+    changed = Catalog(app_db, clock, default_retention_ms=DAY, runner=runner)  # the configured default changed later
     register_table(changed, "rt_b", cid, 1)
 
     assert changed["rt_a"].retention_ms == HOUR
@@ -132,9 +133,9 @@ def test_read_only_view_reads_but_has_no_write_operations_and_cannot_write(world
     assert "rt_20260101_000000" in catalog
 
 
-def test_kind_of_any_case_covers_telemetry_result_saved_lookup_and_unknown(tmp_path, clock):
+def test_kind_of_any_case_covers_telemetry_result_saved_lookup_and_unknown(tmp_path, clock, query_runner):
     app_db = tmp_path / "app.db"
-    catalog = Catalog(app_db, clock, default_retention_ms=HOUR, telemetry_tables=["flows"])
+    catalog = Catalog(app_db, clock, default_retention_ms=HOUR, telemetry_tables=["flows"], runner=query_runner())
     cid = "cell-1"
     register_table(catalog, "rt_20260101_000000", cid, 1)
     register_table(catalog, "busy_ports", cid, 1)
@@ -172,15 +173,15 @@ def _physical(path):
         con.close()
 
 
-def _swept_world(tmp_path, clock, *physical):
+def _swept_world(tmp_path, clock, runner, *physical):
     results = _results_db(tmp_path, *physical)
     app_db = tmp_path / "app.db"
-    catalog = Catalog(app_db, clock, default_retention_ms=HOUR, results_db=results)
+    catalog = Catalog(app_db, clock, default_retention_ms=HOUR, results_db=results, runner=runner)
     return catalog, "cell-1", results
 
 
-def test_sweep_drops_an_expired_table_and_keeps_it_registered_as_dropped(tmp_path, clock):
-    catalog, cid, results = _swept_world(tmp_path, clock, "rt_a", "rt_b")
+def test_sweep_drops_an_expired_table_and_keeps_it_registered_as_dropped(tmp_path, clock, query_runner):
+    catalog, cid, results = _swept_world(tmp_path, clock, query_runner(), "rt_a", "rt_b")
     register_table(catalog, "rt_a", cid, 1)
     clock.now += HOUR - 1
     register_table(catalog, "rt_b", cid, 1)
@@ -194,10 +195,11 @@ def test_sweep_drops_an_expired_table_and_keeps_it_registered_as_dropped(tmp_pat
     assert "rt_b" in catalog
 
 
-def test_sweep_drops_only_old_unregistered_rt_tables(tmp_path, clock):
+def test_sweep_drops_only_old_unregistered_rt_tables(tmp_path, clock, query_runner):
     clock.now = int(datetime(2026, 5, 1, 12, 0, 0).timestamp() * 1000)  # local time, like the name generator
     catalog, cid, results = _swept_world(
-        tmp_path, clock, "rt_20260501_105959", "rt_20260501_110001", "rt_20260501_105900_2", "lookup_x", "mine", "rt_live")
+        tmp_path, clock, query_runner(), "rt_20260501_105959", "rt_20260501_110001", "rt_20260501_105900_2",
+        "lookup_x", "mine", "rt_live")
     register_table(catalog, "rt_live", cid, 1)
     register_table(catalog, "mine", cid, 1)
 
@@ -237,10 +239,11 @@ def _exists(path, name) -> bool:
 
 
 @pytest.fixture
-def full(tmp_path, clock):
+def full(tmp_path, clock, query_runner):
     """(catalog, cell id, results db path): a Catalog that knows a Telemetry table `flows`."""
     app_db, results_db = tmp_path / "app.db", tmp_path / "results.db"
-    catalog = Catalog(app_db, clock, default_retention_ms=HOUR, results_db=results_db, telemetry_tables=["flows"])
+    catalog = Catalog(app_db, clock, default_retention_ms=HOUR, results_db=results_db, telemetry_tables=["flows"],
+                      runner=query_runner())
     return catalog, "cell-1", results_db
 
 
@@ -333,11 +336,11 @@ def test_the_default_retention_follows_the_policy(world):
     assert catalog["rt_a"].retention_days == 3
 
 
-def test_is_lookup_and_canonical_take_any_case(tmp_path, clock):
+def test_is_lookup_and_canonical_take_any_case(tmp_path, clock, query_runner):
     results = tmp_path / "results.db"
     sqlite3.connect(results).close()
     app_db = tmp_path / "app.db"
-    catalog = Catalog(app_db, clock, results_db=results)
+    catalog = Catalog(app_db, clock, results_db=results, runner=query_runner())
     catalog.add_lookup("Hosts", "ip,name\n1,a")
     view = CatalogView(app_db, clock, results_db=results)
 
@@ -346,10 +349,10 @@ def test_is_lookup_and_canonical_take_any_case(tmp_path, clock):
     assert view.lookup_text("Lookup_Hosts", "comma")["name"] == "lookup_hosts"
 
 
-def test_the_view_opens_the_results_database_read_only(tmp_path, clock):
+def test_the_view_opens_the_results_database_read_only(tmp_path, clock, query_runner):
     results = tmp_path / "results.db"
     sqlite3.connect(results).close()
-    catalog = Catalog(tmp_path / "app.db", clock, results_db=results)
+    catalog = Catalog(tmp_path / "app.db", clock, results_db=results, runner=query_runner())
     catalog.add_lookup("hosts", "ip,name\n1,a")
     view = CatalogView(catalog.path, clock, results_db=results)
 

@@ -18,7 +18,6 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import AsyncIterator, Callable
 
 from flood_agent import queries, table_names
@@ -27,6 +26,7 @@ from flood_agent.catalog import Catalog, CellRun, Table, TableExpired
 from flood_agent.cell import SqlCell
 from flood_agent.events import CountEvent, DisplayEvent, Event, TurnEnd, TurnError
 from flood_agent.notebook_store import COUNT_KIND, NotebookStore, RunStatus
+from flood_agent.queries import QueryRunner
 from flood_agent.show_commands import ShowFailed, run_show
 from flood_agent.table_replacement import RefreshInProgress, ReplacementFailed, Rerun, TableReplacement
 
@@ -152,9 +152,9 @@ class SqlCellRuns:
     Notebook at a time."""
 
     def __init__(self, store: NotebookStore, tables: Catalog, replacement: TableReplacement,
-                 telemetry_db: Path, results_db: Path, timeout_s: float, clock: Callable[[], int]):
+                 runner: QueryRunner, clock: Callable[[], int]):
         self._store, self.tables, self.replacement = store, tables, replacement
-        self.telemetry_db, self.results_db, self.timeout_s, self.clock = telemetry_db, results_db, timeout_s, clock
+        self.runner, self.clock = runner, clock
         self._running: dict[str, tuple[threading.Event, asyncio.Future]] = {}  # SQL Cell id -> its query's stop flag and thread
         self._closed = False
 
@@ -225,7 +225,7 @@ class SqlCellRuns:
         """The blocking part of a Run (it runs in a thread)."""
         if command:  # SHOW / DESCRIBE: no table, no row cap; the rows are kept with the Run
             try:
-                names, rows = run_show(command, table, self.telemetry_db, self.results_db, self.tables.listing())
+                names, rows = run_show(command, table, self.runner, self.tables.listing())
             except ShowFailed as e:
                 log.warning("SQL Cell %s failed: %s", owner.cell_id, e)
                 return _refused(str(e))
@@ -238,9 +238,8 @@ class SqlCellRuns:
             log.warning("SQL Cell %s failed: %s", owner.cell_id, raw)
             return _Failed(error, raw)
 
-        readable = self.tables.readable()
         if queries.looks_like_count(sql):
-            counted = queries.run_count_query(self.telemetry_db, self.results_db, sql, self.timeout_s, readable, stop)
+            counted = self.runner.count(sql, stop)
             if counted["success"]:
                 return _Count(counted["count"])
             if counted.get("stopped") or counted["error"] != queries.COUNT_GUIDANCE:  # only the wrong shape falls back to a table
@@ -257,7 +256,7 @@ class SqlCellRuns:
                 return failure(f"The table {prior.name} expired during the run. Run the cell again.")
             t = done.table
             return _TableMade(t.name, t.columns, done.row_count, t.truncated_to)
-        result = queries.run_query(self.telemetry_db, self.results_db, sql, self.timeout_s, max_rows, readable, title, stop)
+        result = self.runner.run(sql, max_rows, title, stop)
         if not result["success"]:
             return failure(result["error"], result.get("raw_error"), bool(result.get("stopped")))
         name = result["result_table"]
@@ -265,6 +264,6 @@ class SqlCellRuns:
             self.tables.register_for(owner, name, title, result["columns"], table_names.SQL_CELL_REQUEST,
                                      result.get("truncated_to"), sql, max_rows)
         except BaseException:
-            queries.drop_table(self.results_db, name)
+            self.runner.drop(name)
             raise
         return _TableMade(name, result["columns"], result["row_count"], result.get("truncated_to"))

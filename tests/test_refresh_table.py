@@ -8,7 +8,6 @@ from contextlib import closing
 from conftest import DAY, Clock, ScriptedLLM, last_tool_result, run_of, tables_in, tool_call
 from conftest import ask as run_in_notebook
 
-from flood_agent import queries
 from flood_agent.llm import TextChunk
 
 HOUR = 3_600_000
@@ -97,10 +96,10 @@ def test_the_row_cap_is_reused_and_truncation_is_reported_only_while_it_applies(
     assert rows(client, name)["truncated_to"] is None
 
 
-def test_a_query_that_times_out_fails_plainly_and_changes_nothing(build_agent, web_client):
+def test_a_query_that_times_out_fails_plainly_and_changes_nothing(build_agent, web_client, query_runner):
     slow = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 400000) SELECT MAX(x) AS m FROM c"
     client, agent, _, _, (name,) = ask(build_agent, web_client, slow)
-    agent.replacement.timeout_s = 0.01  # the Refresh's limit, not the original run's
+    agent.replacement.runner = query_runner(agent.tables.readable, timeout_s=0.01)  # the Refresh's limit only
 
     r = refresh(client, name)
 
@@ -122,15 +121,15 @@ def test_the_stored_query_is_checked_like_an_llm_query(build_agent, web_client, 
 
 
 def test_a_second_refresh_while_one_runs_is_a_conflict(build_agent, web_client, monkeypatch):
-    client, _, _, _, (name,) = ask(build_agent, web_client, RECENT)
-    started, release, real = threading.Event(), threading.Event(), queries.run_query
+    client, agent, _, _, (name,) = ask(build_agent, web_client, RECENT)
+    started, release, real = threading.Event(), threading.Event(), agent.queries.run
 
     def slow(*args, **kwargs):
         started.set()
         assert release.wait(5)
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(queries, "run_query", slow)
+    monkeypatch.setattr(agent.queries, "run", slow)
     first = []
     t = threading.Thread(target=lambda: first.append(refresh(client, name)))
     t.start()
@@ -141,7 +140,7 @@ def test_a_second_refresh_while_one_runs_is_a_conflict(build_agent, web_client, 
         release.set()
         t.join(5)
     assert first[0].status_code == 200
-    monkeypatch.setattr(queries, "run_query", real)
+    monkeypatch.setattr(agent.queries, "run", real)
     assert refresh(client, name).status_code == 200  # the lock is released
 
 

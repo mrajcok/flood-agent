@@ -10,7 +10,6 @@ from conftest import Clock, ScriptedLLM, tool_call
 from playwright.sync_api import expect
 from test_notebook_browser import run_in_new_notebook
 
-from flood_agent import queries
 from flood_agent.llm import TextChunk
 
 
@@ -69,15 +68,15 @@ def test_refresh_updates_the_count_in_place_and_moves_its_as_of_time(build_agent
 
 
 def test_the_count_control_is_disabled_while_a_refresh_runs(build_agent, live_page, monkeypatch):
-    _, _, page = ask_for_recent_count(build_agent, live_page, monkeypatch)
-    started, release, real = threading.Event(), threading.Event(), queries.run_count_query
+    agent, _, page = ask_for_recent_count(build_agent, live_page, monkeypatch)
+    started, release, real = threading.Event(), threading.Event(), agent.queries.count
 
     def slow(*args, **kwargs):
         started.set()
         release.wait(5)
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(queries, "run_count_query", slow)
+    monkeypatch.setattr(agent.queries, "count", slow)
     button = page.locator(".count-display").get_by_role("button", name="Refresh")
     button.click()
     assert started.wait(5)

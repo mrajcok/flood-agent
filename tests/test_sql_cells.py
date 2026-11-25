@@ -337,7 +337,7 @@ async def test_a_table_swept_during_a_re_run_fails_the_cell_telling_the_user_to_
     nb = agent.notebooks.create_notebook()
     cell = add_sql_cell(agent, nb, sql="SELECT dport FROM flows", max_rows=2)
     await run(agent, nb, cell)
-    real = queries.run_query
+    real = agent.queries.run
 
     def sweep_during(*args, **kwargs):
         result = real(*args, **kwargs)
@@ -345,7 +345,7 @@ async def test_a_table_swept_during_a_re_run_fails_the_cell_telling_the_user_to_
         agent.tables.sweep()  # the table's Retention is over while the query runs
         return result
 
-    monkeypatch.setattr(queries, "run_query", sweep_during)
+    monkeypatch.setattr(agent.queries, "run", sweep_during)
     await run(agent, nb, cell)
 
     run_ = run_of(agent, nb, 0)
@@ -393,14 +393,14 @@ async def test_a_re_run_while_its_table_is_being_refreshed_fails_saying_so(build
     cell = add_sql_cell(agent, nb, sql="SELECT dport FROM flows", max_rows=2)
     await run(agent, nb, cell)
     name = table_of(agent, nb, 0).name
-    real, entered, release = queries.run_query, threading.Event(), threading.Event()
+    real, entered, release = agent.queries.run, threading.Event(), threading.Event()
 
     def held(*args, **kwargs):  # the Refresh's query, held open until the re-run has tried
         entered.set()
         release.wait(5)
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(queries, "run_query", held)
+    monkeypatch.setattr(agent.queries, "run", held)
     refresh = threading.Thread(target=agent.refresh_table, args=(name,))
     refresh.start()
     assert entered.wait(5)

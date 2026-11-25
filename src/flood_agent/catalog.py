@@ -15,7 +15,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Iterable, Literal
 
-from flood_agent import lookup_tables, queries, table_names
+from flood_agent import lookup_tables, table_names
+from flood_agent.queries import QueryRunner
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS result_tables (
@@ -319,14 +320,16 @@ class Catalog(CatalogView):
     def __init__(
         self, app_db: Path, clock: Callable[[], int] = _now, default_retention_ms: int = DAY_MS,
         telemetry_tables: Iterable[str] = (), results_db: Path | None = None,
-        on_rename: Callable[[sqlite3.Connection, str, str], None] | None = None,
+        on_rename: Callable[[sqlite3.Connection, str, str], None] | None = None, *, runner: QueryRunner,
     ):
         """`default_retention_ms` is the Retention a new Result Table is given (kept in `policy`). `on_rename(con, old, new)` is
         the store's hook: it runs in the same app-database transaction as the registry rename, to update
-        whatever else shows the old name (Displays and Chart Specs), so the Catalog never knows their schema."""
+        whatever else shows the old name (Displays and Chart Specs), so the Catalog never knows their schema.
+        `runner`, over the same results database, renames and drops tables there."""
         super().__init__(app_db, clock, telemetry_tables, results_db, _read_only=False,
                          default_retention_ms=default_retention_ms)
         self._on_rename = on_rename
+        self._runner = runner
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as con, con:
             con.executescript(SCHEMA)
@@ -370,9 +373,8 @@ class Catalog(CatalogView):
         names = list(names)
         if not names or self.results_db is None or not self.results_db.exists():
             return
-        with closing(sqlite3.connect(self.results_db)) as con, con:
-            for n in names:
-                con.execute(f"DROP TABLE IF EXISTS {table_names.quote(n)}")
+        for n in names:
+            self._runner.drop(n)
 
     def _mark_expired(self, names: list[str]) -> None:
         with closing(self._connect()) as con, con:
@@ -455,7 +457,7 @@ class Catalog(CatalogView):
         """Rename in the results database, then in the app database. These are two files, so if the
         second step fails the first is undone."""
         self._check_new_name(new)
-        queries.rename_table(self._results_db(), old, new)  # ValueError if `new` is taken there
+        self._runner.rename(old, new)  # ValueError if `new` is taken there
         try:
             with closing(self._connect()) as con, con:
                 con.execute("UPDATE result_tables SET name=? WHERE name=?", (new, old))
@@ -464,10 +466,10 @@ class Catalog(CatalogView):
                 if self._on_rename:
                     self._on_rename(con, old, new)
         except sqlite3.IntegrityError:
-            queries.rename_table(self._results_db(), new, old)
+            self._runner.rename(new, old)
             raise ValueError(f"A table named {new} already exists.")
         except BaseException:
-            queries.rename_table(self._results_db(), new, old)
+            self._runner.rename(new, old)
             raise
 
     def _register_lookup(self, name: str, parsed: lookup_tables.ParsedRows) -> dict:

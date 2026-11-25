@@ -5,9 +5,8 @@ SQLite development database SHOW TABLES, SHOW COLUMNS and DESCRIBE TABLE are emu
 may read; the other 13 commands are not available there.
 """
 
-from pathlib import Path
-
 from flood_agent import queries
+from flood_agent.queries import QueryRunner
 
 SHOW_COMMANDS = (
     "SHOW TABLES", "SHOW VIEWS", "SHOW COLUMNS", "SHOW INDEXES", "SHOW SCHEMATA", "SHOW DATABASES", "SHOW USERS",
@@ -25,7 +24,7 @@ class ShowFailed(Exception):
 
 def is_show_statement(sql: str) -> bool:
     """True if `sql` starts with SHOW or DESCRIBE (comments aside): it belongs in the Command drop-down."""
-    words, _ = queries._scan(sql)
+    words = queries.leading_words(sql)
     return bool(words) and words[0] in ("show", "describe", "desc")
 
 
@@ -34,7 +33,7 @@ def statement_of(command: str, table: str) -> str:
     return f"{command} {table.strip()}" if command == DESCRIBE_TABLE else command
 
 
-def run_show(command: str, table: str, telemetry_db: Path, results_db: Path,
+def run_show(command: str, table: str, runner: QueryRunner,
              listing: dict[str, list[str]]) -> tuple[list[str], list[list]]:
     """The emulated command's (column names, rows). `listing` is the readable tables by kind (see
     `TableCatalog.listing`): only those are shown or described. ShowFailed for a command with no emulation or a
@@ -42,7 +41,7 @@ def run_show(command: str, table: str, telemetry_db: Path, results_db: Path,
     kinds = {n: k for k in ("telemetry", "lookup", "saved", "result") for n in listing.get(k, [])}
 
     def columns_of(name: str) -> list[dict]:
-        return queries.table_columns(telemetry_db, results_db, name, kinds[name] == "telemetry") or []
+        return runner.table_columns(name, kinds[name] == "telemetry") or []
 
     if command == "SHOW TABLES":
         return ["table_name", "table_type"], [[n, kinds[n]] for n in sorted(kinds)]

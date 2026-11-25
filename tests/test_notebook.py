@@ -24,6 +24,7 @@ from flood_agent.cell_kinds import AI, MARKDOWN, SQL
 from flood_agent.events import TurnEnd
 from flood_agent.model_choices import NO_MODEL
 from flood_agent.notebook import NotebookBusy, UnknownCell, UnknownNotebook
+from flood_agent.queries import QueryFailed
 
 SLOW = "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT COUNT(*) FROM n"
 
@@ -362,9 +363,9 @@ def test_a_failed_table_drop_leaves_the_cell_and_the_notebook_in_place_to_retry(
     nb = nbs.create_notebook()
     cell = cell_with_tables(parts, nb)
     unreadable_results_database(parts)
-    with pytest.raises(sqlite3.Error):
+    with pytest.raises(QueryFailed):
         nbs.delete_cell(nb, cell, "delete_rt")
-    with pytest.raises(sqlite3.Error):
+    with pytest.raises(QueryFailed):
         nbs.delete_notebook(nb, "delete_rt")
     assert ids(parts, nb) == [cell]
     parts.results_db.rmdir()

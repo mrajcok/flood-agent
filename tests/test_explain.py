@@ -42,7 +42,14 @@ def test_anything_but_a_single_select_is_refused(build_agent, web_client):
     assert "Only a single read-only SELECT" in r.json()["detail"]
 
 
-def test_a_table_that_is_gone_shows_the_raw_error(build_agent, web_client):
+def test_a_bad_query_gets_a_reason_without_its_values(build_agent, web_client):
+    client, *_ = ask(build_agent, web_client, "SELECT 1 AS one")
+    r = explain(client, "SELECT dport FROM flows WHERE dport = 1 'secret'")
+    assert r.status_code == 422
+    assert r.json()["detail"] == "near <literal>: syntax error"
+
+
+def test_the_reason_names_a_table_that_is_gone(build_agent, web_client):
     client, *_ = ask(build_agent, web_client, "SELECT 1 AS one")
     r = explain(client, "SELECT * FROM rt_20200101_000000")
     assert r.status_code == 422

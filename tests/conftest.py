@@ -16,7 +16,7 @@ import time
 from contextlib import ExitStack, asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import anyio
 import pytest
@@ -39,6 +39,7 @@ from flood_agent.mcp_server import ServerSettings, create_server
 from flood_agent.model_choices import ModelChoices
 from flood_agent.notebook import Notebooks, Position
 from flood_agent.notebook_store import DEFAULT_MAX_ROWS, NotebookStore
+from flood_agent.queries import QueryRunner
 from flood_agent.semantic_layer import SemanticLayer
 from flood_agent.web import create_app
 
@@ -306,10 +307,20 @@ def config_for_test(tmp_path, telemetry_db, semantic_layer, api_key: bool = True
     )
 
 
-def query_limits() -> dict:
-    """timeout_s and max_rows for calling queries.run_query directly."""
-    cfg = default_agent_config()
-    return {"timeout_s": cfg.query_timeout_s, "max_rows": 1_000_000}
+@pytest.fixture
+def query_runner(tmp_path, telemetry_db):
+    """`query_runner(readable=set(), timeout_s=None)` -> a QueryRunner over the test Telemetry Database and this
+    test's results database (the one `config_for_test` names). `readable` is the set of tables a query may read,
+    which the test may change afterwards, or a function returning it (e.g. a Catalog's `readable`)."""
+
+    def _build(readable: set[str] | Callable[[], set[str]] | None = None,
+               timeout_s: float | None = None) -> QueryRunner:
+        tables = set() if readable is None else readable
+        return QueryRunner(telemetry_db, tmp_path / "results.db",
+                           default_agent_config().query_timeout_s if timeout_s is None else timeout_s,
+                           tables if callable(tables) else lambda: tables)
+
+    return _build
 
 
 @pytest.fixture

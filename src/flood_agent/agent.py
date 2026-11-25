@@ -1,5 +1,6 @@
 """The Agent: builds the app's parts (Notebook storage, the Table Catalog, Table Replacement, the Run modules and the
-Notebook module, `notebooks`), supervises the MCP connection, and does Refresh and row reads.
+Notebook module, `notebooks`, and the query runner, `queries`), supervises the MCP connection, and does Refresh and row
+reads.
 
 The LLM client is injected.
 """
@@ -24,6 +25,7 @@ from flood_agent.mcp_server import ServerSettings
 from flood_agent.model_choices import ModelChoices
 from flood_agent.notebook import Notebooks
 from flood_agent.notebook_store import NotebookStore
+from flood_agent.queries import QueryRunner
 from flood_agent.semantic_layer import SemanticLayer
 from flood_agent.sql_cell_run import SqlCellRuns
 from flood_agent.table_replacement import RefreshInProgress, ReplacementFailed, TableReplacement
@@ -73,24 +75,28 @@ class Parts:
     sql_cells: SqlCellRuns
     ai_cells: AiCellRuns
     notebooks: Notebooks
+    queries: QueryRunner
 
 
 def build_parts(config: AgentConfig, semantic_layer: SemanticLayer, client_for: ClientFactory,
                 connection: ConnectionProvider, started: Callable[[], bool]) -> Parts:
-    """Build Notebook storage, the Table Catalog, Table Replacement, the Run modules and the Notebook module, wired
-    together. `connection` and `started` are the MCP connection the AI Cell Runs use and whether it is up."""
+    """Build Notebook storage, the query runner, the Table Catalog, Table Replacement, the Run modules and the Notebook
+    module, wired together. `connection` and `started` are the MCP connection the AI Cell Runs use and whether it
+    is up."""
     store = NotebookStore(config.app_db, config.clock)
+    # The runner asks for the readable set only when it queries, by which time the Catalog below exists.
+    runner = QueryRunner(config.telemetry_db, config.results_db, config.query_timeout_s, lambda: tables.readable())
     tables = Catalog(
         config.app_db, config.clock, config.result_ttl_ms, telemetry_tables=semantic_layer.table_names(),
         results_db=config.results_db, on_rename=store.follow_rename,  # Displays follow a table's new name
+        runner=runner,
     )
-    replacement = TableReplacement(tables, config.telemetry_db, config.results_db, config.query_timeout_s)
-    sql_cells = SqlCellRuns(store, tables, replacement, config.telemetry_db, config.results_db,
-                            config.query_timeout_s, config.clock)
+    replacement = TableReplacement(tables, runner)
+    sql_cells = SqlCellRuns(store, tables, replacement, runner, config.clock)
     ai_cells = AiCellRuns(store, tables, semantic_layer, client_for, connection, started, config.choices.spec_of,
                           config.max_llm_steps, config.max_failed_attempts, config.clock)
-    return Parts(store, tables, replacement, sql_cells, ai_cells, Notebooks(store, tables, sql_cells, ai_cells,
-                                                                             config.choices))
+    notebooks = Notebooks(store, tables, sql_cells, ai_cells, config.choices)
+    return Parts(store, tables, replacement, sql_cells, ai_cells, notebooks, runner)
 
 
 class Agent:
@@ -103,6 +109,7 @@ class Agent:
         parts = build_parts(config, self.semantic_layer, lambda model: self.client_for(model), self._ensure_connection,
                             lambda: self._connection is not None)
         self.tables, self.replacement, self.notebooks = parts.tables, parts.replacement, parts.notebooks
+        self.queries = parts.queries
         self._sql_cells, self._ai_cells = parts.sql_cells, parts.ai_cells
         self._connection: McpConnection | None = None
         self._restart_lock = asyncio.Lock()
@@ -190,7 +197,7 @@ class Agent:
 
         Adds per-column display formats from the Semantic Layer."""
         table = self.tables[result_table]
-        data = queries.fetch_rows(self.config.results_db, table.name, columns, **page_args)
+        data = self.queries.fetch_rows(table.name, columns, **page_args)
         data["formats"] = self.semantic_layer.column_formats(data["columns"])
         data["truncated_to"] = table.truncated_to
         data.update(table.to_json())
@@ -246,10 +253,7 @@ class Agent:
             raise KeyError(display_id)
         label = f'Count Display "{definition["title"]}"'
         with self._refresh_guard(("count", display_id), label):
-            result = queries.run_count_query(
-                self.config.telemetry_db, self.config.results_db, definition["sql"], self.config.query_timeout_s,
-                self.tables.readable(),
-            )
+            result = self.queries.count(definition["sql"])
             if not result["success"]:
                 raise RefreshFailed(self._refresh_error(label, result))
             computed_at_ms = self.config.clock()
@@ -258,8 +262,8 @@ class Agent:
 
     def iter_all_rows(self, result_table: str):
         """Internal data path for PSV export of the full Result Table. Not an LLM tool."""
-        return queries.iter_all_rows(self.config.results_db, self.tables[result_table].name)
+        return self.queries.all_rows(self.tables[result_table].name)
 
     def fetch_chart_rows(self, result_table: str) -> list[dict]:
         """Internal data path for the chart-rows endpoint (chart cap). Not an LLM tool."""
-        return queries.fetch_records(self.config.results_db, self.tables[result_table].name, self.config.chart_row_cap)
+        return self.queries.chart_rows(self.tables[result_table].name, self.config.chart_row_cap)

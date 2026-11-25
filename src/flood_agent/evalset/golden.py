@@ -1,11 +1,13 @@
 """Load the checked-in golden set and execute reference SQL."""
 
+import math
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
-from flood_agent import queries
+from flood_agent.queries import QueryRunner
 
 GOLDEN_PATH = Path(__file__).parent / "golden.yaml"
 
@@ -28,10 +30,13 @@ def load_golden(path: Path = GOLDEN_PATH) -> list[Question]:
 
 
 def run_reference(telemetry_db: Path, scratch_results_db: Path, sql: str) -> tuple[list[str], list[tuple]]:
-    """Run reference SQL through the same restricted connection the LLM's SQL uses."""
-    con = queries.open_connection(telemetry_db, scratch_results_db)
+    """Run reference SQL the way the LLM's SQL runs, but with no time limit or row cap and no Result Table readable."""
+    runner = QueryRunner(telemetry_db, scratch_results_db, math.inf, set)
+    made = runner.run(sql, sys.maxsize)
+    if not made["success"]:
+        raise RuntimeError(f"Reference SQL failed: {made.get('raw_error', made['error'])}")
     try:
-        cur = con.execute(queries.validate_select(sql))
-        return [d[0] for d in cur.description], cur.fetchall()
+        columns, rows = runner.all_rows(made["result_table"])
+        return columns, list(rows)
     finally:
-        con.close()
+        runner.drop(made["result_table"])

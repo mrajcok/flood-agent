@@ -9,6 +9,7 @@ from flood_agent.diameter_generator.network import (
     Node,
     Subscriber,
     home_network,
+    new_session_id,
     partner_networks,
     subscribers,
 )
@@ -33,6 +34,7 @@ S6A, GX, GY = 16777251, 16777238, 4  # application_id
 ULR, CLR, AIR, IDR, DSR, PUR, NOR = 316, 317, 318, 319, 320, 321, 323  # command_code
 CCR = 272  # command_code, Gx and Gy
 SUCCESS = 2001
+ANSWERED, TIMEOUT, RETRANSMISSION = "Answered", "Timeout", "Retransmission"  # status
 TIMEOUT_MS = 5000  # the probe's answer timeout
 TIMEOUT_RATE = 0.003
 
@@ -129,8 +131,8 @@ class World:
         may_time_out = latency_ms is None
         latency = self._latency(origin, destination) if latency_ms is None else latency_ms
         record = Record(
-            stime=stime, etime=stime + round(latency), latency_ms=latency, status="Answered",
-            session_id=session_id or f"{origin.host};{self.rng.getrandbits(32)};{self.rng.getrandbits(32)}",
+            stime=stime, etime=stime + round(latency), latency_ms=latency, status=ANSWERED,
+            session_id=session_id or new_session_id(self.rng, origin.host),
             hop_by_hop_id=self.rng.getrandbits(32), end_to_end_id=self.rng.getrandbits(32),
             application_id=application_id, command_code=command_code,
             origin_host=origin.host, origin_realm=origin.realm,
@@ -150,11 +152,11 @@ class World:
         assert latency is not None, "the record has already timed out"
         stime = record.stime + TIMEOUT_MS + self.rng.randrange(1, 50)
         again = dataclasses.replace(
-            record, stime=stime, etime=stime + round(latency), status="Retransmission",
+            record, stime=stime, etime=stime + round(latency), status=RETRANSMISSION,
             hop_by_hop_id=self.rng.getrandbits(32),
         )
         self.records.append(again)
-        record.status, record.etime = "Timeout", record.stime + TIMEOUT_MS
+        record.status, record.etime = TIMEOUT, record.stime + TIMEOUT_MS
         record.latency_ms = record.result_code = record.experimental_result_code = None
         if record.command_code == ULR:
             record.msisdn = None  # it comes with the answer's subscription data

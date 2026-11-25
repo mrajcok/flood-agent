@@ -41,11 +41,25 @@ class Subscriber:
     rat_type: int
 
 
+def ephemeral_port(rng: random.Random) -> int:
+    return rng.randrange(32768, 61000)
+
+
+def subnet_of(ip: str) -> str:
+    """The first three octets: the /24 that `ip` is in."""
+    return ip.rsplit(".", 1)[0]
+
+
+def new_session_id(rng: random.Random, host: str) -> str:
+    """A Diameter Session-Id: `<origin host>;<high 32>;<low 32>`."""
+    return f"{host};{rng.getrandbits(32)};{rng.getrandbits(32)}"
+
+
 def _network(rng: random.Random, mcc: str, mnc: str, subnet: str, mmes: int, proto: int) -> Network:
     realm = f"epc.mnc{mnc.zfill(3)}.mcc{mcc}.3gppnetwork.org"
     hss = Node(f"hss01.{realm}", realm, f"{subnet}.10", DIAMETER_PORT, proto)
     nodes = tuple(
-        Node(f"mmec{i:02}.mmegi8001.mme.{realm}", realm, f"{subnet}.{20 + i}", rng.randrange(32768, 61000), proto)
+        Node(f"mmec{i:02}.mmegi8001.mme.{realm}", realm, f"{subnet}.{20 + i}", ephemeral_port(rng), proto)
         for i in range(1, mmes + 1)
     )
     return Network(mcc + mnc, realm, hss, nodes)

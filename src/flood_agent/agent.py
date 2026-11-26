@@ -25,6 +25,7 @@ from flood_agent.mcp_server import ServerSettings
 from flood_agent.model_choices import ModelChoices
 from flood_agent.notebook import Notebooks
 from flood_agent.notebook_store import NotebookStore
+from flood_agent.public_keys import PublicKeys
 from flood_agent.queries import QueryRunner
 from flood_agent.semantic_layer import SemanticLayer
 from flood_agent.sql_cell_run import SqlCellRuns
@@ -77,11 +78,12 @@ class Parts:
     ai_cells: AiCellRuns
     notebooks: Notebooks
     queries: QueryRunner
+    public_keys: PublicKeys
 
 
 def build_parts(config: AgentConfig, user: str, semantic_layer: SemanticLayer, client_for: ClientFactory,
                 connection: ConnectionProvider, started: Callable[[], bool]) -> Parts:
-    """Build Notebook storage, the query runner, the Table Catalog, Table Replacement, the Run modules and the Notebook
+    """Build Notebook storage, the Public Key store, the query runner, the Table Catalog, Table Replacement, the Run modules and the Notebook
     module for `user`, wired together over that User's databases (created if missing). `connection` and `started` are
     the MCP connection the AI Cell Runs use and whether it is up."""
     databases = user_databases(config.users_dir, user)
@@ -99,7 +101,8 @@ def build_parts(config: AgentConfig, user: str, semantic_layer: SemanticLayer, c
     ai_cells = AiCellRuns(user, store, tables, semantic_layer, client_for, connection, started, config.choices.spec_of,
                           config.max_llm_steps, config.max_failed_attempts, config.clock)
     notebooks = Notebooks(store, tables, sql_cells, ai_cells, config.choices)
-    return Parts(databases, store, tables, replacement, sql_cells, ai_cells, notebooks, runner)
+    return Parts(databases, store, tables, replacement, sql_cells, ai_cells, notebooks, runner,
+                 PublicKeys(databases.app_db, config.clock))
 
 
 class UserSpace:
@@ -110,7 +113,7 @@ class UserSpace:
         self.config, self.semantic_layer = config, semantic_layer
         self.databases = parts.databases
         self.tables, self.replacement, self.notebooks = parts.tables, parts.replacement, parts.notebooks
-        self.queries = parts.queries
+        self.queries, self.public_keys = parts.queries, parts.public_keys
         self._store, self._sql_cells, self._ai_cells = parts.store, parts.sql_cells, parts.ai_cells
         self._refreshing: set[tuple[str, str | int]] = set()  # ("count", id) being refreshed now (tables: see table_replacement)
         self._refreshing_lock = threading.Lock()

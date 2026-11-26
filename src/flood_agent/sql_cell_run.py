@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass
 from typing import AsyncIterator, Callable
 
-from flood_agent import queries, table_names
+from flood_agent import lineage, queries, table_names
 from flood_agent.ai_cell_context import SHOW_CELL_LABEL, SQL_CELL_LABEL, STOPPED_BELOW
 from flood_agent.catalog import Catalog, CellRun, Table, TableExpired
 from flood_agent.cell import SqlCell
@@ -262,7 +262,8 @@ class SqlCellRuns:
         name = result["result_table"]
         try:
             self.tables.register_for(owner, name, title, result["columns"], table_names.SQL_CELL_REQUEST,
-                                     result.get("truncated_to"), sql, max_rows)
+                                     result.get("truncated_to"), sql, max_rows,
+                                     lineage.restricted_columns(result["lineage"]))
         except BaseException:
             self.runner.drop(name)
             raise

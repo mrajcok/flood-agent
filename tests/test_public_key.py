@@ -69,7 +69,7 @@ def test_the_header_links_to_settings_next_to_sign_out(client):
 
 
 def test_the_settings_page_says_when_no_public_key_is_on_file(client):
-    assert "No public key on file" in settings_text(client)
+    assert "No Public Key on file" in settings_text(client)
 
 
 @pytest.mark.parametrize("key,shown", [
@@ -82,7 +82,7 @@ def test_an_accepted_key_is_shown_with_its_type_fingerprint_and_comment(client, 
     response = upload(client, f"  {key}\r\n") if how == "pasted" else upload(client, file=f"{key}\n".encode())
     assert (response.status_code, response.headers["location"]) == (303, "/settings")
     text = settings_text(client)
-    assert shown in text and "No public key on file" not in text
+    assert shown in text and "No Public Key on file" not in text
 
 
 ACCEPTED = "age public key (age1…), or an OpenSSH ssh-ed25519 or ssh-rsa (2048 to 4096 bits) public key"
@@ -118,7 +118,7 @@ def test_an_upload_that_is_not_a_key_file_is_refused(client, file):
 def test_a_pasted_key_and_an_uploaded_one_together_are_two_keys(client):
     response = upload(client, AGE, file=ED25519.encode())
     assert response.status_code == 422 and ACCEPTED in response.text
-    assert "No public key on file" in settings_text(client)
+    assert "No Public Key on file" in settings_text(client)
 
 
 SECRET = "c2VjcmV0IGtleSBtYXRlcmlhbCB0aGF0IG11c3Qgbm90IGJlIGtlcHQ"  # stands for a private key's body
@@ -152,7 +152,7 @@ def test_a_private_key_is_refused_with_a_warning_and_neither_stored_nor_logged(
     assert "private key" in response.text and "should not be shared" in response.text and "replace it" in response.text
     assert secret not in response.text and secret not in app_log.text
     assert not [f for f in (tmp_path / "users").rglob("*") if f.is_file() and secret.encode() in f.read_bytes()]
-    assert "No public key on file" in settings_text(client)
+    assert "No Public Key on file" in settings_text(client)
 
 
 def remove(client):
@@ -170,7 +170,7 @@ def test_removing_the_key_leaves_none_on_file(client):
     upload(client, ED25519)
     response = remove(client)
     assert (response.status_code, response.headers["location"]) == (303, "/settings")
-    assert "No public key on file" in settings_text(client)
+    assert "No Public Key on file" in settings_text(client)
 
 
 def test_remove_asks_for_confirmation_in_a_dialog(client):
@@ -192,7 +192,7 @@ def test_each_user_has_their_own_key(build_agent, web_client):
         assert sign_in(client, user).status_code == 303
 
     upload(mine, ED25519)
-    assert "No public key on file" in settings_text(theirs)
+    assert "No Public Key on file" in settings_text(theirs)
     upload(theirs, AGE)
     assert ED25519_FINGERPRINT in settings_text(mine) and AGE_FINGERPRINT not in settings_text(mine)
     assert AGE_FINGERPRINT in settings_text(theirs) and ED25519_FINGERPRINT not in settings_text(theirs)

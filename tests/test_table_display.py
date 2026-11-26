@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 from conftest import ScriptedLLM, register_table
 
+from flood_agent.lineage import Restriction
+
 LAYER = """\
 dialect: sqlite
 tables:
@@ -38,7 +40,7 @@ def env(build_agent, web_client, semantic_layer_path):
     def table(sql=GEN):
         meta = agent.queries.run(sql, 1_000_000)
         assert meta["success"], meta
-        register_table(agent.tables, meta["result_table"], restricted_columns=[])
+        register_table(agent.tables, meta["result_table"], restriction=Restriction())
         return meta["result_table"]
 
     return client, table

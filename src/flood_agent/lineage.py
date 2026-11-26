@@ -1,14 +1,15 @@
 """Column lineage: which output columns of one query carry values from a Restricted Column (ADR 0008).
 
-`analyse` reads the SQL, never the database. It parses it with sqlglot (the postgres dialect, for SQLite and Ocient
-alike), works out which tables it reads, and follows each output column back through expressions, set operations,
-CTEs and subqueries to the columns it takes its values from. It fails closed: whatever it cannot be sure of is
-`Unknown`, never "nothing restricted".
+`analyse` is given the SQL and what SQLite itself says compiling it reads (`Reads`). Whether any Restricted Column
+is within the query's reach comes from SQLite alone. Which output columns its values reach comes from parsing the
+query, rewritten so the parser reads it as SQLite does (`sqlite_sql`), with sqlglot (the postgres dialect), following
+each output column back through expressions, set operations, CTEs and subqueries to the columns it takes its values
+from. It fails closed: whatever it cannot be sure of is `Unknown`, never "nothing restricted".
 """
 
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import cast
 
@@ -18,17 +19,20 @@ from sqlglot.optimizer.qualify import qualify
 from sqlglot.optimizer.scope import Scope, traverse_scope
 from sqlglot.schema import MappingSchema
 
+from flood_agent import sqlite_sql
+from flood_agent.sqlite_sql import fold
+
 log = logging.getLogger("uvicorn.error")
 
 DIALECT = "postgres"
 _OWN_DATABASES = ("main", "results")  # the SQLite names of the Telemetry Database and the User's own tables
-_UNNAMED = "_col_"  # how qualification names an output column that has no name of its own
+_UNNAMED = "_col_"  # how an output column is marked that has no name of its own
 _DUPLICATE_SUFFIX = re.compile(r":\d+$")  # how SQLite tells apart two output columns of one name: `imsi:1`
 
 
 @dataclass(frozen=True)
 class TableSchema:
-    """A table a query may read: its column names, and which of them are Restricted Columns."""
+    """A table a query may read: its column names in table order, and which of them are Restricted Columns."""
 
     columns: tuple[str, ...]
     restricted: frozenset[str] = frozenset()
@@ -39,9 +43,19 @@ SchemaProvider = Callable[[str], TableSchema | None]
 
 
 @dataclass(frozen=True)
+class Reads:
+    """What SQLite says compiling a query reads. Names are folded as SQLite compares them (`sqlite_sql.fold`)."""
+
+    # Every table it opens or reads a column of, with the table's columns as the database has them, in order; empty
+    # for something read that is not a table of either database (sqlite_master, a table function).
+    tables: Mapping[str, tuple[str, ...]]
+    columns: frozenset[tuple[str, str]]  # the (table, column) pairs its authorizer reports; it misses some
+
+
+@dataclass(frozen=True)
 class Known:
     """Lineage was worked out. `restricted` names the restricted output columns, in output order; `sources` is every
-    (table, column) the query reads, lower-cased, whatever it reads it for."""
+    (table, column) the query reads, folded, whatever it reads it for."""
 
     restricted: tuple[str, ...] = ()
     sources: frozenset[tuple[str, str]] = field(default=frozenset(), compare=False)
@@ -60,48 +74,95 @@ class Unrestricted:
 Outcome = Known | Unknown | Unrestricted
 
 
-def restricted_columns(outcome: Outcome) -> list[str] | None:
-    """The restricted output columns the Table Catalog records for this outcome; None if lineage is unknown."""
+@dataclass(frozen=True)
+class Restriction:
+    """Which columns of a table carry restricted values: `columns`, or None if that is unknown."""
+
+    columns: tuple[str, ...] | None = ()
+
+    @property
+    def unknown(self) -> bool:
+        return self.columns is None
+
+    @property
+    def restricted(self) -> bool:
+        """Whether the table has a Restricted Column, or may have one."""
+        return self.columns is None or bool(self.columns)
+
+
+UNKNOWN = Restriction(None)
+
+
+def restriction(outcome: Outcome) -> Restriction:
+    """The restriction of a table made by a query with this lineage."""
     match outcome:
         case Known():
-            return list(outcome.restricted)
+            return Restriction(outcome.restricted)
         case Unrestricted():
-            return []
+            return Restriction()
         case Unknown():
-            return None
+            return UNKNOWN
 
 
 class _Unresolved(Exception):
     """Something in the query that lineage cannot be sure of. The message says what, without any value."""
 
 
-def analyse(sql: str, schema: SchemaProvider, result_columns: list[str]) -> Outcome:
+def analyse(sql: str, schema: SchemaProvider, result_columns: list[str], reads: Reads) -> Outcome:
     """The lineage of `sql`, a query as the User wrote it, whose output columns are named `result_columns` by the
-    database that ran it. Never raises."""
+    database that ran it and which reads `reads`. Never raises."""
     try:
-        query = _parse(sql)
-        tables = {}
-        for name in _tables_read(query):
-            table = schema(name)
-            if table is None:
-                raise _Unresolved("a table that is not known")
-            tables[name] = table
-        if not any(t.restricted for t in tables.values()):
+        read = {name: _known_table(schema, name) for name in reads.tables}
+        if not any(t.restricted for t in read.values()):
             return Unrestricted()
-        return _Lineage(query, tables).known(result_columns)
+        for name, table in read.items():
+            # Otherwise the schema describes other rows than these, or `*` would not expand in their order.
+            if tuple(map(fold, table.columns)) != reads.tables[name]:
+                raise _Unresolved("a table whose columns are not as its schema says")
+            for column in table.columns:
+                sqlite_sql.check_name(column)
+        query = _parse(sqlite_sql.canonical(sql, (c for t in read.values() for c in t.columns)))
+        listed = _tables_read(query)
+        if not read.keys() <= listed:
+            raise _Unresolved("a table SQLite reads that the parser does not see")
+        tables = read | {name: _known_table(schema, name) for name in listed - read.keys()}
+        known = _Lineage(query, tables).known(result_columns)
+        missed = {(t, c) for t, c in reads.columns if t in tables and c in map(fold, tables[t].restricted)}
+        if not missed <= known.sources:
+            raise _Unresolved("a restricted column SQLite reads that the parser does not see")
+        return known
     except Exception as e:  # sqlglot raises many kinds of error, and every one of them means the same here
         log.info("Column lineage unknown: %s", type(e).__name__)  # never the message: it can quote the SQL
         return Unknown()
 
 
+def _known_table(schema: SchemaProvider, name: str) -> TableSchema:
+    table = schema(name)
+    if table is None:
+        raise _Unresolved("a table that is not known")
+    return table
+
+
 def _parse(sql: str) -> exp.Query:
-    statements = [s for s in sqlglot.parse(sql, dialect=DIALECT) if s is not None and not isinstance(s, exp.Semicolon)]
-    if len(statements) != 1 or not isinstance(statements[0], exp.Query):
+    statements = sqlglot.parse(sql, dialect=DIALECT)
+    query = statements[0] if len(statements) == 1 else None
+    if not isinstance(query, exp.Query):
         raise _Unresolved("not a single query")
-    query = statements[0]
     for identifier in query.find_all(exp.Identifier):  # SQLite ignores case, quoted or not
-        identifier.set("this", identifier.name.lower())
+        identifier.set("this", fold(identifier.name))
+    _mark_unnamed(query)
     return query
+
+
+def _mark_unnamed(query: exp.Query) -> None:
+    """Give every selected expression that has no alias a made-up one, so that the parser derives no name from the
+    expression itself: the name SQLite gives it may differ."""
+    unnamed = [p for select in query.find_all(exp.Select) for p in select.expressions
+               if not isinstance(p, exp.Alias | exp.Column | exp.Star)]
+    for number, projection in enumerate(unnamed):
+        alias = exp.Alias(alias=exp.to_identifier(f"{_UNNAMED}u{number}"))
+        projection.replace(alias)
+        alias.set("this", projection)
 
 
 def _cte_names(node: exp.Expr) -> set[str]:
@@ -132,25 +193,23 @@ def _tables_read(query: exp.Query) -> set[str]:
     return names
 
 
-def _bare_word(node: exp.Expr) -> str | None:
-    """The word `node` was written as, if sqlglot takes it for something other than a column (`current_user`)
-    although SQLite reads a column of that name where there is one."""
-    if isinstance(node, exp.Boolean) or isinstance(node, exp.Func) and not any(node.args.values()):
-        return node.sql(DIALECT).lower()
-    return node.name.lower() if isinstance(node, exp.Var) else None
-
-
 class _Lineage:
     """One qualified query over known tables."""
 
     def __init__(self, query: exp.Query, tables: dict[str, TableSchema]):
+        if any(join.args.get("using") for join in query.find_all(exp.Join)):
+            # The parser puts a USING column first in `*`, and SQLite leaves it in place.
+            if any(not isinstance(star.parent, exp.Count) for star in query.find_all(exp.Star)):
+                raise _Unresolved("a * over a join with USING")
         self._drop_database_names(query)
-        self._restricted = {name: {c.lower() for c in t.restricted} for name, t in tables.items()}
-        self._columns = {name: [c.lower() for c in t.columns] for name, t in tables.items()}  # in table order
+        self._restricted = {name: {fold(c) for c in t.restricted} for name, t in tables.items()}
+        self._columns = {name: [fold(c) for c in t.columns] for name, t in tables.items()}  # in table order
         mapping: dict[str, object] = {name: dict.fromkeys(columns, "TEXT") for name, columns in self._columns.items()}
+        # SQLite lets no selected expression refer to another's alias, so none is expanded; `_sources` checks that
+        # what is left without a table only filters, groups or orders.
         self._query = qualify(
             query, dialect=DIALECT, schema=MappingSchema(mapping, dialect=DIALECT, normalize=False),
-            validate_qualify_columns=True, quote_identifiers=False, identify=False,
+            expand_alias_refs=False, validate_qualify_columns=False, quote_identifiers=False, identify=False,
         )
         scopes = traverse_scope(self._query)
         self._scopes = {id(scope.expression): scope for scope in scopes}
@@ -168,12 +227,10 @@ class _Lineage:
             column.set("db", None)
 
     def _check(self, scopes: list[Scope]) -> None:
-        # [name] quotes an identifier in SQLite, but parses here as an array of whatever is inside it.
-        if self._query.find(exp.Array, exp.Bracket):
-            raise _Unresolved("square brackets")
-        restricted = set().union(*self._restricted.values())
-        if any(_bare_word(node) in restricted for node in self._query.walk()):
-            raise _Unresolved("a word that SQLite may read as a restricted column")
+        ctes = [cte.alias_or_name for cte in self._query.find_all(exp.CTE)]
+        # In a CTE's body SQLite reads a later CTE of the same WITH, where the parser reads an outer one of that name.
+        if len(set(ctes)) != len(ctes):
+            raise _Unresolved("two CTEs of one name")
         for cte in self._query.find_all(exp.CTE):
             # Restricted values can move between columns on each pass, which following the query once would miss.
             if any(not t.db and t.name == cte.alias_or_name for t in cte.this.find_all(exp.Table)):
@@ -188,6 +245,18 @@ class _Lineage:
                 # SQLite may see a CTE here that sqlglot takes for a table: one named before it is defined.
                 if isinstance(source, exp.Table) and source.name in _cte_names(source):
                     raise _Unresolved("a CTE used before it is defined")
+        for scope in scopes:
+            if scope.is_derived_table or scope.is_cte:
+                self._check_names(self._scope_outputs(scope))
+
+    @staticmethod
+    def _check_names(outputs: list[tuple[str, bool]]) -> None:
+        """That each restricted column of a subquery or CTE has the same name in SQLite as here. Otherwise a reference
+        by SQLite's name, which the parser would take elsewhere, could read it: SQLite names a column without an
+        alias after its text, and the second of two columns of one name `name:1`."""
+        names = [name for name, _ in outputs]
+        if any(carries and (name.startswith(_UNNAMED) or names.count(name) > 1) for name, carries in outputs):
+            raise _Unresolved("a restricted column of a subquery without a name of its own")
 
     def known(self, result_columns: list[str]) -> Known:
         outputs = self._scope_outputs(self._scopes[id(self._query)])
@@ -195,7 +264,7 @@ class _Lineage:
             raise _Unresolved("a different number of output columns from the database's")
         for projection, actual in zip(self._query.selects, result_columns):
             name = _carried_name(projection)
-            if name and name not in (actual.lower(), _DUPLICATE_SUFFIX.sub("", actual.lower())):
+            if name and name not in (fold(actual), _DUPLICATE_SUFFIX.sub("", fold(actual))):
                 raise _Unresolved("output columns in a different order from the database's")
         restricted = tuple(actual for (_, carries), actual in zip(outputs, result_columns) if carries)
         return Known(restricted, self._sources())
@@ -206,12 +275,12 @@ class _Lineage:
         for column in self._query.find_all(exp.Column):
             scope = self._scope_of(column)
             if not column.table:
-                self._check_output_reference(column, scope)
+                sources |= self._filter_reads(column, scope)
                 continue
             source = self._source(column, scope)
+            if column.name not in self._names_of(source):
+                raise _Unresolved("a column its source does not have")
             if isinstance(source, exp.Table):
-                if column.name not in self._columns[source.name]:
-                    raise _Unresolved("a column its table does not have")
                 sources.add((source.name, column.name))
         return frozenset(sources)
 
@@ -223,12 +292,30 @@ class _Lineage:
             parent = parent.parent
         raise _Unresolved("a column outside any query")
 
-    @staticmethod
-    def _check_output_reference(column: exp.Column, scope: Scope) -> None:
-        """A column left without a table may only be an ORDER BY naming an output column."""
-        outputs = cast(exp.Query, scope.expression).named_selects
-        if column.find_ancestor(exp.Order) is None or column.name not in outputs:
+    def _filter_reads(self, column: exp.Column, scope: Scope) -> set[tuple[str, str]]:
+        """What a column left without a table reads. It may only be where it cannot select a value (WHERE, GROUP BY,
+        HAVING, ORDER BY), naming an output column or a column of a source."""
+        clause = column.find_ancestor(exp.Where, exp.Group, exp.Having, exp.Order, exp.Query)
+        if clause is None or isinstance(clause, exp.Query):
             raise _Unresolved("a column that does not resolve")
+        named = column.name in cast(exp.Query, scope.expression).named_selects
+        if named and isinstance(clause, exp.Order):
+            return set()
+        outer: Scope | None = scope
+        while outer is not None:
+            found = [source for _, source in outer.selected_sources.values() if column.name in self._names_of(source)]
+            if found:
+                return {(source.name, column.name) for source in found if isinstance(source, exp.Table)}
+            outer = outer.parent
+        if not named:
+            raise _Unresolved("a column that does not resolve")
+        return set()
+
+    def _names_of(self, source: exp.Table | Scope) -> list[str]:
+        """The column names of a table or a subquery."""
+        if isinstance(source, exp.Table):
+            return self._columns[source.name]
+        return [name for name, _ in self._scope_outputs(source)]
 
     @staticmethod
     def _source(column: exp.Column, scope: Scope | None) -> exp.Table | Scope:
@@ -264,14 +351,13 @@ class _Lineage:
                 return self._column_carries(node, scope)
             case exp.Window() | exp.Filter() | exp.Order():  # PARTITION BY, ORDER BY and FILTER only choose rows
                 return self._carries(node.this, scope)
-            case exp.WithinGroup():  # here the ORDER BY holds the values aggregated
-                ordered = node.expression.expressions
-                return any(self._carries(n, scope) for n in [node.this, *(o.this for o in ordered)])
             case exp.Select() | exp.SetOperation():
                 return any(carries for _, carries in self._scope_outputs(self._scopes[id(node)]))
         return any(self._carries(child, scope) for child in node.iter_expressions())
 
     def _column_carries(self, column: exp.Column, scope: Scope) -> bool:
+        if not column.table:
+            raise _Unresolved("a selected column that does not resolve")
         source = self._source(column, scope)
         if isinstance(source, exp.Table):
             return column.name in self._restricted[source.name]

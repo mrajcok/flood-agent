@@ -1,5 +1,6 @@
 """A table Display's Download: straight away for an unrestricted table, through a dialog for a restricted one."""
 
+import re
 from urllib.parse import urljoin
 
 import pytest
@@ -37,9 +38,10 @@ def test_download_asks_in_a_dialog_only_for_a_restricted_table(live_page, build_
     masked = dialog.get_by_role("button", name="Download masked")
     encrypted = dialog.get_by_role("button", name="Download encrypted")
 
+    expect(plain.locator(".table-name .name")).to_have_text(re.compile("^rt_"))
+    name = plain.locator(".table-name .name").text_content()
     with page.expect_download() as download:
         plain.get_by_role("link", name="Download PSV").click()
-    name = plain.locator(".table-name .name").text_content()
     assert download.value.suggested_filename == f"{name}.psv"
     expect(dialog).to_have_count(0)
 
@@ -57,7 +59,7 @@ def test_download_asks_in_a_dialog_only_for_a_restricted_table(live_page, build_
     unknown.get_by_role("link", name="Download PSV").click()
     expect(dialog).to_contain_text("it can only be downloaded encrypted")
     expect(masked).to_be_hidden()
-    no_key = dialog.get_by_text("No public key on file. Add one in Settings")
+    no_key = dialog.get_by_text("No Public Key on file. Add one in Settings")
     expect(no_key).to_be_visible()
     expect(dialog.get_by_role("link", name="Settings")).to_have_attribute("href", "/settings")
     expect(encrypted).to_be_hidden()
@@ -68,7 +70,7 @@ def test_download_asks_in_a_dialog_only_for_a_restricted_table(live_page, build_
                               headers={"origin": urljoin(page.url, "/").rstrip("/")}, max_redirects=0)
     assert saved.status == 303
     unknown.get_by_role("link", name="Download PSV").click()
-    expect(dialog).to_contain_text(f"ssh-ed25519 key {ED25519_FINGERPRINT}")
+    expect(dialog).to_contain_text(f"ssh-ed25519 Public Key {ED25519_FINGERPRINT}")
     expect(no_key).to_be_hidden()
     expect(masked).to_be_hidden()
     with page.expect_download() as download:

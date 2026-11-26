@@ -275,7 +275,7 @@ def create_server(settings: ServerSettings, clock: Callable[[], int] | None = No
         described = runner.describe(name) if kind else None
         if described is None or kind is None:
             return encode(Failed("No such table."))
-        restricted = catalog[name].restricted_columns if kind != "lookup" else ()
+        restricted = catalog[name].schema.restricted if kind != "lookup" else ()
         columns = [c | {"restricted": True} if c["name"] in restricted else c for c in described["columns"]]
         return encode(TableDescribed(name, kind, columns, described["row_count"]))
 

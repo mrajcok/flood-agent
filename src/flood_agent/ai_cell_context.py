@@ -205,7 +205,7 @@ def result_tables_section(tables: "list[Table]") -> str:
     ]
     for t in tables:
         cols = ", ".join(
-            f"{c['name']} {c['type']}" + (" (restricted)" if c["name"] in t.restricted_columns else "")
+            f"{c['name']} {c['type']}" + (" (restricted)" if c["name"] in t.schema.restricted else "")
             for c in t.columns)
         if t.request == table_names.SQL_CELL_REQUEST:
             lines.append(f"- {t.name} (SQL Cell) {t.title}: columns {cols}")

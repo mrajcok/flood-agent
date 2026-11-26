@@ -211,9 +211,9 @@ class UserSpace:
         key = self.public_keys.get() if mode == "encrypted" else None
         with self.replacement.settled():  # so the rows read are the ones the restriction checked here is about
             table = self.tables.for_download(result_table)
-            downloads.check(table, mode, key)
+            allowed = downloads.check(table, mode, key)
             columns, rows = self.queries.all_rows(table.name)
-        return downloads.psv_file(table, mode, columns, rows, key)  # encrypting holds no replacement up
+        return downloads.psv_file(allowed, columns, rows)  # encrypting holds no replacement up
 
     def fetch_chart_rows(self, result_table: str) -> list[dict]:
         """Internal data path for the chart-rows endpoint (chart cap). Not an LLM tool."""

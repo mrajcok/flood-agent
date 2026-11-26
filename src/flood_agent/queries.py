@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterator
 
-from flood_agent import lineage, table_names
+from flood_agent import lineage, sqlite_sql, table_names
 
 
 def _rename_table(results_db: Path, old: str, new: str) -> None:
@@ -392,12 +392,53 @@ def _failure(e: sqlite3.Error, timed_out: bool, timeout_s: float, stop: threadin
     return {"success": False, "error": error, "raw_error": str(e), **extra}
 
 
+def _compiled_reads(con: sqlite3.Connection, select: str, allowed_tables: set[str] | None) -> lineage.Reads:
+    """What SQLite itself says compiling `select` on `con` reads: the tables its program opens and the columns its
+    authorizer is asked about. Both are needed: the authorizer is not asked about every column a join with USING
+    reads, and a program need not open a table the query only names. Leaves `con` without an authorizer."""
+    asked: set[tuple[str, str]] = set()
+    authorize = _authorizer(allowed_tables)
+
+    def record(action, arg1, arg2, dbname, source):
+        if action == sqlite3.SQLITE_READ:
+            asked.add((sqlite_sql.fold(arg1 or ""), sqlite_sql.fold(arg2 or "")))
+        return authorize(action, arg1, arg2, dbname, source)
+
+    con.set_authorizer(record)
+    # The program quotes the query's blobs, which need not be text.
+    text_factory, con.text_factory = con.text_factory, lambda value: value.decode(errors="replace")
+    try:
+        program = con.execute(f"EXPLAIN {select}").fetchall()  # compiles it, and runs nothing
+    finally:
+        con.text_factory = text_factory
+        con.set_authorizer(None)
+    databases = {number: name for number, name, _ in con.execute("PRAGMA database_list")}
+    roots: dict[tuple[str, int], str] = {}  # (database, root page) of each table and index -> the table
+    held: dict[str, str] = {}  # table -> the database that holds it
+    for database in ("main", "results"):
+        for kind, table, root in con.execute(f"SELECT type, tbl_name, rootpage FROM {database}.sqlite_master"):
+            roots[database, root] = sqlite_sql.fold(table)
+            if kind == "table":
+                held.setdefault(sqlite_sql.fold(table), database)
+    # A cursor is opened on (root page p2, database p3); a root page sqlite_master does not list is its own.
+    opened = {roots.get((databases.get(row[4], "temp"), row[3]), "sqlite_master") for row in program
+              if row[1] in ("OpenRead", "OpenWrite", "ReopenIdx")}
+    # The authorizer is asked about a table with no column named when only its rows matter, and then also about CTEs.
+    read = opened | {table for table, column in asked if column or table in held}
+    tables = {}
+    for table in read:
+        columns = con.execute("SELECT name FROM pragma_table_info(?, ?)", (table, held[table])) if table in held else []
+        tables[table] = tuple(sqlite_sql.fold(name) for name, in columns)
+    return lineage.Reads(tables, frozenset((table, column) for table, column in asked if column and table in read))
+
+
 def _run_query(
     telemetry_db: Path,
     results_db: Path,
     sql: str,
     timeout_s: float,
     max_rows: int,
+    schema: lineage.SchemaProvider,
     allowed_tables: set[str] | None = None,
     title: str = "",
     stop: threading.Event | None = None,
@@ -414,15 +455,24 @@ def _run_query(
             for attempt in range(5):  # a concurrent query may take the name between check and create
                 executed = f"CREATE TABLE results.{name} AS SELECT * FROM (\n{select}\n) LIMIT {int(max_rows)}"
                 try:
+                    # One transaction until lineage is worked out: the lock it holds on the results database keeps
+                    # any table the query read from being replaced meanwhile.
+                    con.set_authorizer(None)
+                    con.execute("BEGIN")
+                    con.set_authorizer(_authorizer(allowed_tables))
                     con.execute(executed)
                     break
                 except sqlite3.Error as e:
+                    con.set_authorizer(None)
+                    con.rollback()
                     if attempt < 4 and f"table {name} already exists" in str(e):
                         name = _free_name(con)
                         continue
                     return _failure(e, timed_out(), timeout_s, stop, executed_sql=executed)
         try:
             con.set_authorizer(None)
+            made = [r[1] for r in con.execute(f"PRAGMA results.table_info({name})")]
+            outcome = lineage.analyse(sql, schema, made, _compiled_reads(con, select, allowed_tables))
             con.commit()
             count = con.execute(f"SELECT COUNT(*) FROM results.{name}").fetchone()[0]
             info = [(r[1], r[2]) for r in con.execute(f"PRAGMA results.table_info({name})")]
@@ -431,12 +481,29 @@ def _run_query(
             return _failure(e, False, timeout_s, stop, executed_sql=executed)
     finally:
         con.close()
-    result = {"success": True, "result_table": name, "columns": cols, "row_count": count, "executed_sql": executed}
+    result = {"success": True, "result_table": name, "columns": cols, "row_count": count, "executed_sql": executed,
+              "lineage": outcome}
     if count >= max_rows:
         # Exactly `max_rows` rows are indistinguishable from "more than max_rows" without fetching an
         # extra row, so we assume there are more.
         result |= {"truncated_to": max_rows, "note": _TRUNCATED_NOTE.format(n=max_rows)}
     return result
+
+
+def _stored_lineage(
+    telemetry_db: Path, results_db: Path, sql: str, result_columns: list[str], schema: lineage.SchemaProvider,
+    allowed_tables: set[str],
+) -> lineage.Outcome:
+    try:
+        select = validate_select(sql)
+        con = _open_connection(telemetry_db, results_db, allowed_tables)
+        try:
+            reads = _compiled_reads(con, select, allowed_tables)
+        finally:
+            con.close()
+    except (QueryRejected, sqlite3.Error):
+        return lineage.Unknown()
+    return lineage.analyse(sql, schema, result_columns, reads)
 
 
 def _explain_query(
@@ -659,20 +726,20 @@ class QueryRunner:
     """How callers query: built once with the Telemetry Database, the results database, the query timeout and
     `readable`, which returns the tables a query may read now (ADR 0003: every live Result Table, Saved Table and
     Lookup Table). `schema` gives the columns, and the Restricted Columns, of a table a query may read, for column
-    lineage; without it every query that reads a table has unknown lineage. Each operation takes only what varies per
-    call.
+    lineage. Each operation takes only what varies per call.
 
     A database error is raised as `QueryFailed`; `run` and `count` instead report a failure of the query itself
     in the dict they return. The operations that take a table name do not check that it is live: the caller has."""
 
     def __init__(self, telemetry_db: Path, results_db: Path, timeout_s: float, readable: Callable[[], set[str]],
-                 schema: lineage.SchemaProvider = lambda name: None):
+                 schema: lineage.SchemaProvider):
         self._telemetry_db, self._results_db = telemetry_db, results_db
         self._timeout_s, self._readable, self._schema = timeout_s, readable, schema
 
     def run(self, sql: str, max_rows: int, title: str = "", stop: threading.Event | None = None) -> dict:
         """Run the SQL as CTAS into a new Result Table. Returns Query Metadata, and under `lineage` which of its
-        columns carry restricted values (a `lineage.Outcome`, worked out from the SQL as given).
+        columns carry restricted values (a `lineage.Outcome`, worked out from the SQL as given and from the tables as
+        they were while it ran).
 
         At most `max_rows` rows are kept; a result of exactly `max_rows` rows is reported as truncated
         (`truncated_to`, `note`).
@@ -682,11 +749,13 @@ class QueryRunner:
         Setting `stop` aborts the query; the failure then has `stopped` set."""
         readable = self._readable()  # outside: a failure to read the set is not a query failure
         with _database_errors():
-            result = _run_query(self._telemetry_db, self._results_db, sql, self._timeout_s, max_rows, readable, title,
-                                stop)
-        if result["success"]:
-            result["lineage"] = lineage.analyse(sql, self._schema, [c["name"] for c in result["columns"]])
-        return result
+            return _run_query(self._telemetry_db, self._results_db, sql, self._timeout_s, max_rows, self._schema,
+                              readable, title, stop)
+
+    def stored_lineage(self, sql: str, result_columns: list[str], schema: lineage.SchemaProvider) -> lineage.Outcome:
+        """The lineage of the query that made a table with `result_columns`, against `schema` and the tables as they
+        are now. Nothing is run. `Unknown` if it can no longer be compiled."""
+        return _stored_lineage(self._telemetry_db, self._results_db, sql, result_columns, schema, self._readable())
 
     def count(self, sql: str, stop: threading.Event | None = None) -> dict:
         """Run a `SELECT COUNT(...) FROM ...` and return the number itself (no Result Table). The one

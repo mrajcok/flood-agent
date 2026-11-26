@@ -13,13 +13,17 @@ from contextlib import closing
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import MappingProxyType
 from typing import Callable, Iterable, Literal, Mapping
 
 from flood_agent import lineage, lookup_tables, table_names
-from flood_agent.lineage import TableSchema
+from flood_agent.lineage import UNKNOWN, Restriction, TableSchema
 from flood_agent.queries import QueryRunner
 
-SCHEMA = """
+# The columns carrying restricted values, as a JSON list; NULL: its lineage is unknown (ADR 0008).
+_RESTRICTION_COLUMN = "restriction TEXT"
+
+SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS result_tables (
   name TEXT PRIMARY KEY,
   cell_id TEXT NOT NULL,
@@ -34,8 +38,7 @@ CREATE TABLE IF NOT EXISTS result_tables (
   sql TEXT,
   max_rows INTEGER,
   refreshed_at INTEGER,
-  restricted_columns TEXT NOT NULL DEFAULT '[]',
-  lineage_unknown INTEGER NOT NULL DEFAULT 1
+  {_RESTRICTION_COLUMN}
 );
 CREATE TABLE IF NOT EXISTS lookup_tables (
   name TEXT PRIMARY KEY,
@@ -99,8 +102,7 @@ class Table:
     cell_id: str = ""  # the Cell and Run that made it (a SQL Cell's re-run moves it to the new Run)
     run_id: str = ""
     created_at_ms: int = 0  # when it was registered; never changes (as_of_ms moves on a Refresh)
-    restricted_columns: tuple[str, ...] = ()  # the columns carrying values from a Restricted Column (ADR 0008)
-    lineage_unknown: bool = False  # which columns those are could not be worked out
+    restriction: Restriction = Restriction()  # the columns carrying values from a Restricted Column (ADR 0008)
 
     @property
     def owner(self) -> Owner:
@@ -113,13 +115,14 @@ class Table:
     @property
     def restricted(self) -> bool:
         """Whether the table has a Restricted Column, or may have one (its lineage is unknown)."""
-        return bool(self.restricted_columns) or self.lineage_unknown
+        return self.restriction.restricted
 
     @property
     def schema(self) -> TableSchema:
         """What a query reading this table is analysed against: with unknown lineage, every column is restricted."""
         names = tuple(c["name"] for c in self.columns)
-        return TableSchema(names, frozenset(names if self.lineage_unknown else self.restricted_columns))
+        columns = self.restriction.columns
+        return TableSchema(names, frozenset(names if columns is None else columns))
 
     @property
     def refreshable(self) -> bool:
@@ -134,30 +137,29 @@ class Table:
         }
 
 
-
-
 def _as_of(row: sqlite3.Row) -> int:
     """When a table's rows are from: its last Refresh, else its creation. Retention counts from here.
     `created_at` itself never changes, so the order tables are listed in (and the system prompt) is stable."""
     return row["refreshed_at"] if row["refreshed_at"] is not None else row["created_at"]
 
 
-def _recorded(restricted_columns: Iterable[str] | None) -> tuple[str, int]:
-    """What the `restricted_columns` and `lineage_unknown` columns hold for these (None: lineage unknown)."""
-    return json.dumps(list(restricted_columns or ())), int(restricted_columns is None)
+def _recorded(restriction: Restriction) -> str | None:
+    """What the `restriction` column holds for this."""
+    return None if restriction.columns is None else json.dumps(restriction.columns)
+
+
+def _restriction(recorded: str | None) -> Restriction:
+    return UNKNOWN if recorded is None else Restriction(tuple(json.loads(recorded)))
 
 
 def _now() -> int:
     return int(time.time() * 1000)
 
 
-def _add_lineage_columns(con: sqlite3.Connection) -> None:
-    """Add the lineage columns to a registry made before they were recorded. Its tables' lineage is unknown."""
-    present = {r["name"] for r in con.execute("PRAGMA table_info(result_tables)")}
-    if "restricted_columns" not in present:
-        con.execute("ALTER TABLE result_tables ADD COLUMN restricted_columns TEXT NOT NULL DEFAULT '[]'")
-    if "lineage_unknown" not in present:
-        con.execute("ALTER TABLE result_tables ADD COLUMN lineage_unknown INTEGER NOT NULL DEFAULT 1")
+def _add_restriction_column(con: sqlite3.Connection) -> None:
+    """Add the `restriction` column to a registry made before it was recorded. Its tables' lineage is unknown."""
+    if "restriction" not in {r["name"] for r in con.execute("PRAGMA table_info(result_tables)")}:
+        con.execute(f"ALTER TABLE result_tables ADD COLUMN {_RESTRICTION_COLUMN}")
 
 
 class CatalogView:
@@ -167,20 +169,19 @@ class CatalogView:
 
     def __init__(
         self, app_db: Path, clock: Callable[[], int] = _now,
-        telemetry_tables: Mapping[str, TableSchema] | Iterable[str] = (),
+        telemetry_tables: Mapping[str, TableSchema] = MappingProxyType({}),
         results_db: Path | None = None, _read_only: bool = True, default_retention_ms: int = DAY_MS,
     ):
         """`clock` returns epoch ms; `telemetry_tables` are the Telemetry Database table names, mapped to their
-        schemas where `schema` is to know them;
+        schemas;
         `results_db` is where Lookup Tables' rows are kept (needed only by the Lookup Table operations);
         `default_retention_ms` is the Result Table Retention that `policy` reports."""
         self.path = Path(app_db)
         self.results_db = Path(results_db) if results_db is not None else None
         self._now = clock
         self._read_only = _read_only
-        self.telemetry_tables = frozenset(canonical(t) for t in telemetry_tables)
-        self._telemetry_schemas = ({canonical(t): s for t, s in telemetry_tables.items()}
-                                   if isinstance(telemetry_tables, Mapping) else {})
+        self._telemetry_schemas = {canonical(t): s for t, s in telemetry_tables.items()}
+        self.telemetry_tables = frozenset(self._telemetry_schemas)
         self.policy = RetentionPolicy(result_days=default_retention_ms / DAY_MS)
 
     @property
@@ -238,7 +239,7 @@ class CatalogView:
         there is no such table. A Lookup Table has no Restricted Columns."""
         name = canonical(name)
         if name in self.telemetry_tables:
-            return self._telemetry_schemas.get(name)
+            return self._telemetry_schemas[name]
         with closing(self._connect()) as con:
             lookup = con.execute("SELECT columns FROM lookup_tables WHERE name=?", (name,)).fetchone()
         if lookup is not None:
@@ -275,8 +276,7 @@ class CatalogView:
             retention_ms=row["retention_ms"], expires_in_ms=_as_of(row) + row["retention_ms"] - self._now(),
             as_of_ms=_as_of(row), sql=row["sql"], max_rows=row["max_rows"],
             policy=self.policy, cell_id=row["cell_id"], run_id=row["run_id"], created_at_ms=row["created_at"],
-            restricted_columns=tuple(json.loads(row["restricted_columns"])),
-            lineage_unknown=bool(row["lineage_unknown"]),
+            restriction=_restriction(row["restriction"]),
         )
 
     @staticmethod
@@ -293,32 +293,6 @@ class CatalogView:
         if not self._is_live(row, self._now()):
             raise TableExpired(f"Result Table {name} has expired.")
         return self._table(row)
-
-    def for_download(self, name: str) -> Table:
-        """The live Result or Saved Table `name` as a download treats it (ADR 0008): lineage is worked out again from
-        its stored query, against the Telemetry tables' schemas and this Catalog as they are now, and any restricted
-        columns found are added to the recorded ones, never taken from them. KeyError or `TableExpired` as for
-        `self[name]`."""
-        return self._reanalysed(self[name], {})
-
-    def _reanalysed(self, table: Table, done: dict[str, Table]) -> Table:
-        """`for_download` of `table`. The live tables its query reads are reanalysed in turn, so a newly restricted
-        column carries down a chain of them; `done` holds each one reached so far."""
-        if table.name in done:
-            return done[table.name]
-        done[table.name] = table  # as recorded, for a query that (after a replacement) leads back to its own table
-        if table.sql is None:
-            return table
-
-        def schema(source: str) -> TableSchema | None:
-            return self._reanalysed(self[source], done).schema if source in self else self.schema(source)
-
-        outcome = lineage.analyse(table.sql, schema, [c["name"] for c in table.columns])
-        if isinstance(outcome, lineage.Known):
-            restricted = {*table.restricted_columns, *outcome.restricted}
-            done[table.name] = replace(table, restricted_columns=tuple(
-                c["name"] for c in table.columns if c["name"] in restricted))
-        return done[table.name]
 
     def __contains__(self, name: object) -> bool:
         if not isinstance(name, str):
@@ -396,7 +370,7 @@ class Catalog(CatalogView):
 
     def __init__(
         self, app_db: Path, clock: Callable[[], int] = _now, default_retention_ms: int = DAY_MS,
-        telemetry_tables: Mapping[str, TableSchema] | Iterable[str] = (), results_db: Path | None = None,
+        telemetry_tables: Mapping[str, TableSchema] = MappingProxyType({}), results_db: Path | None = None,
         on_rename: Callable[[sqlite3.Connection, str, str], None] | None = None, *, runner: QueryRunner,
     ):
         """`default_retention_ms` is the Retention a new Result Table is given (kept in `policy`). `on_rename(con, old, new)` is
@@ -410,24 +384,24 @@ class Catalog(CatalogView):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as con, con:
             con.executescript(SCHEMA)
-            _add_lineage_columns(con)
+            _add_restriction_column(con)
 
     def register_for(
         self, owner: Owner, name: str, title: str = "", columns: list[dict] | None = None,
         request: str = "", truncated_to: int | None = None, sql: str | None = None, max_rows: int | None = None,
-        restricted_columns: Iterable[str] | None = None,
+        restriction: Restriction = UNKNOWN,
     ) -> None:
         """Record a new Result Table made by `owner`, with the current default Retention. `sql` and
-        `max_rows` (the query and the row cap it ran under) are what Refresh runs again. `restricted_columns`
-        names the columns carrying restricted values; None records its lineage as unknown."""
+        `max_rows` (the query and the row cap it ran under) are what Refresh runs again. `restriction` says which
+        columns carry restricted values."""
         now = self._now()
         with closing(self._connect()) as con, con:
             con.execute(
                 "INSERT OR IGNORE INTO result_tables(name, cell_id, run_id, created_at, title,"
-                " columns, request, truncated_to, retention_ms, sql, max_rows, restricted_columns, lineage_unknown)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " columns, request, truncated_to, retention_ms, sql, max_rows, restriction)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (canonical(name), owner.cell_id, owner.run_id, now, title, json.dumps(columns or []), request,
-                 truncated_to, self.default_retention_ms, sql, max_rows, *_recorded(restricted_columns)),
+                 truncated_to, self.default_retention_ms, sql, max_rows, _recorded(restriction)),
             )
 
     def record_replacement(self, after: Table) -> Table:
@@ -446,11 +420,43 @@ class Catalog(CatalogView):
     def _describe(self, table: Table, as_of_ms: int) -> None:
         with closing(self._connect()) as con, con:
             con.execute("UPDATE result_tables SET refreshed_at=?, columns=?, truncated_to=?,"
-                        " cell_id=?, run_id=?, title=?, sql=?, max_rows=?, restricted_columns=?, lineage_unknown=?"
+                        " cell_id=?, run_id=?, title=?, sql=?, max_rows=?, restriction=?"
                         " WHERE name=?",
                         (as_of_ms, json.dumps(table.columns), table.truncated_to, table.cell_id, table.run_id,
-                         table.title, table.sql, table.max_rows,
-                         *_recorded(None if table.lineage_unknown else table.restricted_columns), table.name))
+                         table.title, table.sql, table.max_rows, _recorded(table.restriction), table.name))
+
+    def record_restriction(self, name: str, restriction: Restriction) -> None:
+        """Record which columns of registered table `name` carry restricted values."""
+        with closing(self._connect()) as con, con:
+            con.execute("UPDATE result_tables SET restriction=? WHERE name=?",
+                        (_recorded(restriction), canonical(name)))
+
+    def for_download(self, name: str) -> Table:
+        """The live Result or Saved Table `name` as a download treats it (ADR 0008): lineage is worked out again from
+        its stored query, against the Telemetry tables' schemas and this Catalog as they are now, and any restricted
+        columns found are added to the recorded ones, never taken from them. KeyError or `TableExpired` as for
+        `self[name]`."""
+        return self._reanalysed(self[name], {})
+
+    def _reanalysed(self, table: Table, done: dict[str, Table]) -> Table:
+        """`for_download` of `table`. The live tables its query reads are reanalysed in turn, so a newly restricted
+        column carries down a chain of them; `done` holds each one reached so far."""
+        if table.name in done:
+            return done[table.name]
+        done[table.name] = table  # as recorded, for a query that (after a replacement) leads back to its own table
+        recorded = table.restriction.columns
+        if table.sql is None or recorded is None:
+            return table
+
+        def schema(source: str) -> TableSchema | None:
+            return self._reanalysed(self[source], done).schema if source in self else self.schema(source)
+
+        outcome = self._runner.stored_lineage(table.sql, [c["name"] for c in table.columns], schema)
+        if isinstance(outcome, lineage.Known):
+            restricted = {*recorded, *outcome.restricted}
+            done[table.name] = replace(table, restriction=Restriction(tuple(
+                c["name"] for c in table.columns if c["name"] in restricted)))
+        return done[table.name]
 
     def _drop_physical(self, names: Iterable[str]) -> None:
         names = list(names)

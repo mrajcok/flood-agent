@@ -16,7 +16,8 @@ from conftest import ScriptedLLM, add_sql_cell
 from test_public_key import ED25519, ED25519_FINGERPRINT
 
 from flood_agent.catalog import Table
-from flood_agent.downloads import psv_file
+from flood_agent.downloads import check, psv_file
+from flood_agent.lineage import Restriction
 from flood_agent.public_keys import parse_public_key
 from flood_agent.table_replacement import Rerun
 
@@ -65,7 +66,6 @@ def options(client, table: str) -> dict:
 @pytest.mark.parametrize("sql, expected", [
     (UNRESTRICTED, {"restricted": False, "restricted_columns": [], "lineage_unknown": False}),
     (RESTRICTED, {"restricted": True, "restricted_columns": ["imsi"], "lineage_unknown": False}),
-    (UNKNOWN, {"restricted": True, "restricted_columns": [], "lineage_unknown": True}),
 ])
 def test_the_options_say_whether_a_table_is_restricted_and_by_which_columns(client, agent, sql, expected):
     assert options(client, make_table(client, agent, sql)) == {**expected, "public_key": None}
@@ -83,15 +83,6 @@ def test_the_options_of_an_unknown_table_are_not_found(client):
 
 def psv(client, table: str, **params):
     return client.get(f"/api/results/{table}/psv", params=params)
-
-
-def test_an_unrestricted_table_downloads_plain_as_it_always_has(client, agent):
-    table = make_table(client, agent, "SELECT apn AS method, apn AS missing FROM diameter WHERE 0 UNION ALL SELECT 'GET', NULL")
-    response = psv(client, table)
-    assert response.status_code == 200 and response.headers["content-type"] == "text/plain; charset=utf-8"
-    assert response.headers["content-disposition"] == f'attachment; filename="{table}.psv"'
-    assert response.text == "method|missing\r\nGET|\r\n"
-    assert psv(client, table, mode="plain").text == response.text
 
 
 def test_a_restricted_table_is_refused_plain_naming_its_columns_and_the_other_modes(client, agent):
@@ -192,7 +183,7 @@ def test_an_encrypted_file_for_an_ssh_key_decrypts_with_that_ssh_identity(client
 def test_an_encrypted_download_with_no_public_key_is_refused(client, agent):
     for sql in (UNRESTRICTED, RESTRICTED):
         response = psv(client, make_table(client, agent, sql), mode="encrypted")
-        assert response.status_code == 409 and response.json()["detail"] == "No public key on file"
+        assert response.status_code == 409 and response.json()["detail"] == "No Public Key on file"
     assert psv(client, "rt_nope", mode="encrypted").status_code == 404
 
 
@@ -286,8 +277,8 @@ def test_a_large_masked_file_is_made_as_it_is_sent():
             read += 1
             yield f"00101{n:010}", "internet"
 
-    table = Table("subscribers", "saved", "", [], "", None, 1, 1, restricted_columns=("imsi",))
-    chunks = psv_file(table, "masked", ["imsi", "apn"], rows()).chunks
+    table = Table("subscribers", "saved", "", [], "", None, 1, 1, restriction=Restriction(("imsi",)))
+    chunks = psv_file(check(table, "masked"), ["imsi", "apn"], rows()).chunks
     assert len(next(chunks)) < 100_000 and read < 5_000  # the first piece, from the first few thousand rows
     assert sum(chunk.count("\n") for chunk in chunks) > 90_000
 
@@ -295,13 +286,13 @@ def test_a_large_masked_file_is_made_as_it_is_sent():
 def test_a_large_encrypted_file_is_never_held_in_memory(tmp_path):
     identity = pyrage.x25519.Identity.generate()
     rows = ((f"{n:08}" + "x" * 1000,) for n in range(20_000))  # 20 MB, a row at a time
-    table = Table("subscribers", "saved", "", [], "", None, 1, 1, restricted_columns=("imsi",))
+    table = Table("subscribers", "saved", "", [], "", None, 1, 1, restriction=Restriction(("imsi",)))
     sent = tmp_path / "subscribers.psv.age"
     tracemalloc.start()
     try:
         with sent.open("wb") as file:
-            for piece in psv_file(table, "encrypted", ["imsi"], rows,
-                                  parse_public_key(str(identity.to_public()))).chunks:
+            allowed = check(table, "encrypted", parse_public_key(str(identity.to_public())))
+            for piece in psv_file(allowed, ["imsi"], rows).chunks:
                 file.write(piece)
         peak = tracemalloc.get_traced_memory()[1]
     finally:

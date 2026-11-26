@@ -2,7 +2,7 @@
 # has no fallbacks, and .env.example is generated from it (see flood_agent.config).
 # Override any key with a .env file or an environment variable of the same name in
 # upper case (QUERY_TIMEOUT_S, ...). The real environment wins over .env.
-# openrouter_api_key has no default; it is a secret and belongs in .env.
+# openrouter_api_key and users have no default; they are secrets and belong in .env.
 
 default_model = "z-ai/glm-5.3"  # an id from the [[models]] list at the end of this file
 
@@ -16,6 +16,10 @@ query_timeout_s = 30
 chart_row_cap = 10_000
 max_failed_attempts = 3
 max_llm_steps = 10
+
+users_dir = "data/users"
+session_idle_timeout_hours = 12
+session_cookie_secure = true
 
 host = "127.0.0.1"
 port = 8000

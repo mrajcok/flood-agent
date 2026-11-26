@@ -37,10 +37,11 @@ def log_config() -> dict:
 
 def build_app(settings: Settings | None = None, dev: bool = False):
     settings = settings or Settings()  # pyright: ignore[reportCallIssue]  # pydantic-settings fills fields from env/TOML
+    sign_in = settings.sign_in_config(dev)  # first: without a User, nothing is made and the app does not start
     config = settings.agent_config()
     config.results_db.parent.mkdir(parents=True, exist_ok=True)
     picker = picker_entries(load_canned_prompts())
-    return create_app(Agent(config, settings.client_factory()), picker=picker, dev=dev)
+    return create_app(Agent(config, settings.client_factory()), sign_in, picker=picker, dev=dev)
 
 
 def main(dev: bool = False) -> None:

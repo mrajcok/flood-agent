@@ -41,6 +41,8 @@ from flood_agent.notebook import Notebooks, Position
 from flood_agent.notebook_store import DEFAULT_MAX_ROWS, NotebookStore
 from flood_agent.queries import QueryRunner
 from flood_agent.semantic_layer import SemanticLayer
+from flood_agent.sign_in import SignInConfig
+from flood_agent.users import parse_users
 from flood_agent.web import create_app
 
 # SQLite fsyncs on every commit, and on a disk filesystem (WSL's ext4 especially) that was over
@@ -242,6 +244,11 @@ class GatedLLM(ScriptedLLM):
 
 
 DAY = 24 * 3_600_000  # ms
+
+TEST_USER, TEST_PASSWORD = "tester", "test password"
+# TEST_PASSWORD's hash, with scrypt parameters far too cheap for real use so that signing in costs a test nothing.
+TEST_PASSWORD_HASH = "scrypt$16$8$1$Y2Fub3B5LXRlc3Qtc2FsdA==$mfyEa7C+f7AQqmCrGJ0g7p6FXXLqzAMcV1oGBX5VuRg="
+TEST_USERS = f"{TEST_USER}:{TEST_PASSWORD_HASH}"
 
 
 class Clock:
@@ -455,25 +462,52 @@ def add_markdown_cell(agent: Agent, notebook_id: str, text: str = "", send_to_ai
                                     draft=MarkdownDraft(text, send_to_ai, ()))
 
 
+ORIGIN = "http://testserver"  # where a TestClient says the app is
+
+
+def sign_in_for_test(cookie_secure: bool = False, idle_timeout_ms: int = 10_000 * DAY) -> SignInConfig:
+    """The test User alone. The cookie is not Secure by default: tests are plain http. Sessions far outlast the days a
+    test moves the Agent's clock on to expire tables."""
+    return SignInConfig(parse_users(TEST_USERS), idle_timeout_ms=idle_timeout_ms, cookie_secure=cookie_secure)
+
+
+def new_client(app) -> TestClient:
+    """A browser on the app, not signed in, whose requests come from the app's own origin."""
+    return TestClient(app, headers={"origin": ORIGIN})
+
+
+def sign_in(client, name: str = TEST_USER, password: str = TEST_PASSWORD, **data):
+    """Post the sign-in form (the test User's, by default); the response is returned unfollowed."""
+    return client.post("/sign-in", data={"name": name, "password": password, **data}, follow_redirects=False)
+
+
 @pytest.fixture
 def web_client():
-    """`web_client(agent)` -> a TestClient used as a context manager, so the app lifespan runs
-    (starting the Agent's MCP server) and is left again at teardown."""
+    """`web_client(agent)` -> a TestClient signed in as the test User (unless `signed_in=False`), used as a context
+    manager, so the app lifespan runs (starting the Agent's MCP server) and is left again at teardown."""
     with ExitStack() as stack:
-        yield lambda agent, **kwargs: stack.enter_context(TestClient(create_app(agent, **kwargs)))
+        def _client(agent: Agent, signed_in: bool = True, sign_in_config: SignInConfig | None = None, **app_kwargs):
+            app = create_app(agent, sign_in_config or sign_in_for_test(), **app_kwargs)
+            client = stack.enter_context(new_client(app))
+            if signed_in:
+                assert sign_in(client).status_code == 303
+            return client
+
+        yield _client
 
 
 @pytest.fixture
 def live_server(build_agent):
     """`live_server(agent=None, **app_kwargs)` -> base URL of the real app served by uvicorn on a free
-    port, for browser tests. Defaults to an Agent with a ScriptedLLM that has no steps."""
+    port, for browser tests, with the test User configured. Defaults to an Agent with a ScriptedLLM that has no
+    steps."""
     servers: list[tuple[uvicorn.Server, threading.Thread]] = []
 
     def _start(agent: Agent | None = None, **app_kwargs) -> str:
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
-        app = create_app(agent or build_agent(ScriptedLLM()), **app_kwargs)
+        app = create_app(agent or build_agent(ScriptedLLM()), sign_in_for_test(), **app_kwargs)
         server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
         thread = threading.Thread(target=server.run, daemon=True)
         thread.start()
@@ -509,8 +543,9 @@ def chrome():
 
 @pytest.fixture
 def live_page(chrome, live_server, request):
-    """`live_page(path="/", agent=None, timezone=None, **create_app_kwargs)` -> a fresh page (its own browser context) in
-    headless system Chrome, opened on the live app; `timezone` (e.g. "America/New_York") sets the
+    """`live_page(path="/", agent=None, timezone=None, signed_in=True, **create_app_kwargs)` -> a fresh page (its own
+    browser context) in headless system Chrome, opened on the live app and signed in as the test User (with
+    `signed_in=False` it is not, so it lands on the sign-in page); `timezone` (e.g. "America/New_York") sets the
     browser's. CDN scripts (htmx, Alpine, Vega) are served from pytest's cache after the first
     download, so browser tests run offline once warmed; with a cold cache and no internet they skip."""
     cache_dir = request.config.cache.mkdir("cdn")
@@ -532,15 +567,22 @@ def live_page(chrome, live_server, request):
             os.replace(tmp, path)
         route.fulfill(path=path, content_type="application/javascript")
 
-    def _open(path: str = "/", agent: Agent | None = None, timezone: str | None = None, **app_kwargs):
+    def _open(path: str = "/", agent: Agent | None = None, timezone: str | None = None, signed_in: bool = True,
+              **app_kwargs):
         context = chrome.new_context(timezone_id=timezone)
         contexts.append(context)
         page = context.new_page()
         page.set_default_timeout(5000)  # the app is local: fail fast instead of Playwright's 30s
         for pattern in CDN_HOSTS:
             page.route(pattern, serve_cached)
-        page.goto(live_server(agent, **app_kwargs) + path)
-        if not page.evaluate("() => !!(window.Alpine && window.htmx)"):
+        base = live_server(agent, **app_kwargs)
+        if signed_in:  # the context shares cookies with its pages; the redirect is not followed ("/" makes a Notebook)
+            response = context.request.post(f"{base}/sign-in", headers={"origin": base}, max_redirects=0,
+                                            form={"name": TEST_USER, "password": TEST_PASSWORD})
+            assert response.status == 303
+        page.goto(base + path)
+        # The sign-in page loads neither script.
+        if signed_in and not page.evaluate("() => !!(window.Alpine && window.htmx)"):
             pytest.skip("CDN scripts unavailable (no internet and nothing cached yet)")
         return page
 

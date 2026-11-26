@@ -4,7 +4,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
-from conftest import ScriptedLLM, collect, tool_call
+from conftest import TEST_USERS, ScriptedLLM, collect, tool_call
 from pydantic import ValidationError
 
 from flood_agent.agent import Agent
@@ -115,7 +115,7 @@ def test_defaults_toml_has_exactly_the_settings_that_have_defaults():
     in_toml = set(tomllib.loads(DEFAULTS_FILE.read_text()))
     fields = set(Settings.model_fields)
 
-    assert in_toml == fields - {"openrouter_api_key"}  # the only setting without a default is the secret
+    assert in_toml == fields - {"openrouter_api_key", "users"}  # only the secrets have no default
 
 
 def test_the_curated_model_list_parses_in_the_specs_order():
@@ -258,6 +258,7 @@ def test_build_app_creates_the_directories_of_both_databases(tmp_path):
     env_file = write_env(
         tmp_path / ".env",
         OPENROUTER_API_KEY="sk-x",
+        USERS=TEST_USERS,
         RESULTS_DB=tmp_path / "results-dir" / "results.db",
         APP_DB=tmp_path / "state-dir" / "app.db",
     )

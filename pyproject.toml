@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 flood-agent-dev = "flood_agent.dev:main"
+flood-agent-user = "flood_agent.users:main"
 
 [dependency-groups]
 dev = [

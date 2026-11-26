@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from flood_agent import dev_tools, lookup_tables
+from flood_agent import dev_tools, lookup_tables, sign_in
 from flood_agent.agent import Agent, NotRefreshable, RefreshFailed
 from flood_agent.ai_cell_context import without_stop_note
 from flood_agent.ai_cell_run import resolve_chart_data
@@ -43,6 +43,7 @@ from flood_agent.model_choices import NO_MODEL
 from flood_agent.notebook import COUNT_KIND, NotebookBusy, PageCell, TablesChoice, UnknownCell, UnknownNotebook
 from flood_agent.queries import InvalidSort, QueryFailed, QueryRejected
 from flood_agent.show_commands import SHOW_COMMANDS
+from flood_agent.sign_in import SignInConfig
 from flood_agent.table_replacement import RefreshInProgress
 from flood_agent.trace import short_model, split_system_prompt
 
@@ -144,8 +145,9 @@ def _table_display_urls(result_table: str) -> dict:
 NEEDS_KEY = "needs OPENROUTER_API_KEY"
 
 
-def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool = False) -> FastAPI:
-    """The Model dropdown lists the Agent's model choices: the curated models, disabled when they cannot be used
+def create_app(agent: Agent, sign_in_config: SignInConfig, picker: list[PickerEntry] | None = None,
+               dev: bool = False) -> FastAPI:
+    """Every page and API needs a User of `sign_in_config` to have signed in. The Model dropdown lists the Agent's model choices: the curated models, disabled when they cannot be used
     here (no API key), then "No model" (Fake Mode, always selectable). The `picker` Canned Prompts show on the page only while it is selected.
     `dev` (set by flood-agent-dev only) adds the button and endpoint that shift the Telemetry Database to now."""
     @asynccontextmanager
@@ -413,6 +415,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool 
         page = notebooks.notebook_page(notebook_id)
         return TEMPLATES.TemplateResponse(request, "notebook.html", {
             **sidebar(notebook_id), **model_picker(), "notebook_id": notebook_id, "title": page.title,
+            "user": request.state.user,
             "cells": [cell_view(c) for c in page.cells], "stale_ids": sorted(page.stale_ids),
         })
 
@@ -726,6 +729,7 @@ def create_app(agent: Agent, picker: list[PickerEntry] | None = None, dev: bool 
         except KeyError:
             raise HTTPException(404, "unknown result table")
 
+    sign_in.install(app, sign_in_config, agent.config.clock, TEMPLATES)
     return app
 
 

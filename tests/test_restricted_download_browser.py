@@ -1,9 +1,12 @@
 """A table Display's Download: straight away for an unrestricted table, through a dialog for a restricted one."""
 
+from urllib.parse import urljoin
+
 import pytest
 from conftest import ScriptedLLM, last_tool_result, tool_call
 from playwright.sync_api import expect
 from test_notebook_browser import run_in_new_notebook
+from test_public_key import ED25519, ED25519_FINGERPRINT
 from test_restricted_download import REAL, RESTRICTED, UNKNOWN, UNRESTRICTED
 
 from flood_agent.llm import TextChunk
@@ -32,6 +35,7 @@ def test_download_asks_in_a_dialog_only_for_a_restricted_table(live_page, build_
     plain, restricted, unknown = (cell.locator(".output .display").nth(i) for i in range(3))
     dialog = page.get_by_role("dialog", name="Restricted table")
     masked = dialog.get_by_role("button", name="Download masked")
+    encrypted = dialog.get_by_role("button", name="Download encrypted")
 
     with page.expect_download() as download:
         plain.get_by_role("link", name="Download PSV").click()
@@ -53,5 +57,22 @@ def test_download_asks_in_a_dialog_only_for_a_restricted_table(live_page, build_
     unknown.get_by_role("link", name="Download PSV").click()
     expect(dialog).to_contain_text("it can only be downloaded encrypted")
     expect(masked).to_be_hidden()
+    no_key = dialog.get_by_text("No public key on file. Add one in Settings")
+    expect(no_key).to_be_visible()
+    expect(dialog.get_by_role("link", name="Settings")).to_have_attribute("href", "/settings")
+    expect(encrypted).to_be_hidden()
     dialog.get_by_role("button", name="Cancel").click()
+    expect(dialog).to_have_count(0)
+
+    saved = page.request.post(urljoin(page.url, "/settings/public-key"), form={"key": ED25519},
+                              headers={"origin": urljoin(page.url, "/").rstrip("/")}, max_redirects=0)
+    assert saved.status == 303
+    unknown.get_by_role("link", name="Download PSV").click()
+    expect(dialog).to_contain_text(f"ssh-ed25519 key {ED25519_FINGERPRINT}")
+    expect(no_key).to_be_hidden()
+    expect(masked).to_be_hidden()
+    with page.expect_download() as download:
+        encrypted.click()
+    expect(unknown.locator(".table-name .name")).to_have_text(download.value.suggested_filename.split(".")[0])
+    assert download.value.suggested_filename.endswith(".psv.age")
     expect(dialog).to_have_count(0)

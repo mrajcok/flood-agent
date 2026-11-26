@@ -3,7 +3,14 @@
 import re
 import sqlite3
 
-from conftest import ScriptedLLM, all_telemetry_values, collect, last_tool_result, tool_call
+from conftest import (
+    ScriptedLLM,
+    all_telemetry_values,
+    collect,
+    databases_for_test,
+    last_tool_result,
+    tool_call,
+)
 
 from flood_agent.events import DisplayEvent, TextDelta, TurnEnd
 from flood_agent.llm import TextChunk
@@ -57,7 +64,7 @@ async def test_result_table_lives_in_results_db_with_tool_chosen_name(make_agent
     name = last_tool_result(llm.calls[1])["result_table"]
     assert re.fullmatch(r"rt_\d{8}_\d{6}(_\d+)?", name) and ";" not in name
 
-    results = sqlite3.connect(tmp_path / "results.db")
+    results = sqlite3.connect(databases_for_test(tmp_path).results_db)
     assert results.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0] == 2
     tele = sqlite3.connect(telemetry_db)
     tables = {r[0] for r in tele.execute("SELECT name FROM sqlite_master WHERE type='table'")}

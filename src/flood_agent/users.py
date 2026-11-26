@@ -1,4 +1,4 @@
-"""The configured Users and their password hashes, and the command that makes a USERS entry:
+"""The configured Users, their password hashes and where each one's databases are, and the command that makes a USERS entry:
 
     uv run flood-agent-user NAME
 
@@ -15,6 +15,7 @@ import re
 import secrets
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 USER_NAME = re.compile(r"[a-z][a-z0-9_]{0,30}")
 
@@ -23,6 +24,19 @@ USER_NAME = re.compile(r"[a-z][a-z0-9_]{0,30}")
 _N, _R, _P = 2**15, 8, 3
 _MAX_MEMORY = 2**30  # a configured hash may not ask for more than this to check
 _MAX_P = 16
+
+
+@dataclass(frozen=True)
+class UserDatabases:
+    """One User's own app database and results database, which no other User's parts open."""
+
+    app_db: Path
+    results_db: Path
+
+
+def user_databases(users_dir: Path, name: str) -> UserDatabases:
+    """User `name`'s databases under the per-User data directory."""
+    return UserDatabases(users_dir / name / "app.db", users_dir / name / "results.db")
 
 
 @dataclass(frozen=True)

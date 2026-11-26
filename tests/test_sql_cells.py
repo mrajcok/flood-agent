@@ -11,7 +11,17 @@ import threading
 from dataclasses import replace
 
 import pytest
-from conftest import DAY, Clock, ScriptedLLM, add_ai_cell, add_markdown_cell, add_sql_cell, displays_of, latest_run
+from conftest import (
+    DAY,
+    Clock,
+    ScriptedLLM,
+    add_ai_cell,
+    add_markdown_cell,
+    add_sql_cell,
+    databases_for_test,
+    displays_of,
+    latest_run,
+)
 
 from flood_agent import queries
 from flood_agent.catalog import CellRun
@@ -91,7 +101,7 @@ async def test_a_count_shaped_query_returning_many_rows_falls_back_to_a_table(bu
 
 async def test_statements_that_are_not_one_readable_select_are_refused(build_agent, tmp_path):
     agent = build_agent(ScriptedLLM())
-    with sqlite3.connect(tmp_path / "results.db") as con:
+    with sqlite3.connect(databases_for_test(tmp_path).results_db) as con:
         con.execute("CREATE TABLE secret(v)")
     nb = agent.notebooks.create_notebook()
     for sql in ("DELETE FROM flows", "SELECT 1; SELECT 2", "SELECT * FROM results.secret"):
@@ -259,7 +269,7 @@ async def test_only_a_count_that_passed_the_count_form_check_reaches_the_ai_cell
 async def test_the_user_sees_the_raw_error_the_ai_cell_below_the_value_free_one_and_a_warning_is_logged(make_agent, caplog, tmp_path):
     llm = ScriptedLLM([TextChunk("ok")])
     agent = await make_agent(llm)
-    with sqlite3.connect(tmp_path / "results.db") as con:
+    with sqlite3.connect(databases_for_test(tmp_path).results_db) as con:
         con.execute("CREATE TABLE nosuchcolumn_7(v)")  # unregistered, so unreadable: the raw denial names it
     nb = agent.notebooks.create_notebook()
     bad = add_sql_cell(agent, nb, sql="SELECT * FROM results.nosuchcolumn_7")

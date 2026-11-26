@@ -37,7 +37,7 @@ def refresh(client, name):
 
 
 def result_tables_in_results_db(agent):
-    with closing(sqlite3.connect(agent.config.results_db)) as con:
+    with closing(sqlite3.connect(agent.databases.results_db)) as con:
         return sorted(n for (n,) in con.execute("SELECT name FROM sqlite_master WHERE type='table'"))
 
 

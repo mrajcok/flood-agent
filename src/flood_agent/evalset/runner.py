@@ -31,7 +31,13 @@ from flood_agent.config import Settings
 from flood_agent.evalset.client import UsageMeter
 from flood_agent.evalset.compare import DEFAULT_TOLERANCE, Comparison, compare
 from flood_agent.evalset.golden import Question, load_golden, run_reference
-from flood_agent.evalset.notebook import add_cells_above, eval_model_choices, run_ai_cell
+from flood_agent.evalset.notebook import (
+    EVAL_USER,
+    add_cells_above,
+    eval_model_choices,
+    eval_user_config,
+    run_ai_cell,
+)
 from flood_agent.events import TraceEntry, TraceReady, TurnError
 from flood_agent.generator import END_MS
 from flood_agent.llm import OpenRouterClient
@@ -113,25 +119,24 @@ def _describe(e: BaseException) -> str:
 async def _run_question(model, q, ref, telemetry_db, semantic_layer, client_factory, workdir) -> QuestionResult:
     qdir = workdir / re.sub(r"[^A-Za-z0-9_.-]", "_", model) / q.id
     qdir.mkdir(parents=True, exist_ok=True)
-    results_db, app_db = qdir / "results.db", qdir / "app.db"
-    for p in (results_db, app_db):
-        p.unlink(missing_ok=True)
-    llm = UsageMeter(client_factory(model, q.id))
     defaults = Settings.from_defaults()
+    config = eval_user_config(defaults.agent_config(), qdir)
+    llm = UsageMeter(client_factory(model, q.id))
     agent = Agent(
-        replace(defaults.agent_config(), telemetry_db=telemetry_db, results_db=results_db,
-                semantic_layer=semantic_layer, choices=eval_model_choices(defaults, model), app_db=app_db,
+        replace(config, telemetry_db=telemetry_db,
+                semantic_layer=semantic_layer, choices=eval_model_choices(defaults, model),
                 fixed_now_ms=END_MS),  # now() is the end of the data, so "the last hour" has one answer
         lambda _model: llm,
     )
+    user = agent.for_user(EVAL_USER)
     retries, error, trace = 0, None, None
     notebook_id = cell_id = None
     start = time.perf_counter()
     try:
         async with agent:
-            notebook_id = agent.notebooks.create_notebook(q.id)  # each question is a new notebook
-            await add_cells_above(agent, notebook_id, q.above)
-            cell_id, events = await run_ai_cell(agent, notebook_id, q.question, EVAL_MAX_RESULT_ROWS)
+            notebook_id = user.notebooks.create_notebook(q.id)  # each question is a new notebook
+            await add_cells_above(user, notebook_id, q.above)
+            cell_id, events = await run_ai_cell(user, notebook_id, q.question, EVAL_MAX_RESULT_ROWS)
             async for event in events:
                 if isinstance(event, TraceEntry) and event.kind == "query_error":
                     retries += 1
@@ -147,9 +152,9 @@ async def _run_question(model, q, ref, telemetry_db, semantic_layer, client_fact
     if error:
         ok, reason, extra, matched, n = False, "turn failed", 0, None, 0
     else:
-        run = agent.notebooks.page_cell(notebook_id, cell_id).run if notebook_id and cell_id else None  # its current Run
-        names = [t.name for t in agent.tables.tables_of_run(cell_id, run["id"])] if cell_id and run else []
-        ok, reason, extra, matched, n = _judge(q, ref, agent.queries, names, counts)
+        run = user.notebooks.page_cell(notebook_id, cell_id).run if notebook_id and cell_id else None  # its current Run
+        names = [t.name for t in user.tables.tables_of_run(cell_id, run["id"])] if cell_id and run else []
+        ok, reason, extra, matched, n = _judge(q, ref, user.queries, names, counts)
     return QuestionResult(
         q.id, model, ok, reason, retries, latency, usage.get("cost"), usage.get("prompt_tokens"),
         usage.get("completion_tokens"), extra, error, matched, n, len(counts),
@@ -228,7 +233,7 @@ def main(argv=None) -> int:
     p.add_argument("--models", nargs="+", default=CANDIDATE_MODELS)
     p.add_argument("--questions", nargs="+", help="only these question ids")
     p.add_argument("--out", default="eval-report", help="writes <out>.md and <out>.json")
-    p.add_argument("--workdir", default="data/eval-work", help="scratch results/app databases")
+    p.add_argument("--workdir", default="data/eval-work", help="scratch databases")
     a = p.parse_args(argv)
     try:
         settings = Settings()  # pyright: ignore[reportCallIssue]  # pydantic-settings fills fields from env/TOML

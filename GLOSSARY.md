@@ -4,6 +4,10 @@ Flood stores network telemetry (NetFlow/IPFIX, DNS and Diameter signaling). CANO
 
 ## Actors
 
+**User**:
+A person who signs in to CANOPY. A User has their own Notebooks, Result Tables, Saved Tables and Lookup Tables, which no other User can see; all Users read the same Telemetry Database.
+_Avoid_: account, login, Subscriber
+
 **Agent**:
 The backend orchestrator that runs an AI Cell's LLM loop, executes the LLM's queries, and reads Result Tables to build Displays. The only component allowed to touch telemetry data.
 _Avoid_: Bot, assistant (for this role)
@@ -47,7 +51,7 @@ The curated description of the Telemetry Database — tables, columns, units, en
 _Avoid_: Schema (too narrow), data dictionary
 
 **Result Table**:
-A table created from a single query (an AI Cell's LLM-written query, or a SQL Cell's), holding that query's output so it never has to be returned to the LLM. It belongs to the Cell and Run that made it, and any Notebook can query it by name until it expires. It always has its generated name (`rt_<date>_<time>`); once the user renames it, it becomes a Saved Table.
+A table created from a single query (an AI Cell's LLM-written query, or a SQL Cell's), holding that query's output so it never has to be returned to the LLM. It belongs to the Cell and Run that made it, and any Notebook of its User can query it by name until it expires. It always has its generated name (`rt_<date>_<time>`); once the user renames it, it becomes a Saved Table.
 _Avoid_: Temp table, query result, output table, `rt_` table
 
 **Saved Table**:
@@ -55,7 +59,7 @@ A Result Table the user has renamed to keep it. It is queried by its new name, s
 _Avoid_: Renamed Result Table, kept table, named table
 
 **Lookup Table**:
-A table the user creates by pasting rows or loading a file of them (e.g. a list of IP addresses and descriptions), for queries in any Notebook to join or filter against. Its contents never reach the LLM.
+A table the user creates by pasting rows or loading a file of them (e.g. a list of IP addresses and descriptions), for queries in any of their Notebooks to join or filter against. Its contents never reach the LLM.
 _Avoid_: Reference table, Result Table (for this)
 
 **Retention**:
@@ -63,7 +67,7 @@ How long after its creation a Result Table or Saved Table is kept before it expi
 _Avoid_: TTL (in user-facing text)
 
 **Table Catalog**:
-The record of every table a user can query (Telemetry Database tables, Result Tables, Saved Tables, Lookup Tables), with each one's kind and Retention. It is the only authority on whether a table is live, and on the rules for naming, renaming and deleting tables. Table names ignore case, and are kept in lower case.
+The record of every table a User can query (Telemetry Database tables, and their own Result Tables, Saved Tables and Lookup Tables), with each one's kind and Retention. It is the only authority on whether a table is live, and on the rules for naming, renaming and deleting tables. Table names ignore case, and are kept in lower case.
 _Avoid_: Registry, table manager
 
 **Refresh**:

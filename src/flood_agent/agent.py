@@ -1,6 +1,6 @@
-"""The Agent: builds the app's parts (Notebook storage, the Table Catalog, Table Replacement, the Run modules and the
-Notebook module, `notebooks`, and the query runner, `queries`), supervises the MCP connection, and does Refresh and row
-reads.
+"""The Agent: builds each User's parts (Notebook storage, the Table Catalog, Table Replacement, the Run modules and the
+Notebook module, `notebooks`, and the query runner, `queries`) and supervises the one MCP connection they share.
+`Agent.for_user` gives what it does for one User (`UserSpace`), Refresh and row reads included.
 
 The LLM client is injected.
 """
@@ -29,7 +29,7 @@ from flood_agent.queries import QueryRunner
 from flood_agent.semantic_layer import SemanticLayer
 from flood_agent.sql_cell_run import SqlCellRuns
 from flood_agent.table_replacement import RefreshInProgress, ReplacementFailed, TableReplacement
-from flood_agent.upgrade import drop_pre_notebook_data
+from flood_agent.users import user_databases
 
 log = logging.getLogger("uvicorn.error")  # the app's terminal log
 
@@ -47,8 +47,8 @@ class AgentConfig:
     """Built from `config.Settings`, which holds every default."""
 
     telemetry_db: Path
-    results_db: Path
-    app_db: Path
+    users_dir: Path  # holds each User's own databases (`users.user_databases`)
+    users: tuple[str, ...]  # the User names: the Agent builds one set of parts for each
     semantic_layer: Path
     choices: ModelChoices  # the models that can be used here and the default model
     result_ttl_ms: int  # Result Tables expire this long after they are made
@@ -66,7 +66,7 @@ APP_STOPPED = "The app stopped during this Run."
 
 @dataclass(frozen=True)
 class Parts:
-    """The app's parts over one app database. Notebook storage (`store`) is for the Agent's startup cleanup only;
+    """One User's parts, over that User's databases. Notebook storage (`store`) is for the Agent's startup cleanup only;
     everything else uses the Notebook module."""
 
     store: NotebookStore
@@ -78,119 +78,56 @@ class Parts:
     queries: QueryRunner
 
 
-def build_parts(config: AgentConfig, semantic_layer: SemanticLayer, client_for: ClientFactory,
+def build_parts(config: AgentConfig, user: str, semantic_layer: SemanticLayer, client_for: ClientFactory,
                 connection: ConnectionProvider, started: Callable[[], bool]) -> Parts:
     """Build Notebook storage, the query runner, the Table Catalog, Table Replacement, the Run modules and the Notebook
-    module, wired together. `connection` and `started` are the MCP connection the AI Cell Runs use and whether it
-    is up."""
-    store = NotebookStore(config.app_db, config.clock)
+    module for `user`, wired together over that User's databases (created if missing). `connection` and `started` are
+    the MCP connection the AI Cell Runs use and whether it is up."""
+    databases = user_databases(config.users_dir, user)
+    store = NotebookStore(databases.app_db, config.clock)
     # The runner asks for the readable set only when it queries, by which time the Catalog below exists.
-    runner = QueryRunner(config.telemetry_db, config.results_db, config.query_timeout_s, lambda: tables.readable())
+    runner = QueryRunner(config.telemetry_db, databases.results_db, config.query_timeout_s, lambda: tables.readable())
     tables = Catalog(
-        config.app_db, config.clock, config.result_ttl_ms, telemetry_tables=semantic_layer.table_names(),
-        results_db=config.results_db, on_rename=store.follow_rename,  # Displays follow a table's new name
+        databases.app_db, config.clock, config.result_ttl_ms, telemetry_tables=semantic_layer.table_names(),
+        results_db=databases.results_db, on_rename=store.follow_rename,  # Displays follow a table's new name
         runner=runner,
     )
     replacement = TableReplacement(tables, runner)
     sql_cells = SqlCellRuns(store, tables, replacement, runner, config.clock)
-    ai_cells = AiCellRuns(store, tables, semantic_layer, client_for, connection, started, config.choices.spec_of,
+    ai_cells = AiCellRuns(user, store, tables, semantic_layer, client_for, connection, started, config.choices.spec_of,
                           config.max_llm_steps, config.max_failed_attempts, config.clock)
     notebooks = Notebooks(store, tables, sql_cells, ai_cells, config.choices)
     return Parts(store, tables, replacement, sql_cells, ai_cells, notebooks, runner)
 
 
-class Agent:
-    def __init__(self, config: AgentConfig, client_for: ClientFactory):
-        self.config = config
-        self.client_for = client_for
-        self.semantic_layer = SemanticLayer(config.semantic_layer)
-        drop_pre_notebook_data(config.app_db, config.results_db)  # before anything creates the new schema
-        # `client_for` is looked up on each Run, so a client swapped in later is the one used.
-        parts = build_parts(config, self.semantic_layer, lambda model: self.client_for(model), self._ensure_connection,
-                            lambda: self._connection is not None)
+class UserSpace:
+    """What the Agent does for one User, over that User's parts alone: another User's Notebooks and tables are unknown
+    here."""
+
+    def __init__(self, config: AgentConfig, user: str, semantic_layer: SemanticLayer, parts: Parts):
+        self.config, self.semantic_layer = config, semantic_layer
+        self.databases = user_databases(config.users_dir, user)
         self.tables, self.replacement, self.notebooks = parts.tables, parts.replacement, parts.notebooks
         self.queries = parts.queries
-        self._sql_cells, self._ai_cells = parts.sql_cells, parts.ai_cells
-        self._connection: McpConnection | None = None
-        self._restart_lock = asyncio.Lock()
+        self._store, self._sql_cells, self._ai_cells = parts.store, parts.sql_cells, parts.ai_cells
         self._refreshing: set[tuple[str, str | int]] = set()  # ("count", id) being refreshed now (tables: see table_replacement)
         self._refreshing_lock = threading.Lock()
+
+    def clean_up(self) -> None:
+        """The startup cleanup: expired and orphaned tables, and Runs the app left running."""
         self.tables.sweep()
-        # A Run still running now was cut off by the app being killed. One app process per app database, so
-        # none of these is really in progress (eval runs and the caching smoke test use their own app database).
-        for run_id in parts.store.running_runs():
-            parts.store.finish_run(run_id, "failed", APP_STOPPED)
+        # A Run still running now was cut off by the app being killed. One app process per User's databases, so
+        # none of these is really in progress (eval runs and the caching smoke test use their own directory).
+        for run_id in self._store.running_runs():
+            self._store.finish_run(run_id, "failed", APP_STOPPED)
 
-    async def start(self) -> None:
-        """Launch the long-lived MCP server. Needed before `run_cell`, not for row fetches
-        or PSV export."""
-        if self._connection is not None:
-            raise RuntimeError("Agent already started")
-        connection = McpConnection(self.transport())
-        await connection.start()
-        self._connection = connection
+    async def stop_sql_cells(self) -> None:
+        """Stop this User's running SQL Cells and wait for their queries; no more start."""
+        await self._sql_cells.aclose()
 
-    @property
-    def mcp_server_alive(self) -> bool:
-        """Whether the MCP connection is up: False before `start`, after `aclose`, or once the server has died
-        (the next AI Cell Run replaces it)."""
-        return self._connection is not None and self._connection.alive
-
-    async def _ensure_connection(self) -> McpConnection:
-        """The live connection; a dead one (process exited or session broken) is replaced first."""
-        async with self._restart_lock:
-            connection = self._connection
-            if connection is None:
-                raise RuntimeError("Agent not started")
-            if not connection.alive:
-                replacement = McpConnection(self.transport())
-                await connection.aclose()  # reap the dead one
-                await replacement.start()
-                self._connection = replacement
-                connection = replacement
-            return connection
-
-    async def aclose(self) -> None:
-        """Stop running Cells and the MCP server, and reap its process."""
-        await self._sql_cells.aclose()  # SQL Cell queries are stopped and waited for
-        # AI Cell Runs before the connection (this also cancels a restart in progress), so none is left
-        # talking to a closing connection.
+    async def stop_ai_cells(self) -> None:
+        """Stop this User's running AI Cells and wait for them; no more start."""
         await self._ai_cells.aclose()
-        async with self._restart_lock:
-            connection, self._connection = self._connection, None
-            if connection is not None:
-                await connection.aclose()
-
-    async def __aenter__(self) -> "Agent":
-        await self.start()
-        return self
-
-    async def __aexit__(self, *exc) -> None:
-        await self.aclose()
-
-    def server_settings(self) -> ServerSettings:
-        """What the MCP server is launched with."""
-        # Static settings only. The row cap travels in each call's `_meta`, not here
-        # and not as a tool argument, so the LLM can't choose it.
-        return ServerSettings(
-            telemetry_db=self.config.telemetry_db,
-            results_db=self.config.results_db,
-            app_db=self.config.app_db,
-            query_timeout_s=self.config.query_timeout_s,
-            chart_row_cap=self.config.chart_row_cap,
-            telemetry_tables=tuple(self.semantic_layer.table_names()),
-            fixed_now_ms=self.config.fixed_now_ms,
-        )
-
-    def _server_params(self) -> StdioServerParameters:
-        return StdioServerParameters(
-            command=sys.executable, args=["-m", "flood_agent.mcp_server"], env=self.server_settings().to_env()
-        )
-
-    def transport(self) -> Transport:
-        """How each new MCP connection reaches its server: a stdio subprocess. The seam where tests run the server
-        in-process instead."""
-        return stdio_transport(self._server_params())
 
     def fetch_rows(self, result_table: str, columns: list[str] | None = None, **page_args) -> dict:
         """Internal data path used by the row-JSON endpoint. Not an LLM tool.
@@ -267,3 +204,98 @@ class Agent:
     def fetch_chart_rows(self, result_table: str) -> list[dict]:
         """Internal data path for the chart-rows endpoint (chart cap). Not an LLM tool."""
         return self.queries.chart_rows(self.tables[result_table].name, self.config.chart_row_cap)
+
+
+class Agent:
+    def __init__(self, config: AgentConfig, client_for: ClientFactory):
+        self.config = config
+        self.client_for = client_for
+        self.semantic_layer = SemanticLayer(config.semantic_layer)
+        self._users = {user: self._space(user) for user in config.users}
+        self._connection: McpConnection | None = None
+        self._restart_lock = asyncio.Lock()
+        for space in self._users.values():
+            space.clean_up()
+
+    def _space(self, user: str) -> UserSpace:
+        # `client_for` is looked up on each Run, so a client swapped in later is the one used.
+        parts = build_parts(self.config, user, self.semantic_layer, lambda model: self.client_for(model),
+                            self._ensure_connection, lambda: self._connection is not None)
+        return UserSpace(self.config, user, self.semantic_layer, parts)
+
+    def for_user(self, user: str) -> UserSpace:
+        """`user`'s parts. KeyError for a name that is not one of the configured Users."""
+        return self._users[user]
+
+    async def start(self) -> None:
+        """Launch the long-lived MCP server. Needed before `run_cell`, not for row fetches
+        or PSV export."""
+        if self._connection is not None:
+            raise RuntimeError("Agent already started")
+        connection = McpConnection(self.transport())
+        await connection.start()
+        self._connection = connection
+
+    @property
+    def mcp_server_alive(self) -> bool:
+        """Whether the MCP connection is up: False before `start`, after `aclose`, or once the server has died
+        (the next AI Cell Run replaces it)."""
+        return self._connection is not None and self._connection.alive
+
+    async def _ensure_connection(self) -> McpConnection:
+        """The live connection; a dead one (process exited or session broken) is replaced first."""
+        async with self._restart_lock:
+            connection = self._connection
+            if connection is None:
+                raise RuntimeError("Agent not started")
+            if not connection.alive:
+                replacement = McpConnection(self.transport())
+                await connection.aclose()  # reap the dead one
+                await replacement.start()
+                self._connection = replacement
+                connection = replacement
+            return connection
+
+    async def aclose(self) -> None:
+        """Stop running Cells and the MCP server, and reap its process."""
+        for space in self._users.values():
+            await space.stop_sql_cells()  # SQL Cell queries are stopped and waited for
+        # AI Cell Runs before the connection (this also cancels a restart in progress), so none is left
+        # talking to a closing connection.
+        for space in self._users.values():
+            await space.stop_ai_cells()
+        async with self._restart_lock:
+            connection, self._connection = self._connection, None
+            if connection is not None:
+                await connection.aclose()
+
+    async def __aenter__(self) -> "Agent":
+        await self.start()
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        await self.aclose()
+
+    def server_settings(self) -> ServerSettings:
+        """What the MCP server is launched with."""
+        # Static settings only. The User and the row cap travel in each call's `_meta`, not here
+        # and not as tool arguments, so the LLM can't choose them.
+        return ServerSettings(
+            telemetry_db=self.config.telemetry_db,
+            users_dir=self.config.users_dir,
+            users=self.config.users,
+            query_timeout_s=self.config.query_timeout_s,
+            chart_row_cap=self.config.chart_row_cap,
+            telemetry_tables=tuple(self.semantic_layer.table_names()),
+            fixed_now_ms=self.config.fixed_now_ms,
+        )
+
+    def _server_params(self) -> StdioServerParameters:
+        return StdioServerParameters(
+            command=sys.executable, args=["-m", "flood_agent.mcp_server"], env=self.server_settings().to_env()
+        )
+
+    def transport(self) -> Transport:
+        """How each new MCP connection reaches its server: a stdio subprocess. The seam where tests run the server
+        in-process instead."""
+        return stdio_transport(self._server_params())

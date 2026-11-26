@@ -79,7 +79,7 @@ async def test_count_wrong_shape_is_sent_as_todays_exact_json(make_agent):
 
 
 async def test_unreadable_query_content_reaches_the_llm_only_as_a_generic_failure(make_agent, monkeypatch):
-    async def garbage(self, name, args, max_rows):
+    async def garbage(self, name, args, user, max_rows):
         return SimpleNamespace(content=[TextContent(type="text", text="oops 10.1.2.3")], isError=False)
 
     monkeypatch.setattr(McpConnection, "call_tool", garbage)
@@ -93,7 +93,7 @@ async def test_unreadable_query_content_reaches_the_llm_only_as_a_generic_failur
 async def test_unreadable_query_content_counts_toward_the_retry_limit(make_agent, monkeypatch):
     from flood_agent import ai_cell_run
 
-    async def garbage(self, name, args, max_rows):
+    async def garbage(self, name, args, user, max_rows):
         return SimpleNamespace(content=[TextContent(type="text", text="oops 10.1.2.3")], isError=False)
 
     monkeypatch.setattr(McpConnection, "call_tool", garbage)

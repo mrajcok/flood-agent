@@ -1,5 +1,8 @@
 """Wire constants shared by the MCP client (`mcp_connection`) and server (`mcp_server`)."""
 
+# Request `_meta` key carrying the User a call is made for. Required on every tool.
+META_USER = "flood_agent/user"
+
 # Request `_meta` key carrying the row cap the user chose for this turn. Required on run_query.
 META_MAX_RESULT_ROWS = "flood_agent/max_result_rows"
 

@@ -72,7 +72,7 @@ def test_a_count_display_never_expires(build_agent, web_client):
 def test_deleting_the_notebook_deletes_its_count_displays(build_agent, web_client):
     client, agent, _, nb, _ = ask(build_agent, web_client)
     client.post(f"/n/{nb}/delete", data={"tables": "delete_rt"}, follow_redirects=False)
-    with closing(sqlite3.connect(agent.config.app_db)) as con:
+    with closing(sqlite3.connect(agent.databases.app_db)) as con:
         assert con.execute("SELECT COUNT(*) FROM run_displays WHERE kind='count'").fetchone() == (0,)
 
 

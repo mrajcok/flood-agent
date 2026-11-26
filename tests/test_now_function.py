@@ -24,10 +24,10 @@ def test_a_fixed_now_can_be_set_for_reproducible_runs(query_runner, monkeypatch)
 
 
 def test_the_server_passes_a_fixed_now_to_its_process():
-    s = ServerSettings(telemetry_db="t", results_db="r", app_db=None, query_timeout_s=1, chart_row_cap=1, fixed_now_ms=42)  # pyright: ignore
+    s = ServerSettings(telemetry_db="t", users_dir="u", users=(), query_timeout_s=1, chart_row_cap=1, fixed_now_ms=42)  # pyright: ignore
     assert s.to_env()["FIXED_NOW_MS"] == "42"
     assert ServerSettings.from_env(s.to_env()).fixed_now_ms == 42
-    assert "FIXED_NOW_MS" not in ServerSettings(telemetry_db="t", results_db="r", app_db=None, query_timeout_s=1, chart_row_cap=1).to_env()  # pyright: ignore
+    assert "FIXED_NOW_MS" not in ServerSettings(telemetry_db="t", users_dir="u", users=(), query_timeout_s=1, chart_row_cap=1).to_env()  # pyright: ignore
 
 
 def test_the_system_prompt_has_no_time_in_it_so_it_can_be_cached():

@@ -41,12 +41,12 @@ def described(table):
 
 
 def stored_rows(agent, name):
-    with closing(sqlite3.connect(agent.config.results_db)) as con:
+    with closing(sqlite3.connect(agent.databases.results_db)) as con:
         return con.execute(f'SELECT * FROM "{name}"').fetchall()
 
 
 def tables_in_results_db(agent):
-    with closing(sqlite3.connect(agent.config.results_db)) as con:
+    with closing(sqlite3.connect(agent.databases.results_db)) as con:
         return sorted(n for (n,) in con.execute("SELECT name FROM sqlite_master WHERE type='table'"))
 
 

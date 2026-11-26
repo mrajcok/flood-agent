@@ -68,7 +68,7 @@ def test_the_real_client_factory_gives_the_stand_in_for_no_model_without_a_key()
 
 def test_the_app_starts_without_a_key_and_answers_no_model_prompts(tmp_path, telemetry_db, semantic_layer_path):
     settings = Settings(  # pyright: ignore[reportCallIssue]
-        users=TEST_USERS, session_cookie_secure=False, telemetry_db=telemetry_db, results_db=tmp_path / "results.db", app_db=tmp_path / "app.db",
+        users=TEST_USERS, session_cookie_secure=False, telemetry_db=telemetry_db, users_dir=tmp_path / "users", results_db=tmp_path / "results.db", app_db=tmp_path / "app.db",
         semantic_layer=semantic_layer_path,
     )
 

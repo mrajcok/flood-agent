@@ -1,7 +1,7 @@
 """Settings, layered from defaults.toml, then a .env file, then the real environment.
 
 The row cap is deliberately not a setting here: the Agent sends the AI Cell's with every MCP tool
-call (in request `_meta`).
+call (in request `_meta`, with the User the call is for).
 """
 
 import tomllib
@@ -67,9 +67,11 @@ class Settings(BaseSettings):
     telemetry_db: Path = Field(
         description="Read-only network telemetry (flow records, DNS response metadata and Diameter signaling). Create with: uv run python -m flood_agent.generator data/telemetry.db"
     )
-    results_db: Path = Field(description="Writable database holding Result Tables.")
+    results_db: Path = Field(
+        description="The single-user results database from before Users. Not used: the app deletes this file when it starts."
+    )
     app_db: Path = Field(
-        description="Notebooks, Cells, Runs, Displays and Traces, and the table registry."
+        description="The single-user app database from before Users. Not used: the app deletes this file when it starts."
     )
     semantic_layer: Path = Field(
         description="Hand-authored Semantic Layer."
@@ -85,7 +87,10 @@ class Settings(BaseSettings):
     max_llm_steps: int = Field(
         ge=1, description="LLM calls allowed per user turn (a backstop against a model looping on tool calls)."
     )
-    users_dir: Path = Field(description="Directory holding each User's own data.")
+    users_dir: Path = Field(
+        description="Directory holding each User's own databases, created on first use: NAME/app.db (Notebooks, Cells, Runs,\n"
+        "Displays, Traces and the table registry) and NAME/results.db (their tables)."
+    )
     session_idle_timeout_hours: float = Field(
         gt=0, description="A signed-in session ends after this many hours without a request."
     )
@@ -168,9 +173,9 @@ class Settings(BaseSettings):
     def agent_config(self) -> AgentConfig:
         return AgentConfig(
             telemetry_db=self.telemetry_db.resolve(),
-            results_db=self.results_db.resolve(),
+            users_dir=self.users_dir.resolve(),
+            users=tuple(parse_users(self.users.get_secret_value())) if self.users else (),
             semantic_layer=self.semantic_layer.resolve(),
-            app_db=self.app_db.resolve(),
             choices=self.model_choices(),
             result_ttl_ms=int(self.result_ttl_hours * 3600 * 1000),
             query_timeout_s=self.query_timeout_s,

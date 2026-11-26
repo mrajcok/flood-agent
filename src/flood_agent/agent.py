@@ -29,7 +29,7 @@ from flood_agent.queries import QueryRunner
 from flood_agent.semantic_layer import SemanticLayer
 from flood_agent.sql_cell_run import SqlCellRuns
 from flood_agent.table_replacement import RefreshInProgress, ReplacementFailed, TableReplacement
-from flood_agent.users import user_databases
+from flood_agent.users import UserDatabases, user_databases
 
 log = logging.getLogger("uvicorn.error")  # the app's terminal log
 
@@ -69,6 +69,7 @@ class Parts:
     """One User's parts, over that User's databases. Notebook storage (`store`) is for the Agent's startup cleanup only;
     everything else uses the Notebook module."""
 
+    databases: UserDatabases
     store: NotebookStore
     tables: Catalog
     replacement: TableReplacement
@@ -97,16 +98,16 @@ def build_parts(config: AgentConfig, user: str, semantic_layer: SemanticLayer, c
     ai_cells = AiCellRuns(user, store, tables, semantic_layer, client_for, connection, started, config.choices.spec_of,
                           config.max_llm_steps, config.max_failed_attempts, config.clock)
     notebooks = Notebooks(store, tables, sql_cells, ai_cells, config.choices)
-    return Parts(store, tables, replacement, sql_cells, ai_cells, notebooks, runner)
+    return Parts(databases, store, tables, replacement, sql_cells, ai_cells, notebooks, runner)
 
 
 class UserSpace:
     """What the Agent does for one User, over that User's parts alone: another User's Notebooks and tables are unknown
     here."""
 
-    def __init__(self, config: AgentConfig, user: str, semantic_layer: SemanticLayer, parts: Parts):
+    def __init__(self, config: AgentConfig, semantic_layer: SemanticLayer, parts: Parts):
         self.config, self.semantic_layer = config, semantic_layer
-        self.databases = user_databases(config.users_dir, user)
+        self.databases = parts.databases
         self.tables, self.replacement, self.notebooks = parts.tables, parts.replacement, parts.notebooks
         self.queries = parts.queries
         self._store, self._sql_cells, self._ai_cells = parts.store, parts.sql_cells, parts.ai_cells
@@ -221,7 +222,7 @@ class Agent:
         # `client_for` is looked up on each Run, so a client swapped in later is the one used.
         parts = build_parts(self.config, user, self.semantic_layer, lambda model: self.client_for(model),
                             self._ensure_connection, lambda: self._connection is not None)
-        return UserSpace(self.config, user, self.semantic_layer, parts)
+        return UserSpace(self.config, self.semantic_layer, parts)
 
     def for_user(self, user: str) -> UserSpace:
         """`user`'s parts. KeyError for a name that is not one of the configured Users."""

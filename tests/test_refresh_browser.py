@@ -1,6 +1,7 @@
 """The Refresh control on a table Display's name line: where it shows, its busy state, its error, the
 in-place update and the "as of" text (ADR 0006). The endpoint itself is tested in test_refresh_table.py."""
 
+import re
 import sqlite3
 import threading
 from contextlib import closing
@@ -37,8 +38,8 @@ def test_refresh_updates_the_table_in_place_and_moves_its_as_of_time(build_agent
     agent, clock, page, _ = ask_for_recent_table(build_agent, live_page, monkeypatch)
     line = page.locator(".display .table-name")
     expect(page.locator(".display tbody tr")).to_have_count(2)
+    expect(line.locator(".as-of")).to_have_text(re.compile(r"^as of \d"))  # filled in by the page's script
     first_as_of = line.locator(".as-of").inner_text()
-    assert first_as_of.startswith("as of ")
 
     monkeypatch.setenv("FIXED_NOW_MS", "1700000003600")
     clock.ms += HOUR
@@ -46,7 +47,7 @@ def test_refresh_updates_the_table_in_place_and_moves_its_as_of_time(build_agent
 
     expect(page.locator(".display tbody tr")).to_have_count(1)
     expect(page.get_by_text("(1 rows)")).to_be_visible()
-    assert line.locator(".as-of").inner_text() != first_as_of
+    expect(line.locator(".as-of")).not_to_have_text(first_as_of)
     expect(line.locator(".expires")).to_have_text("expires in 1d")
     expect(line.get_by_role("button", name="Refresh")).to_be_enabled()
 

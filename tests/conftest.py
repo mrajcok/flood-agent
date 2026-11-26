@@ -5,6 +5,7 @@ import copy
 import functools
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -268,6 +269,15 @@ def tool_call(name: str, call_id: str = "c1", **args) -> ToolCallChunk:
 
 def last_tool_result(messages) -> dict:
     return json.loads([m for m in messages if m["role"] == "tool"][-1]["content"])
+
+
+@pytest.fixture
+def app_log(caplog):
+    """`caplog`, also hearing the app's log, which uvicorn's configuration stops reaching the root."""
+    log = logging.getLogger("uvicorn.error")
+    log.addHandler(caplog.handler)
+    yield caplog
+    log.removeHandler(caplog.handler)
 
 
 @pytest.fixture

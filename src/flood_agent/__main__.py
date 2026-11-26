@@ -39,11 +39,14 @@ def log_config() -> dict:
 
 
 def remove_legacy_databases(*databases: Path) -> None:
-    """Delete the single-user databases from before Users, where they exist: nothing in them is migrated."""
-    for path in databases:
-        if path.is_file():
-            path.unlink()
-            logging.getLogger("uvicorn.error").warning("Removed the single-user database %s", path)
+    """Delete the single-user databases from before Users, and the files SQLite keeps beside them, where they exist:
+    nothing in them is migrated."""
+    for database in databases:
+        for suffix in ("", "-journal", "-wal", "-shm"):
+            path = database.with_name(database.name + suffix)
+            if path.is_file():
+                path.unlink()
+                logging.getLogger("uvicorn.error").warning("Removed the single-user database file %s", path)
 
 
 def build_app(settings: Settings | None = None, dev: bool = False):

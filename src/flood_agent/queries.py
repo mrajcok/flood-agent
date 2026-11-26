@@ -632,17 +632,23 @@ def _fetch_records(results_db: Path, name: str, limit: int) -> list[dict]:
 
 
 def _iter_all_rows(results_db: Path, name: str):
-    """Yield (columns, row iterator) for the whole Result Table (PSV export)."""
+    """(columns, row iterator) for the whole Result Table (PSV export). The query has started when this returns, so
+    the rows are those the table holds now, even if it is replaced before they have all been read."""
     all_cols = _result_table_columns(results_db, name)
     if all_cols is None:
         raise KeyError(name)
-    con = sqlite3.connect(f"file:{results_db}?mode=ro", uri=True)
+    # The rows are read from whichever threads the response is sent on, one at a time.
+    con = sqlite3.connect(f"file:{results_db}?mode=ro", uri=True, check_same_thread=False)
+    try:
+        cursor = con.execute(
+            f"SELECT {', '.join(table_names.quote(c) for c in all_cols)} FROM {table_names.quote(name)} ORDER BY rowid")
+    except BaseException:
+        con.close()
+        raise
 
     def gen():
         try:
-            yield from con.execute(
-                f"SELECT {', '.join(table_names.quote(c) for c in all_cols)} FROM {table_names.quote(name)} ORDER BY rowid"
-            )
+            yield from cursor
         finally:
             con.close()
 

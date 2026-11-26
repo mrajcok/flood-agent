@@ -120,6 +120,13 @@ text prefixed with `'`). Both are Agent endpoints, not LLM tools. The `/api/resu
 endpoints are not scoped per notebook by design: they need a signed-in User (see Users), and reach only that
 User's tables (another User's table is a 404).
 
+A restricted table (ADR 0008) cannot be downloaded plain. A Display's Download PSV first asks
+`GET /api/results/<rt>/download-options` whether the table is restricted: an unrestricted one downloads at once, a
+restricted one opens a dialog offering a masked file. `psv?mode=plain|masked` (plain by default) refuses, with a 403, a
+restricted table in plain mode, and one of unknown lineage in either. A masked file (`<rt>.masked.psv`) has a token in
+place of each Restricted Column value, equal for equal values within the file, under a secret made for that download
+and never kept. Each masked download is logged.
+
 Formatting comes from Semantic Layer column metadata (`tables.flows.columns.<col>`):
 `enum` -> names (proto), `enum_bits` -> flag letters (S, SA, FPA), `unit: bytes` -> decimal
 KB/MB/GB/TB, `unit: epoch ms ...` -> UTC timestamps (never local time). A Result Table

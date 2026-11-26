@@ -4,9 +4,8 @@ A thin layer over the signed-in User's parts of the Agent (`UserSpace`), chiefly
 endpoint is the Agent's internal data path to the browser; it is a plain HTTP route, never registered as an MCP tool.
 """
 
-import csv
-import io
 import json
+import logging
 import time
 from contextlib import aclosing, asynccontextmanager
 from dataclasses import dataclass, field, replace
@@ -37,6 +36,7 @@ from flood_agent.cell import (
 )
 from flood_agent.cell_kinds import AI, MARKDOWN, SQL
 from flood_agent.context_usage import context_usage
+from flood_agent.downloads import DownloadRefused, Mode
 from flood_agent.events import CountEvent, DisplayEvent, FlagEvent, LlmCallStarted, TextDelta, TraceLive, TurnEnd
 from flood_agent.lookup_tables import InvalidLookupTable
 from flood_agent.model_choices import NO_MODEL
@@ -47,6 +47,8 @@ from flood_agent.show_commands import SHOW_COMMANDS
 from flood_agent.sign_in import SignInConfig
 from flood_agent.table_replacement import RefreshInProgress
 from flood_agent.trace import short_model, split_system_prompt
+
+log = logging.getLogger("uvicorn.error")  # the app's terminal log
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 TEMPLATES.env.filters["split_system_prompt"] = split_system_prompt
@@ -141,7 +143,8 @@ def live_event_sse(ev, key: str, live: LiveCounter, refreshable_counts: bool = T
 def _table_display_urls(result_table: str) -> dict:
     """The URLs a table Display (display_table.html) loads and saves through."""
     base = f"/api/results/{result_table}"
-    return {"rows_url": f"{base}/rows", "psv_url": f"{base}/psv", "settings_url": f"{base}/settings"}
+    return {"rows_url": f"{base}/rows", "psv_url": f"{base}/psv", "options_url": f"{base}/download-options",
+            "settings_url": f"{base}/settings"}
 
 
 NEEDS_KEY = "needs OPENROUTER_API_KEY"
@@ -735,29 +738,32 @@ def create_app(agent: Agent, sign_in_config: SignInConfig, picker: list[PickerEn
         except ValueError as e:
             raise HTTPException(422, str(e))
 
-    @app.get("/api/results/{result_table}/psv")
-    def psv_download(space: Space, result_table: str):
+    @app.get("/api/results/{result_table}/download-options")
+    def download_options(space: Space, result_table: str):
+        """Whether the table is restricted, and by which columns, for the Display's download dialog."""
         try:
-            columns, rows_iter = space.iter_all_rows(result_table)
+            table = space.tables.for_download(result_table)
         except KeyError:
             raise HTTPException(404, "unknown result table")
+        return {"restricted": table.restricted, "restricted_columns": list(table.restricted_columns),
+                "lineage_unknown": table.lineage_unknown}
 
-        def body():
-            buf = io.StringIO()
-            w = csv.writer(buf, delimiter="|", lineterminator="\r\n")
-            w.writerow([_psv_safe(c) for c in columns])
-            for row in rows_iter:
-                w.writerow([_psv_safe(v) for v in row])
-                if buf.tell() > 65536:
-                    yield buf.getvalue()
-                    buf.seek(0)
-                    buf.truncate()
-            yield buf.getvalue()
-
+    @app.get("/api/results/{result_table}/psv")
+    def psv_download(request: Request, space: Space, result_table: str, mode: Mode = "plain"):
+        """The whole table as a PSV file, in `mode`. 403 with the reason if it may not be had that way."""
+        try:
+            download = space.download(result_table, mode)
+        except KeyError:
+            raise HTTPException(404, "unknown result table")
+        except DownloadRefused as e:
+            raise HTTPException(403, str(e))
+        if mode != "plain":  # who took what from a restricted table; the names are quoted, as the User chose them
+            log.info("download: user=%s table=%s mode=%s restricted_columns=%s", request.state.user,
+                     download.table.name, mode, json.dumps(download.table.restricted_columns))
         return StreamingResponse(
-            body(),
+            download.chunks,
             media_type="text/plain; charset=utf-8",
-            headers={"Content-Disposition": f'attachment; filename="{result_table}.psv"'},
+            headers={"Content-Disposition": f'attachment; filename="{download.filename}"'},
         )
 
     @app.get("/api/results/{result_table}/chart-rows")
@@ -786,12 +792,3 @@ def _parse_retention_days(raw: str) -> float:
         return float(raw)
     except ValueError:
         raise HTTPException(422, "retention must be a number of days")
-
-
-def _psv_safe(v):
-    """Neutralise spreadsheet formula injection in text cells; numbers pass through."""
-    if v is None:
-        return ""
-    if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r"):
-        return "'" + v
-    return v

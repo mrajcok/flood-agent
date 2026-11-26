@@ -17,7 +17,7 @@ from typing import Callable, Iterator
 
 from mcp import StdioServerParameters
 
-from flood_agent import queries
+from flood_agent import downloads, queries
 from flood_agent.ai_cell_run import AiCellRuns, ClientFactory, ConnectionProvider
 from flood_agent.catalog import Catalog, Table
 from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
@@ -202,9 +202,16 @@ class UserSpace:
             self.notebooks.update_count(display_id, result["count"], computed_at_ms)
             return {"value": result["count"], "computed_at_ms": computed_at_ms}
 
-    def iter_all_rows(self, result_table: str):
-        """Internal data path for PSV export of the full Result Table. Not an LLM tool."""
-        return self.queries.all_rows(self.tables[result_table].name)
+    def download(self, result_table: str, mode: downloads.Mode) -> downloads.Download:
+        """Internal data path for downloading a whole Result or Saved Table as PSV. Not an LLM tool.
+
+        KeyError if unknown, `TableExpired` if no longer live, `downloads.DownloadRefused` if the table may not be
+        had in `mode`."""
+        with self.replacement.settled():  # so the rows read are the ones the restriction checked here is about
+            table = self.tables.for_download(result_table)
+            downloads.check(table, mode)
+            columns, rows = self.queries.all_rows(table.name)
+        return downloads.psv_file(table, mode, columns, rows)
 
     def fetch_chart_rows(self, result_table: str) -> list[dict]:
         """Internal data path for the chart-rows endpoint (chart cap). Not an LLM tool."""

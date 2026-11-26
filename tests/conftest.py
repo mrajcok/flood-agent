@@ -412,9 +412,6 @@ class AgentForTest(Agent):
     def fetch_chart_rows(self, result_table: str) -> list[dict]:
         return self.user.fetch_chart_rows(result_table)
 
-    def iter_all_rows(self, result_table: str):
-        return self.user.iter_all_rows(result_table)
-
     def refresh_table(self, name: str) -> Table:
         return self.user.refresh_table(name)
 

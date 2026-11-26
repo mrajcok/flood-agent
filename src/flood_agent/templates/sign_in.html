@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in - CANOPY</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; display: flex; justify-content: center; padding: 15vh 1rem 0; }
+    form { display: flex; flex-direction: column; gap: .8rem; width: 18rem; }
+    label { display: flex; flex-direction: column; gap: .25rem; }
+    input, button { font: inherit; padding: .4rem .6rem; }
+    .error { color: #b00020; margin: 0; }
+  </style>
+</head>
+<body>
+  <form method="post" action="/sign-in">
+    <h1>CANOPY</h1>
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+    <label>User name <input type="text" name="name" value="{{ name }}" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus></label>
+    <label>Password <input type="password" name="password" autocomplete="current-password" required></label>
+    <input type="hidden" name="next" value="{{ next }}">
+    <button type="submit">Sign in</button>
+  </form>
+</body>
+</html>

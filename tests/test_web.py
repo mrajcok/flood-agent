@@ -1,8 +1,16 @@
 """Thin smoke test of the HTTP/SSE adapter over the Agent's notebook cell stream."""
 
 import pytest
-from conftest import ScriptedLLM, ask, last_tool_result, mcp_children, tool_call
-from fastapi.testclient import TestClient
+from conftest import (
+    ScriptedLLM,
+    ask,
+    last_tool_result,
+    mcp_children,
+    new_client,
+    sign_in,
+    sign_in_for_test,
+    tool_call,
+)
 
 from flood_agent.llm import TextChunk
 from flood_agent.web import create_app
@@ -40,8 +48,9 @@ def test_row_endpoint_rejects_unknown_or_malformed_names(build_agent, web_client
 def test_entering_the_client_starts_one_mcp_server_and_leaving_it_stops_it(build_agent):
     llm = ScriptedLLM([TextChunk("Hello.")])
     assert mcp_children() == []
-    with TestClient(create_app(build_agent(llm))) as client:
+    with new_client(create_app(build_agent(llm), sign_in_for_test())) as client:
         assert len(mcp_children()) == 1
+        sign_in(client)
         _, _, body = ask(client, "hi")
         assert "Hello." in body and "event: end" in body
         assert len(mcp_children()) == 1
@@ -53,7 +62,7 @@ def test_app_startup_fails_when_the_mcp_server_cannot_start(build_agent, monkeyp
     agent = build_agent(ScriptedLLM())
     monkeypatch.setattr("flood_agent.agent.sys.executable", "/nonexistent/python")
     with pytest.raises(Exception):
-        with TestClient(create_app(agent)):
+        with new_client(create_app(agent, sign_in_for_test())):
             pass
 
 

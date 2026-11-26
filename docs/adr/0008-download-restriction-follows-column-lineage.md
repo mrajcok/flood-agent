@@ -9,7 +9,7 @@ An output column is restricted when a restricted value reaches it through expres
 
 It **fails closed**. If lineage cannot be worked out (the query does not parse, a table or column does not resolve, a construct is not followed, such as a recursive CTE) and a table read has Restricted Columns, or the tables read cannot even be listed, the lineage is unknown: the query still runs, but its table can only be downloaded encrypted, and a query reading it counts every one of its columns as restricted. A query that reads no table with Restricted Columns needs no lineage, so unusual SQL over other tables is not penalised.
 
-**At download time** lineage is worked out again from the table's stored query against the current Semantic Layer and Table Catalog, and any columns found are added to the recorded ones, so a newly restricted column does not stay downloadable from older tables. It never makes a table less restricted than recorded.
+**At download time** lineage is worked out again from the table's stored query against the current Semantic Layer and Table Catalog, and any columns found are added to the recorded ones, so a newly restricted column does not stay downloadable from older tables. The live tables that query reads are worked out again in the same way, so this carries down a chain of Result Tables. It never makes a table less restricted than recorded.
 
 **Only downloads are guarded.** Displays, charts, Copy to Markdown, Refresh and what the LLM is told behave as before; the LLM is told which columns are restricted, and still sees no rows (ADR 0001).
 

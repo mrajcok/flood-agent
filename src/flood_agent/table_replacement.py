@@ -53,6 +53,14 @@ class TableReplacement:
         self.tables, self.runner = tables, runner
         self._busy: set[str] = set()  # tables being replaced now
         self._lock = threading.Lock()
+        self._swapping = threading.Lock()  # held while a table's catalog row and rows do not yet match
+
+    @contextmanager
+    def settled(self) -> Iterator[None]:
+        """While held, every table's catalog row describes the rows under its name: no replacement is between
+        writing the one and swapping in the other. For a reader that must have both from the same side."""
+        with self._swapping:
+            yield
 
     def replace(self, name: str, sql: str, max_rows: int, *, stop: threading.Event | None = None,
                 rerun: Rerun | None = None) -> Replaced:
@@ -79,18 +87,19 @@ class TableReplacement:
             if rerun:
                 after = dataclasses.replace(after, cell_id=rerun.owner.cell_id, run_id=rerun.owner.run_id,
                                             title=rerun.title, sql=sql, max_rows=max_rows)
-            try:
-                # The one catalog write is the step that can be undone, and it refuses a table a sweep expired.
-                undo = self.tables.record_replacement(after)
-                self.runner.swap(temp, before.name)
-            except BaseException:
+            with self._swapping:
                 try:
-                    if undo is not None:
-                        self.tables.restore_replacement(undo)
-                finally:
-                    self.runner.drop(temp)  # even if the restore fails
-                self.tables[before.name]  # a sweep dropped the table meanwhile: TableExpired, the plain answer
-                raise
+                    # The one catalog write is the step that can be undone, and it refuses a table a sweep expired.
+                    undo = self.tables.record_replacement(after)
+                    self.runner.swap(temp, before.name)
+                except BaseException:
+                    try:
+                        if undo is not None:
+                            self.tables.restore_replacement(undo)
+                    finally:
+                        self.runner.drop(temp)  # even if the restore fails
+                    self.tables[before.name]  # a sweep dropped the table meanwhile: TableExpired, the plain answer
+                    raise
             return Replaced(self.tables[before.name], result["row_count"])
 
     @contextmanager

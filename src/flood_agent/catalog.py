@@ -10,12 +10,12 @@ import json
 import sqlite3
 import time
 from contextlib import closing
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Iterable, Literal, Mapping
 
-from flood_agent import lookup_tables, table_names
+from flood_agent import lineage, lookup_tables, table_names
 from flood_agent.lineage import TableSchema
 from flood_agent.queries import QueryRunner
 
@@ -293,6 +293,32 @@ class CatalogView:
         if not self._is_live(row, self._now()):
             raise TableExpired(f"Result Table {name} has expired.")
         return self._table(row)
+
+    def for_download(self, name: str) -> Table:
+        """The live Result or Saved Table `name` as a download treats it (ADR 0008): lineage is worked out again from
+        its stored query, against the Telemetry tables' schemas and this Catalog as they are now, and any restricted
+        columns found are added to the recorded ones, never taken from them. KeyError or `TableExpired` as for
+        `self[name]`."""
+        return self._reanalysed(self[name], {})
+
+    def _reanalysed(self, table: Table, done: dict[str, Table]) -> Table:
+        """`for_download` of `table`. The live tables its query reads are reanalysed in turn, so a newly restricted
+        column carries down a chain of them; `done` holds each one reached so far."""
+        if table.name in done:
+            return done[table.name]
+        done[table.name] = table  # as recorded, for a query that (after a replacement) leads back to its own table
+        if table.sql is None:
+            return table
+
+        def schema(source: str) -> TableSchema | None:
+            return self._reanalysed(self[source], done).schema if source in self else self.schema(source)
+
+        outcome = lineage.analyse(table.sql, schema, [c["name"] for c in table.columns])
+        if isinstance(outcome, lineage.Known):
+            restricted = {*table.restricted_columns, *outcome.restricted}
+            done[table.name] = replace(table, restricted_columns=tuple(
+                c["name"] for c in table.columns if c["name"] in restricted))
+        return done[table.name]
 
     def __contains__(self, name: object) -> bool:
         if not isinstance(name, str):

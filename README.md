@@ -64,6 +64,11 @@ and `defaults.toml`; a test fails if it is stale. After changing either, regener
 uv run python -m flood_agent.config > .env.example
 ```
 
+## Users in Ocient
+
+Setting up a User in production Ocient (a DBA SQL script), the design for the future Ocient query
+runner and the checks to make on a real cluster are in [`docs/ocient/`](docs/ocient/README.md).
+
 ## Test
 
 ```

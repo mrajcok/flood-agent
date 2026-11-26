@@ -217,7 +217,8 @@ async def test_an_unregistered_rt_table_is_never_counted_as_a_result(telemetry_d
     import sqlite3
 
     def factory(model, question_id):
-        db = tmp_path / "work" / "fake_model" / Q.id / "results.db"
+        db = tmp_path / "work" / "fake_model" / Q.id / "eval" / "results.db"
+        db.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(db) as con:  # the right answer, but no registry row: an orphan
             con.execute("CREATE TABLE rt_20200101_000000 AS SELECT 0 AS dport, 0 AS total")
         return ScriptedLLM(query("SELECT 1 AS dport, 1 AS total", "a"), DONE)

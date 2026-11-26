@@ -5,7 +5,14 @@ import sqlite3
 from contextlib import closing
 
 import pytest
-from conftest import ScriptedLLM, all_telemetry_values, collect, last_tool_result, tool_call
+from conftest import (
+    ScriptedLLM,
+    all_telemetry_values,
+    collect,
+    databases_for_test,
+    last_tool_result,
+    tool_call,
+)
 
 from flood_agent import queries
 from flood_agent.events import TextDelta, TraceEntry, TurnEnd
@@ -156,7 +163,7 @@ async def test_row_cap_keeps_the_first_rows_and_flags_the_table_truncated(make_a
     assert meta["success"] is True
     assert meta["row_count"] == 2 and meta["truncated_to"] == 2
     assert "truncated" in meta["note"].lower()
-    con = sqlite3.connect(tmp_path / "results.db")
+    con = sqlite3.connect(databases_for_test(tmp_path).results_db)
     assert con.execute(f"SELECT COUNT(*) FROM {meta['result_table']}").fetchone()[0] == 2
 
 
@@ -190,7 +197,7 @@ def test_telemetry_database_is_unwritable_even_if_validation_bypassed(
     """Each guard on the query connection refuses on its own: the authorizer says "not authorized" before the
     database is touched, and with the authorizer removed the read-only open still refuses every write."""
     before = all_telemetry_values(telemetry_db)
-    with closing(queries._open_connection(telemetry_db, tmp_path / "results.db")) as con:
+    with closing(queries._open_connection(telemetry_db, databases_for_test(tmp_path).results_db)) as con:
         if not authorized:
             con.set_authorizer(None)
         for statement in statements:

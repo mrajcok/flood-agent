@@ -29,7 +29,7 @@ def describe(name, call_id="c1"):
 
 def stored(agent, table):
     """Rows of a Lookup Table, read straight from the results database (its cells never reach the LLM)."""
-    con = sqlite3.connect(agent.config.results_db)
+    con = sqlite3.connect(agent.databases.results_db)
     try:
         return [list(r) for r in con.execute(f'SELECT * FROM "{table}" ORDER BY rowid')]
     finally:
@@ -154,7 +154,7 @@ def rejected(client, agent, name, paste, message, table="lookup_t", **kw):
     r = add(client, name, paste, **kw)
     assert r.status_code == 422
     assert message in r.json()["detail"]
-    con = sqlite3.connect(agent.config.results_db)
+    con = sqlite3.connect(agent.databases.results_db)
     try:
         found = con.execute("SELECT 1 FROM sqlite_master WHERE name=?", (table,)).fetchone()
     except sqlite3.Error:
@@ -251,7 +251,7 @@ def test_overwrite_cannot_replace_a_result_table_or_other_table(build_agent, web
     agent = build_agent(llm)
     client = web_client(agent)
     run_cell(client)
-    con = sqlite3.connect(agent.config.results_db)
+    con = sqlite3.connect(agent.databases.results_db)
     names = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")]
     con.execute("CREATE TABLE lookup_other (x TEXT)")
     con.execute("INSERT INTO lookup_other VALUES ('keep')")
@@ -317,11 +317,11 @@ def test_a_failure_while_creating_leaves_no_half_made_table(build_agent, web_cli
                         lambda text: lookup_tables.ParsedRows(["x"], [["ok"], [object()]]))
     with pytest.raises(sqlite3.Error):
         add(client, "fresh", "ignored")
-    assert not agent.config.results_db.exists() or not stored_tables(agent)
+    assert not agent.databases.results_db.exists() or not stored_tables(agent)
 
 
 def stored_tables(agent):
-    con = sqlite3.connect(agent.config.results_db)
+    con = sqlite3.connect(agent.databases.results_db)
     try:
         return [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE name LIKE 'lookup_%'")]
     finally:
@@ -352,7 +352,7 @@ def test_a_lookup_table_is_not_served_by_the_result_table_endpoints(build_agent,
     client = web_client(agent)
     add(client, "hosts", "ip\n1.1.1.1")
     # A name that merely looks like a generated one, and is not registered, is not served either.
-    con = sqlite3.connect(agent.config.results_db)
+    con = sqlite3.connect(agent.databases.results_db)
     con.execute("CREATE TABLE lookup_x_20250101_120000 (a TEXT)")
     con.execute("CREATE TABLE rt_20250101_120000 (a TEXT)")
     con.commit()

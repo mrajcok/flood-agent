@@ -173,8 +173,8 @@ def test_real_models_are_refused_without_a_key_and_refuses_real_models_until_one
     tmp_path, telemetry_db, semantic_layer_path
 ):
     settings = Settings(  # pyright: ignore[reportCallIssue]
-        users=TEST_USERS, session_cookie_secure=False, telemetry_db=telemetry_db, results_db=tmp_path / "results.db",
-        app_db=tmp_path / "app.db", semantic_layer=semantic_layer_path,
+        users=TEST_USERS, session_cookie_secure=False, telemetry_db=telemetry_db, users_dir=tmp_path / "users",
+        results_db=tmp_path / "results.db", app_db=tmp_path / "app.db", semantic_layer=semantic_layer_path,
     )
 
     with new_client(build_app(settings)) as client:

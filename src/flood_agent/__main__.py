@@ -5,6 +5,9 @@ environment, in that order of increasing priority. See .env.example for every se
 """
 
 import copy
+import logging
+import logging.config
+from pathlib import Path
 
 import uvicorn
 from uvicorn.config import LOGGING_CONFIG
@@ -35,17 +38,25 @@ def log_config() -> dict:
     return config
 
 
+def remove_legacy_databases(*databases: Path) -> None:
+    """Delete the single-user databases from before Users, where they exist: nothing in them is migrated."""
+    for path in databases:
+        if path.is_file():
+            path.unlink()
+            logging.getLogger("uvicorn.error").warning("Removed the single-user database %s", path)
+
+
 def build_app(settings: Settings | None = None, dev: bool = False):
     settings = settings or Settings()  # pyright: ignore[reportCallIssue]  # pydantic-settings fills fields from env/TOML
     sign_in = settings.sign_in_config(dev)  # first: without a User, nothing is made and the app does not start
-    config = settings.agent_config()
-    config.results_db.parent.mkdir(parents=True, exist_ok=True)
+    remove_legacy_databases(settings.app_db, settings.results_db)
     picker = picker_entries(load_canned_prompts())
-    return create_app(Agent(config, settings.client_factory()), sign_in, picker=picker, dev=dev)
+    return create_app(Agent(settings.agent_config(), settings.client_factory()), sign_in, picker=picker, dev=dev)
 
 
 def main(dev: bool = False) -> None:
     settings = Settings()  # pyright: ignore[reportCallIssue]  # pydantic-settings fills fields from env/TOML
+    logging.config.dictConfig(log_config())  # now, so that what startup logs is formatted like the rest
     uvicorn.run(build_app(settings, dev=dev), host=settings.host, port=settings.port, log_config=log_config())
 
 

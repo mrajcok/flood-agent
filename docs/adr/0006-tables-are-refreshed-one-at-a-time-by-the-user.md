@@ -16,5 +16,5 @@ A Result Table, Saved Table or count can be refreshed: its stored query is run a
 - A table's Retention restarts when it is refreshed. A table that has already expired cannot be refreshed; the user asks again.
 - The LLM is not told about a refresh (ADR 0001), so a refresh costs no tokens and leaves the cached system prompt alone. Numbers the LLM wrote earlier stay as written.
 - The query and its row cap are kept with the table when it is created, so tables created before this change have no refresh control.
-- Any Notebook that shows a table can refresh it (ADR 0003). The one shared table changes for everyone; ownership for lifecycle stays with its creator.
+- Any Notebook that shows a table can refresh it (ADR 0003). The one table changes in every Notebook of its User that shows it; ownership for lifecycle stays with its creator.
 - A count becomes a displayed object (a Count Display) so it has something to refresh. It is saved with its Run and has no Retention.

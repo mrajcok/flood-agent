@@ -1,13 +1,22 @@
-"""Only the AI Cell's row cap travels in MCP request _meta: no exchange id, and nothing in the launch environment or a tool schema."""
+"""The AI Cell's row cap travels in MCP request _meta, beside the User: never as an argument of a tool."""
 
 import json
 
-from conftest import ScriptedLLM, TextChunk, collect, in_process_transport, last_tool_result, tool_call
+from conftest import (
+    TEST_USER,
+    ScriptedLLM,
+    TextChunk,
+    collect,
+    in_process_transport,
+    last_tool_result,
+    tool_call,
+)
 from mcp import ClientSession
 
 from flood_agent.tool_outcome import decode, project
 
 CAP_KEY = "flood_agent/max_result_rows"
+USER = {"flood_agent/user": TEST_USER}
 
 
 async def _raw_calls(agent, calls):
@@ -16,7 +25,7 @@ async def _raw_calls(agent, calls):
     async with in_process_transport(agent.server_settings()) as (r, w), ClientSession(r, w) as session:
         await session.initialize()
         for name, args, meta in calls:
-            res = await session.call_tool(name, args, meta=meta)
+            res = await session.call_tool(name, args, meta=USER | meta)
             parsed = json.loads(res.content[0].text)
             # A codec tool returns an outcome; what the LLM would be sent is its projection.
             out.append(json.loads(project(decode(res.content[0].text))) if "outcome" in parsed else parsed)
@@ -53,5 +62,5 @@ async def test_run_query_without_a_row_cap_in_meta_is_refused(make_agent):
     async with in_process_transport(agent.server_settings()) as (r, w), ClientSession(r, w) as session:
         await session.initialize()
         for meta in ({}, {CAP_KEY: 0}, {CAP_KEY: "10"}):
-            res = await session.call_tool("run_query", {"sql": "SELECT 1", "title": "t"}, meta=meta)
+            res = await session.call_tool("run_query", {"sql": "SELECT 1", "title": "t"}, meta=USER | meta)
             assert res.isError

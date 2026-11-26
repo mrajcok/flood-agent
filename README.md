@@ -45,11 +45,15 @@ Put the entries in `.env`, separated by commas: `USERS=alice:<hash>,bob:<hash>`.
 followed by up to 30 lower-case letters, digits or underscores. (A hash holds `$` signs, which `.env` keeps as
 they are; to set `USERS` in a shell instead, put it in single quotes.)
 
-Each User has their own Notebooks, Result Tables, Saved Tables and Lookup Tables, which no other User can see; all
+Each User has their own Notebooks, Result Tables, Saved Tables, Lookup Tables and Public Key, which no other User can see; all
 Users read the same Telemetry Database. A User's databases, `app.db` and `results.db`, are in `USERS_DIR/<name>/`
 (default `data/users/`) and are created on first use. The app deletes the single-user databases of earlier versions
 (`APP_DB` and `RESULTS_DB`, default `data/app.db` and `data/results.db`) when it starts: nothing in them is migrated.
 Taking a name out of `USERS` leaves that User's directory in place.
+
+On the **Settings** page (linked next to Sign out) a User can keep one public key, which restricted tables will be
+encrypted for: an age key (`age1…`), or an OpenSSH `ssh-ed25519` or `ssh-rsa` (2048 to 4096 bits) public key,
+pasted or uploaded as a `.pub` file. Private keys are refused.
 
 A session ends after `SESSION_IDLE_TIMEOUT_HOURS` without a request, on Sign out, or when the app restarts.
 Sessions are held in memory, so run one process. The session cookie is Secure, so over a network serve the app
@@ -156,6 +160,7 @@ charts with a time x axis, Ctrl+scroll to zoom that axis, drag to pan and double
 - `web.py` + `templates/` - FastAPI, Jinja, htmx (SSE), Alpine table and chart components.
 - `users.py` + `sign_in.py` - the configured Users, their password hashes and where their databases are; the sign-in page, sessions and the
   check every request passes.
+- `public_keys.py` - a User's one Public Key: what an upload may be, and where it is kept.
 - `semantic_layer.yaml` - hand-authored Semantic Layer rendered into the system prompt.
 
 ## Eval set and runner (on demand, not CI)

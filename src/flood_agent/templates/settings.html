@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Settings - CANOPY</title>
+  {% include "_head.html" %}
+  <style>
+    #settings { display: block; flex: 1; min-height: 0; overflow: auto; max-width: 42rem; padding-bottom: 1rem; }
+    #settings dl { display: grid; grid-template-columns: max-content 1fr; gap: .3rem 1rem; }
+    #settings dd { margin: 0; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    #settings form.key-form { display: flex; flex-direction: column; align-items: flex-start; gap: .75rem; }
+    #settings textarea { width: 100%; box-sizing: border-box; font-family: monospace; }
+    #settings .error { color: #b3261e; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <h1 title="Cyber AI Notebook for Operations, Peering, and telemetrY"><span class="initial">C</span><span class="rest">ANOPY</span></h1>
+    <div class="controls"><a href="/">Back to Notebooks</a>{% include "_signed_in.html" %}</div>
+  </div>
+  <main id="settings">
+    <h2>Settings</h2>
+    <h3>Public Key</h3>
+    <p>Restricted tables can be downloaded encrypted for your Public Key.</p>
+    {% if key %}
+    <dl>
+      <dt>Type</dt> <dd>{{ key.type }}</dd>
+      <dt>Fingerprint</dt> <dd>{{ key.fingerprint }}</dd>
+      <dt>Comment</dt> <dd>{{ key.comment or "(none)" }}</dd>
+    </dl>
+    <button type="button" class="toggle-all" onclick="document.getElementById('remove-key-dialog').showModal()">Remove</button>
+    <dialog id="remove-key-dialog" aria-labelledby="remove-key-title">
+      <form method="post" action="/settings/public-key/remove">
+        <h3 id="remove-key-title">Remove your public key?</h3>
+        <p>Encrypted downloads will be unavailable until you add a key again.</p>
+        <div class="actions"><button class="danger">Remove</button> <button formmethod="dialog">Cancel</button></div>
+      </form>
+    </dialog>
+    {% else %}
+    <p>No public key on file</p>
+    {% endif %}
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+    <form class="key-form" method="post" action="/settings/public-key" enctype="multipart/form-data">
+      <label for="public-key">Paste a public key</label>
+      <textarea id="public-key" name="key" rows="4" spellcheck="false" placeholder="age1&hellip;, ssh-ed25519 &hellip; or ssh-rsa &hellip;"></textarea>
+      <label>Or upload a <code>.pub</code> file <input type="file" name="file" accept=".pub,text/plain"></label>
+      <button type="submit" class="toggle-all">{{ "Replace key" if key else "Add key" }}</button>
+    </form>
+  </main>
+</body>
+</html>

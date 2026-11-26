@@ -14,7 +14,7 @@ from html import escape
 from pathlib import Path
 from typing import Annotated, AsyncGenerator, Literal, cast
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -41,6 +41,7 @@ from flood_agent.events import CountEvent, DisplayEvent, FlagEvent, LlmCallStart
 from flood_agent.lookup_tables import InvalidLookupTable
 from flood_agent.model_choices import NO_MODEL
 from flood_agent.notebook import COUNT_KIND, NotebookBusy, PageCell, TablesChoice, UnknownCell, UnknownNotebook
+from flood_agent.public_keys import KeyRefused, parse_public_key
 from flood_agent.queries import InvalidSort, QueryFailed, QueryRejected
 from flood_agent.show_commands import SHOW_COMMANDS
 from flood_agent.sign_in import SignInConfig
@@ -51,6 +52,7 @@ TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 TEMPLATES.env.filters["split_system_prompt"] = split_system_prompt
 TEMPLATES.env.filters["short_model"] = short_model
 STATIC_DIR = Path(__file__).parent / "static"
+KEY_FILE_READ_LIMIT = 1_048_576  # bytes of an uploaded key file that are looked at, a private key in it included
 
 
 def static_version(name: str) -> int:
@@ -552,6 +554,33 @@ def create_app(agent: Agent, sign_in_config: SignInConfig, picker: list[PickerEn
     async def stop_cell(space: Space, notebook_id: str, cell_id: str):  # async: it touches the event loop's tasks
         """Stop a running cell now; its stream still ends. Does nothing if it already ended."""
         space.notebooks.stop_cell(notebook_id, cell_id)
+
+    # --- Settings --------------------------------------------------------------------------------------
+
+    def settings_page(request: Request, space: UserSpace, error: str = ""):
+        return TEMPLATES.TemplateResponse(
+            request, "settings.html", {"user": request.state.user, "key": space.public_keys.get(), "error": error},
+            422 if error else 200)
+
+    @app.get("/settings", response_class=HTMLResponse)
+    def open_settings(space: Space, request: Request):
+        return settings_page(request, space)
+
+    @app.post("/settings/public-key")
+    def save_public_key(space: Space, request: Request, key: str = Form(""), file: UploadFile | None = File(None)):
+        """Keep the one key pasted or uploaded, in place of any on file; the page again, with why not, otherwise."""
+        if file is not None:
+            key += "\n" + file.file.read(KEY_FILE_READ_LIMIT).decode("utf-8-sig", errors="replace")
+        try:
+            space.public_keys.save(parse_public_key(key))
+        except KeyRefused as e:
+            return settings_page(request, space, str(e))
+        return RedirectResponse("/settings", status_code=303)
+
+    @app.post("/settings/public-key/remove")
+    def remove_public_key(space: Space):
+        space.public_keys.remove()
+        return RedirectResponse("/settings", status_code=303)
 
     if dev:
         @app.post("/api/dev/shift-timestamps")

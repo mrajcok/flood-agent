@@ -205,13 +205,15 @@ class UserSpace:
     def download(self, result_table: str, mode: downloads.Mode) -> downloads.Download:
         """Internal data path for downloading a whole Result or Saved Table as PSV. Not an LLM tool.
 
-        KeyError if unknown, `TableExpired` if no longer live, `downloads.DownloadRefused` if the table may not be
-        had in `mode`."""
+        An encrypted one is for this User's Public Key. KeyError if unknown, `TableExpired` if no longer live,
+        `downloads.DownloadRefused` if the table may not be had in `mode`, `downloads.NoPublicKey` if there is no key
+        to encrypt for."""
+        key = self.public_keys.get() if mode == "encrypted" else None
         with self.replacement.settled():  # so the rows read are the ones the restriction checked here is about
             table = self.tables.for_download(result_table)
-            downloads.check(table, mode)
+            downloads.check(table, mode, key)
             columns, rows = self.queries.all_rows(table.name)
-        return downloads.psv_file(table, mode, columns, rows)
+        return downloads.psv_file(table, mode, columns, rows, key)  # encrypting holds no replacement up
 
     def fetch_chart_rows(self, result_table: str) -> list[dict]:
         """Internal data path for the chart-rows endpoint (chart cap). Not an LLM tool."""

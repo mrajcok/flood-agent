@@ -45,6 +45,11 @@ class PublicKey:
     fingerprint: str
     comment: str  # "" when the key has none
 
+    def recipient(self):
+        """The age recipient that encrypts for this key."""
+        kind = x25519 if self.type == "age" else ssh
+        return kind.Recipient.from_str(self.key_line)
+
 
 def parse_public_key(text: str) -> PublicKey:
     """The one Public Key `text` holds; `KeyRefused` for anything else, a private key above all."""

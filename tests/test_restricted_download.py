@@ -4,15 +4,20 @@ and what a masked file reads back to (HTTP seam, ADR 0008)."""
 import csv
 import io
 import re
+import subprocess
 import threading
+import tracemalloc
 from pathlib import Path
 
+import pyrage
 import pytest
 import yaml
 from conftest import ScriptedLLM, add_sql_cell
+from test_public_key import ED25519, ED25519_FINGERPRINT
 
 from flood_agent.catalog import Table
 from flood_agent.downloads import psv_file
+from flood_agent.public_keys import parse_public_key
 from flood_agent.table_replacement import Rerun
 
 pytestmark = pytest.mark.generated_data
@@ -63,7 +68,13 @@ def options(client, table: str) -> dict:
     (UNKNOWN, {"restricted": True, "restricted_columns": [], "lineage_unknown": True}),
 ])
 def test_the_options_say_whether_a_table_is_restricted_and_by_which_columns(client, agent, sql, expected):
-    assert options(client, make_table(client, agent, sql)) == expected
+    assert options(client, make_table(client, agent, sql)) == {**expected, "public_key": None}
+
+
+def test_the_options_name_the_type_and_fingerprint_of_the_public_key_on_file(client, agent):
+    table = make_table(client, agent, RESTRICTED)
+    add_key(client, ED25519)
+    assert options(client, table)["public_key"] == {"type": "ssh-ed25519", "fingerprint": ED25519_FINGERPRINT}
 
 
 def test_the_options_of_an_unknown_table_are_not_found(client):
@@ -145,6 +156,55 @@ def test_a_second_masked_download_gives_different_tokens(client, agent):
     assert [row[2] for row in first] == [row[2] for row in second]
 
 
+def add_key(client, public_key: str) -> None:
+    """Put `public_key` on file, as the Settings page does."""
+    response = client.post("/settings/public-key", data={"key": public_key}, follow_redirects=False)
+    assert response.status_code == 303
+
+
+def test_an_encrypted_file_decrypts_to_exactly_the_plain_one(client, agent):
+    identity = pyrage.x25519.Identity.generate()
+    add_key(client, str(identity.to_public()))
+    table = make_table(client, agent, UNRESTRICTED)
+    plain = psv(client, table).content
+    response = psv(client, table, mode="encrypted")
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "application/octet-stream"
+    assert response.headers["content-disposition"] == f'attachment; filename="{table}.psv.age"'
+    assert response.content.startswith(b"age-encryption.org/v1\n")  # binary format, not armored
+    assert pyrage.decrypt(response.content, [identity]) == plain
+
+
+@pytest.mark.parametrize("key_type", ["ed25519", "rsa"])
+def test_an_encrypted_file_for_an_ssh_key_decrypts_with_that_ssh_identity(client, agent, tmp_path, key_type):
+    private = tmp_path / "id"
+    subprocess.run(["ssh-keygen", "-q", "-t", key_type, "-b", "2048", "-N", "", "-C", "me@laptop", "-f", private],
+                   check=True)
+    add_key(client, private.with_suffix(".pub").read_text())
+    table = make_table(client, agent, RESTRICTED)
+    response = psv(client, table, mode="encrypted")
+    assert response.status_code == 200, response.text
+    plain = pyrage.decrypt(response.content, [pyrage.ssh.Identity.from_buffer(private.read_bytes())])
+    header, *rows = csv.reader(io.StringIO(plain.decode(), newline=""), delimiter="|")
+    assert header == ["imsi", "apn"] and rows and all(re.fullmatch("[0-9]+", row[0]) for row in rows)  # real values
+
+
+def test_an_encrypted_download_with_no_public_key_is_refused(client, agent):
+    for sql in (UNRESTRICTED, RESTRICTED):
+        response = psv(client, make_table(client, agent, sql), mode="encrypted")
+        assert response.status_code == 409 and response.json()["detail"] == "No public key on file"
+    assert psv(client, "rt_nope", mode="encrypted").status_code == 404
+
+
+def test_a_table_of_unknown_lineage_downloads_encrypted(client, agent):
+    identity = pyrage.x25519.Identity.generate()
+    add_key(client, str(identity.to_public()))
+    table = make_table(client, agent, UNKNOWN)
+    response = psv(client, table, mode="encrypted")
+    assert response.status_code == 200, response.text
+    assert pyrage.decrypt(response.content, [identity]).startswith(b"apn|text\r\n")
+
+
 def restrict_apn(path: Path) -> None:
     """Mark `diameter.apn` restricted too, as a later change to the Semantic Layer would."""
     layer = yaml.safe_load(path.read_text())
@@ -192,7 +252,7 @@ def test_a_table_never_downloads_less_restricted_than_it_was_recorded(build_agen
     assert options(client, unknown)["lineage_unknown"]
 
 
-def test_each_masked_download_is_logged_and_nothing_else_is(client, agent, app_log):
+def test_each_masked_or_encrypted_download_is_logged_and_nothing_else_is(client, agent, app_log):
     restricted = make_table(client, agent, "SELECT imsi, msisdn AS phone, apn FROM diameter")
     unrestricted = make_table(client, agent, UNRESTRICTED)
     app_log.set_level("INFO", "uvicorn.error")
@@ -204,10 +264,17 @@ def test_each_masked_download_is_logged_and_nothing_else_is(client, agent, app_l
 
     psv(client, unrestricted)
     psv(client, restricted)  # refused
+    psv(client, restricted, mode="encrypted")  # refused: no key yet
     assert logged() == []
 
     psv(client, restricted, mode="masked")
-    assert logged() == [f'download: user=tester table={restricted} mode=masked restricted_columns=["imsi", "phone"]']
+    masked = f'download: user=tester table={restricted} mode=masked restricted_columns=["imsi", "phone"]'
+    assert logged() == [masked]
+
+    add_key(client, ED25519)
+    psv(client, restricted, mode="encrypted")
+    assert logged() == [masked, f'download: user=tester table={restricted} mode=encrypted '
+                                f'restricted_columns=["imsi", "phone"] key={ED25519_FINGERPRINT}']
 
 
 def test_a_large_masked_file_is_made_as_it_is_sent():
@@ -223,6 +290,24 @@ def test_a_large_masked_file_is_made_as_it_is_sent():
     chunks = psv_file(table, "masked", ["imsi", "apn"], rows()).chunks
     assert len(next(chunks)) < 100_000 and read < 5_000  # the first piece, from the first few thousand rows
     assert sum(chunk.count("\n") for chunk in chunks) > 90_000
+
+
+def test_a_large_encrypted_file_is_never_held_in_memory(tmp_path):
+    identity = pyrage.x25519.Identity.generate()
+    rows = ((f"{n:08}" + "x" * 1000,) for n in range(20_000))  # 20 MB, a row at a time
+    table = Table("subscribers", "saved", "", [], "", None, 1, 1, restricted_columns=("imsi",))
+    sent = tmp_path / "subscribers.psv.age"
+    tracemalloc.start()
+    try:
+        with sent.open("wb") as file:
+            for piece in psv_file(table, "encrypted", ["imsi"], rows,
+                                  parse_public_key(str(identity.to_public()))).chunks:
+                file.write(piece)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < 5_000_000
+    assert len(pyrage.decrypt(sent.read_bytes(), [identity])) == len("imsi\r\n") + 20_000 * 1010
 
 
 def rerun(agent, table: str, sql: str) -> None:

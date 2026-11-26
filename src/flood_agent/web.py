@@ -36,7 +36,7 @@ from flood_agent.cell import (
 )
 from flood_agent.cell_kinds import AI, MARKDOWN, SQL
 from flood_agent.context_usage import context_usage
-from flood_agent.downloads import DownloadRefused, Mode
+from flood_agent.downloads import DownloadRefused, Mode, NoPublicKey
 from flood_agent.events import CountEvent, DisplayEvent, FlagEvent, LlmCallStarted, TextDelta, TraceLive, TurnEnd
 from flood_agent.lookup_tables import InvalidLookupTable
 from flood_agent.model_choices import NO_MODEL
@@ -740,29 +740,36 @@ def create_app(agent: Agent, sign_in_config: SignInConfig, picker: list[PickerEn
 
     @app.get("/api/results/{result_table}/download-options")
     def download_options(space: Space, result_table: str):
-        """Whether the table is restricted, and by which columns, for the Display's download dialog."""
+        """Whether the table is restricted, and by which columns, and the User's Public Key, for the Display's download
+        dialog."""
         try:
             table = space.tables.for_download(result_table)
         except KeyError:
             raise HTTPException(404, "unknown result table")
+        key = space.public_keys.get()
         return {"restricted": table.restricted, "restricted_columns": list(table.restricted_columns),
-                "lineage_unknown": table.lineage_unknown}
+                "lineage_unknown": table.lineage_unknown,
+                "public_key": None if key is None else {"type": key.type, "fingerprint": key.fingerprint}}
 
     @app.get("/api/results/{result_table}/psv")
     def psv_download(request: Request, space: Space, result_table: str, mode: Mode = "plain"):
-        """The whole table as a PSV file, in `mode`. 403 with the reason if it may not be had that way."""
+        """The whole table as a PSV file, in `mode`. 403 with the reason if it may not be had that way, 409 for an
+        encrypted one with no Public Key on file."""
         try:
             download = space.download(result_table, mode)
         except KeyError:
             raise HTTPException(404, "unknown result table")
         except DownloadRefused as e:
             raise HTTPException(403, str(e))
+        except NoPublicKey as e:
+            raise HTTPException(409, str(e))
         if mode != "plain":  # who took what from a restricted table; the names are quoted, as the User chose them
-            log.info("download: user=%s table=%s mode=%s restricted_columns=%s", request.state.user,
-                     download.table.name, mode, json.dumps(download.table.restricted_columns))
+            log.info("download: user=%s table=%s mode=%s restricted_columns=%s%s", request.state.user,
+                     download.table.name, mode, json.dumps(download.table.restricted_columns),
+                     f" key={download.key.fingerprint}" if download.key else "")
         return StreamingResponse(
             download.chunks,
-            media_type="text/plain; charset=utf-8",
+            media_type=download.media_type,
             headers={"Content-Disposition": f'attachment; filename="{download.filename}"'},
         )
 

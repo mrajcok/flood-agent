@@ -74,9 +74,13 @@
         <p>They identify a Subscriber or device. In a masked file each of their values is replaced by a token: equal values get equal tokens within the file, and another download gives different ones.</p>
       </div>
       <p x-show="options && options.lineage_unknown">CANOPY couldn't tell which columns carry restricted values, so it can only be downloaded encrypted.</p>
+      <p x-show="options && options.public_key">An encrypted file holds the real values. It is encrypted for your <span x-text="options && options.public_key && options.public_key.type"></span> key <b x-text="options && options.public_key && options.public_key.fingerprint" style="overflow-wrap:anywhere"></b>, so only that key's private half can open it.</p>
+      <p x-show="options && !options.public_key">No public key on file. <a href="/settings">Add one in Settings</a></p>
       <div class="actions">
         <button type="button" class="primary" x-show="options && !options.lineage_unknown"
                 @click="save(urls.psv + '?mode=masked'); $refs.download.close()">Download masked</button>
+        <button type="button" class="primary" x-show="options && options.public_key"
+                @click="save(urls.psv + '?mode=encrypted'); $refs.download.close()">Download encrypted</button>
         <button type="button" @click="$refs.download.close()">Cancel</button>
       </div>
     </dialog>

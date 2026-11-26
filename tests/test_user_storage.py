@@ -2,7 +2,6 @@
 Database. Covers the web app, the MCP server's User, and what startup does to the databases."""
 
 import json
-import logging
 import re
 
 import pytest
@@ -260,26 +259,38 @@ def test_each_users_databases_are_created_on_first_use(tmp_path, telemetry_db, s
     assert not settings.app_db.exists() and not settings.results_db.exists()
 
 
-def test_startup_removes_the_single_user_databases_and_says_so(tmp_path, telemetry_db, semantic_layer_path, caplog):
+def test_startup_removes_the_single_user_databases_and_says_so(tmp_path, telemetry_db, semantic_layer_path, app_log):
     settings = app_settings(tmp_path, telemetry_db, semantic_layer_path)
     legacy = [settings.app_db, settings.results_db]
     legacy[0].parent.mkdir()
     for path in legacy:
         path.write_bytes(b"old data")
-    log = logging.getLogger("uvicorn.error")  # the app's log; uvicorn's configuration stops it reaching the root
-    log.addHandler(caplog.handler)
-    try:
-        build_app(settings)
-        removed = [r.getMessage() for r in caplog.records]
-        caplog.clear()
-        build_app(settings)  # nothing left to remove
-        again = [r.getMessage() for r in caplog.records]
-    finally:
-        log.removeHandler(caplog.handler)
+    build_app(settings)
+    removed = [r.getMessage() for r in app_log.records]
+    app_log.clear()
+    build_app(settings)  # nothing left to remove
+    again = [r.getMessage() for r in app_log.records]
 
     assert not any(path.exists() for path in legacy)
     assert all(any(str(path) in line for line in removed) for path in legacy)
     assert again == []
+
+
+@pytest.mark.parametrize("database_left", [True, False], ids=["with the database", "left on its own"])
+@pytest.mark.parametrize("suffix", ["-journal", "-wal", "-shm"])
+def test_startup_removes_what_sqlite_kept_beside_the_single_user_databases(
+    tmp_path, telemetry_db, semantic_layer_path, suffix, database_left
+):
+    settings = app_settings(tmp_path, telemetry_db, semantic_layer_path)
+    legacy = [settings.app_db, settings.results_db]
+    legacy[0].parent.mkdir()
+    sidecars = [path.with_name(path.name + suffix) for path in legacy]
+    for path in sidecars + (legacy if database_left else []):
+        path.write_bytes(b"old data")
+
+    build_app(settings)
+
+    assert list(legacy[0].parent.iterdir()) == []
 
 
 async def test_startup_cleanup_drops_every_users_expired_tables(build_agent):

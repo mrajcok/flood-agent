@@ -1,6 +1,5 @@
 """Signing in to the web app: who gets in, how a session ends, and which requests are refused."""
 
-import logging
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -143,18 +142,13 @@ def test_a_next_that_would_leave_the_app_goes_to_the_notebook_list_instead(clien
 
 
 @pytest.mark.parametrize("name, password", [(TEST_USER, "wrong guess"), ("nobody", TEST_PASSWORD), ("a\nb", "x y z")])
-def test_a_wrong_password_and_an_unknown_name_get_the_same_message_and_a_log_line(client, caplog, name, password):
-    log = logging.getLogger("uvicorn.error")  # the app's log; uvicorn's configuration stops it reaching the root
-    log.addHandler(caplog.handler)
-    try:
-        response = sign_in(client, name, password, next="/n/abc")
-    finally:
-        log.removeHandler(caplog.handler)
+def test_a_wrong_password_and_an_unknown_name_get_the_same_message_and_a_log_line(client, app_log, name, password):
+    response = sign_in(client, name, password, next="/n/abc")
 
     assert response.status_code == 401 and WRONG in response.text
     assert "set-cookie" not in response.headers and not signed_in(client)
     assert 'value="/n/abc"' in response.text  # a second try still goes there
-    (line,) = {r.getMessage() for r in caplog.records}
+    (line,) = {r.getMessage() for r in app_log.records}
     assert repr(name) in line and "\n" not in line
     assert password not in line + response.text
 

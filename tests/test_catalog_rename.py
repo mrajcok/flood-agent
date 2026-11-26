@@ -10,12 +10,15 @@ from conftest import (
 )
 
 from flood_agent.catalog import Catalog
+from flood_agent.lineage import TableSchema
 from flood_agent.queries import QueryFailed
 
 HOUR = 3_600_000
 DAY = 24 * HOUR
 RT = "rt_20260101_000000"
 RT2 = "rt_20260101_000001"
+
+FLOWS = {"flows": TableSchema(("sip", "dip"))}
 
 
 class Clock:
@@ -31,7 +34,7 @@ def physical(results_db) -> set[str]:
         return {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
 
 
-def make(tmp_path, runner, on_rename=None, telemetry=("flows",)):
+def make(tmp_path, runner, on_rename=None, telemetry=FLOWS):
     """(catalog, cell id, results db path) with one Result Table, registered and physical, 1-day default."""
     app_db, results_db = tmp_path / "app.db", databases_for_test(tmp_path).results_db
     clock = Clock()

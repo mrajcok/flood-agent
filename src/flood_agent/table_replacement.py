@@ -12,7 +12,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Iterator
 
+from flood_agent import lineage
 from flood_agent.catalog import Catalog, CellRun, Table, canonical
+from flood_agent.lineage import UNKNOWN
 from flood_agent.queries import QueryRunner
 
 
@@ -71,22 +73,29 @@ class TableReplacement:
                 raise ReplacementFailed(result["error"], result.get("raw_error") or result["error"],
                                         bool(result.get("stopped")))
             temp, undo = result["result_table"], None
-            after = dataclasses.replace(before, columns=result["columns"], truncated_to=result.get("truncated_to"))
+            after = dataclasses.replace(before, columns=result["columns"], truncated_to=result.get("truncated_to"),
+                                        restriction=lineage.restriction(result["lineage"]))
             if rerun:
                 after = dataclasses.replace(after, cell_id=rerun.owner.cell_id, run_id=rerun.owner.run_id,
                                             title=rerun.title, sql=sql, max_rows=max_rows)
-            try:
-                # The one catalog write is the step that can be undone, and it refuses a table a sweep expired.
-                undo = self.tables.record_replacement(after)
-                self.runner.swap(temp, before.name)
-            except BaseException:
+            with self.tables.settled():  # the catalog row and the rows do not match until both are written
                 try:
-                    if undo is not None:
-                        self.tables.restore_replacement(undo)
-                finally:
-                    self.runner.drop(temp)  # even if the restore fails
-                self.tables[before.name]  # a sweep dropped the table meanwhile: TableExpired, the plain answer
-                raise
+                    # The one catalog write is the step that can be undone, and it refuses a table a sweep expired.
+                    # Until the swap is done the row may be read beside the old rows or the new, by a query too (which
+                    # no lock here holds up): if either is restricted, it says that it does not know.
+                    either = before.restricted or after.restricted
+                    interim = dataclasses.replace(after, restriction=UNKNOWN) if either else after
+                    undo = self.tables.record_replacement(interim)
+                    self.runner.swap(temp, before.name)
+                except BaseException:
+                    try:
+                        if undo is not None:
+                            self.tables.restore_replacement(undo)
+                    finally:
+                        self.runner.drop(temp)  # even if the restore fails
+                    self.tables[before.name]  # a sweep dropped the table meanwhile: TableExpired, the plain answer
+                    raise
+                self.tables.record_restriction(before.name, after.restriction)
             return Replaced(self.tables[before.name], result["row_count"])
 
     @contextmanager

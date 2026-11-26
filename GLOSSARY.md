@@ -5,8 +5,12 @@ Flood stores network telemetry (NetFlow/IPFIX, DNS and Diameter signaling). CANO
 ## Actors
 
 **User**:
-A person who signs in to CANOPY. A User has their own Notebooks, Result Tables, Saved Tables and Lookup Tables, which no other User can see; all Users read the same Telemetry Database.
+A person who signs in to CANOPY. A User has their own Notebooks, Result Tables, Saved Tables, Lookup Tables and Public Key, which no other User can see; all Users read the same Telemetry Database.
 _Avoid_: account, login, Subscriber
+
+**Public Key**:
+The age or SSH public key a User uploads so restricted tables can be downloaded encrypted for them.
+_Avoid_: certificate, PGP key
 
 **Agent**:
 The backend orchestrator that runs an AI Cell's LLM loop, executes the LLM's queries, and reads Result Tables to build Displays. The only component allowed to touch telemetry data.
@@ -37,6 +41,10 @@ _Avoid_: response, xDR, CDR, message
 **Subscriber**:
 A mobile customer, identified by IMSI; the MSISDN (phone number) and IMEI (device) are its attributes.
 _Avoid_: user (the CANOPY user), customer, UE
+
+**Restricted Column**:
+A Telemetry Database column that identifies a Subscriber or device, or a Result Table column whose values come from one. A table with a Restricted Column can only be downloaded masked or encrypted.
+_Avoid_: sensitive field, PII column
 
 **Circuit**:
 An opaque 12-character identifier for the monitored link a Flow Record was observed on.

@@ -7,8 +7,11 @@ only the Agent needs (`raw_error`, `executed_sql`, the raw text of unreadable co
 `internal` part of the wire format that no projection reads; they reach only the Trace.
 """
 import json
-from dataclasses import dataclass, fields
+from dataclasses import asdict, dataclass, fields
 from typing import Any
+
+from flood_agent import lineage
+from flood_agent.lineage import UNKNOWN, Restriction
 
 UNREADABLE = "The tool returned an unreadable result."
 
@@ -22,6 +25,7 @@ class ResultTableMade:
     truncated_to: int | None = None
     note: str | None = None
     executed_sql: str | None = None  # internal: the CTAS that ran
+    restriction: Restriction = UNKNOWN  # internal, for the Table Catalog
 
 
 @dataclass(frozen=True)
@@ -63,7 +67,7 @@ class Stopped:
 
 Outcome = ResultTableMade | Counted | TableDescribed | DisplayMade | Failed | Stopped
 
-_INTERNAL = {"raw_error", "executed_sql", "raw_content"}
+_INTERNAL = {"raw_error", "executed_sql", "raw_content", "restriction"}
 _KINDS: dict[str, type] = {
     "result_table_made": ResultTableMade, "counted": Counted, "table_described": TableDescribed,
     "display_made": DisplayMade, "failed": Failed, "stopped": Stopped,
@@ -78,6 +82,8 @@ def encode(outcome: Outcome) -> str:
         value = getattr(outcome, f.name)
         if value is None:
             continue
+        if isinstance(value, Restriction):
+            value = asdict(value)
         (internal if f.name in _INTERNAL else public)[f.name] = value
     return json.dumps({"outcome": _KIND_OF[type(outcome)], **public, "internal": internal})
 
@@ -93,7 +99,7 @@ def decode(text: str) -> Outcome:
 _TYPES: dict[str, Any] = {
     "result_table": str, "columns": list, "row_count": int, "truncated_to": int, "note": str, "count": int,
     "name": str, "kind": str, "display": dict, "error": str, "raw_error": str, "executed_sql": str,
-    "raw_content": str,
+    "raw_content": str, "restriction": dict,
 }
 
 
@@ -111,11 +117,20 @@ def _decode(text: str) -> Outcome:
             expected = _TYPES[f.name]
             if not isinstance(value, expected) or (expected is int and isinstance(value, bool)):
                 raise TypeError(f.name)
-            values[f.name] = value
+            values[f.name] = _restriction(value) if f.name == "restriction" else value
     result = cls(**values)  # a missing required field raises TypeError
     if isinstance(result, DisplayMade):
         _project_display(result.display)  # a Display that cannot be projected is unreadable
     return result
+
+
+def _restriction(wire: dict) -> Restriction:
+    columns = wire["columns"]
+    if columns is None:
+        return UNKNOWN
+    if not isinstance(columns, list) or not all(isinstance(c, str) for c in columns):
+        raise TypeError("restriction")
+    return Restriction(tuple(columns))
 
 
 def from_query_result(result: dict) -> Outcome:
@@ -127,6 +142,7 @@ def from_query_result(result: dict) -> Outcome:
         return ResultTableMade(
             result["result_table"], result["columns"], result["row_count"],
             result.get("truncated_to"), result.get("note"), result.get("executed_sql"),
+            lineage.restriction(result["lineage"]),
         )
     kind = Stopped if result.get("stopped") else Failed
     return kind(result["error"], result.get("raw_error"), result.get("executed_sql"))

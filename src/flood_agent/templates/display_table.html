@@ -1,13 +1,27 @@
-<div class="display" data-rows-url="{{ rows_url }}" data-psv-url="{{ psv_url }}"
+<div class="display" data-rows-url="{{ rows_url }}" data-psv-url="{{ psv_url }}" data-options-url="{{ options_url }}"
      @table-renamed="follow($event.detail.old, $event.detail.name)" @table-expired="expired = true; loaded = false" @table-refreshed="page = 1; load()"
      x-data="{ urls: {},
                follow(old, name) {
-                 // A rename (in the name header) changes the table's name in every URL; pages, sorting and PSV use the new one.
+                 // A rename (in the name header) changes the table's name in every URL; pages, sorting and downloads use the new one.
                  const from = '/api/results/' + encodeURIComponent(old) + '/', to = '/api/results/' + encodeURIComponent(name) + '/';
                  for (const k of Object.keys(this.urls)) this.urls[k] = this.urls[k].replace(from, to);
                },
                columns: [], rows: [], formats: {}, total: 0, truncatedTo: null, page: 1, pageSize: 20,
                sort: null, dir: 'asc', loads: 0, loaded: false, error: false, expired: false,
+               options: null, downloadError: false,
+               async download() {
+                 /* An unrestricted table downloads at once; a restricted one asks how, in the dialog below. */
+                 this.downloadError = false;
+                 try {
+                   const r = await fetch(this.urls.options);
+                   if (r.status === 410) { this.expired = true; this.loaded = false; return; }
+                   if (!r.ok) throw new Error(r.status);
+                   this.options = await r.json();
+                 } catch (e) { this.downloadError = true; return; }
+                 if (!this.options.restricted) this.save(this.urls.psv);
+                 else if (!this.$refs.download.open) this.$refs.download.showModal();
+               },
+               save(url) { const a = document.createElement('a'); a.href = url; a.download = ''; a.click(); },
                async load() {
                  try {
                    const q = new URLSearchParams({ page: this.page, page_size: this.pageSize });
@@ -20,7 +34,10 @@
                    this.total = d.total; this.truncatedTo = d.truncated_to; this.loads++; this.loaded = true; this.error = false;
                  } catch (e) { this.error = true; }
                },
-               init() { this.urls = { rows: $el.dataset.rowsUrl, psv: $el.dataset.psvUrl }; this.load(); },
+               init() {
+                 this.urls = { rows: $el.dataset.rowsUrl, psv: $el.dataset.psvUrl, options: $el.dataset.optionsUrl };
+                 this.load();
+               },
                get pages() { return Math.max(1, Math.ceil(this.total / this.pageSize)); },
                go(p) { this.page = Math.min(Math.max(1, p), this.pages); this.load(); },
                sortBy(c) {
@@ -42,11 +59,30 @@
       <span class="badge-truncated" x-show="truncatedTo" x-cloak
             :title="'The query returned at least ' + (truncatedTo || 0).toLocaleString('en-US') + ' rows; only the first ' + (truncatedTo || 0).toLocaleString('en-US') + ' were kept.'"
             x-text="'truncated to ' + (truncatedTo || 0).toLocaleString('en-US')"></span>
-      <a :href="urls.psv" download style="margin-left:auto">Download PSV</a>
+      <a :href="urls.psv" download @click.prevent="download()" style="margin-left:auto">Download PSV</a>
     </div>
+    <p class="error" role="alert" x-show="downloadError" x-cloak>Could not download the table. Try again.</p>
     <table>
       <thead><tr><template x-for="(c, j) in columns" :key="c"><th :class="{ num: numeric(j) }" @click="sortBy(c)" style="cursor:pointer" :aria-sort="sort === c ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'"><span x-text="c"></span><span x-text="sort === c ? (dir === 'asc' ? ' ▲' : ' ▼') : ''"></span></th></template></tr></thead>
       <tbody><template x-for="(row, i) in rows" :key="loads + '-' + i"><tr><template x-for="(v, j) in row" :key="j"><td :class="{ num: numeric(j) }" x-text="fmt(v, columns[j])"></td></template></tr></template></tbody>
     </table>
+    {# A double click here must not reach a Markdown Cell, which it would put into editing. #}
+    <dialog class="download" x-ref="download" aria-label="Restricted table" @dblclick.stop>
+      <h3>Restricted table</h3>
+      <div x-show="options && !options.lineage_unknown">
+        <p>Restricted Columns: <b x-text="options && options.restricted_columns.join(', ')"></b></p>
+        <p>They identify a Subscriber or device. In a masked file each of their values is replaced by a token: equal values get equal tokens within the file, and another download gives different ones.</p>
+      </div>
+      <p x-show="options && options.lineage_unknown">CANOPY couldn't tell which columns carry restricted values, so it can only be downloaded encrypted.</p>
+      <p x-show="options && options.public_key">An encrypted file holds the real values. It is encrypted for your <span x-text="options && options.public_key && options.public_key.type"></span> Public Key <b x-text="options && options.public_key && options.public_key.fingerprint" style="overflow-wrap:anywhere"></b>, so only that key's private half can open it.</p>
+      <p x-show="options && !options.public_key">No Public Key on file. <a href="/settings">Add one in Settings</a></p>
+      <div class="actions">
+        <button type="button" class="primary" x-show="options && !options.lineage_unknown"
+                @click="save(urls.psv + '?mode=masked'); $refs.download.close()">Download masked</button>
+        <button type="button" class="primary" x-show="options && options.public_key"
+                @click="save(urls.psv + '?mode=encrypted'); $refs.download.close()">Download encrypted</button>
+        <button type="button" @click="$refs.download.close()">Cancel</button>
+      </div>
+    </dialog>
   </div>
 </div>

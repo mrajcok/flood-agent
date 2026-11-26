@@ -45,11 +45,15 @@ Put the entries in `.env`, separated by commas: `USERS=alice:<hash>,bob:<hash>`.
 followed by up to 30 lower-case letters, digits or underscores. (A hash holds `$` signs, which `.env` keeps as
 they are; to set `USERS` in a shell instead, put it in single quotes.)
 
-Each User has their own Notebooks, Result Tables, Saved Tables and Lookup Tables, which no other User can see; all
+Each User has their own Notebooks, Result Tables, Saved Tables, Lookup Tables and Public Key, which no other User can see; all
 Users read the same Telemetry Database. A User's databases, `app.db` and `results.db`, are in `USERS_DIR/<name>/`
 (default `data/users/`) and are created on first use. The app deletes the single-user databases of earlier versions
 (`APP_DB` and `RESULTS_DB`, default `data/app.db` and `data/results.db`) when it starts: nothing in them is migrated.
 Taking a name out of `USERS` leaves that User's directory in place.
+
+On the **Settings** page (linked next to Sign out) a User can keep one Public Key, which restricted tables can be
+downloaded encrypted for: an age key (`age1…`), or an OpenSSH `ssh-ed25519` or `ssh-rsa` (2048 to 4096 bits) Public Key,
+pasted or uploaded as a `.pub` file. Private keys are refused.
 
 A session ends after `SESSION_IDLE_TIMEOUT_HOURS` without a request, on Sign out, or when the app restarts.
 Sessions are held in memory, so run one process. The session cookie is Secure, so over a network serve the app
@@ -116,6 +120,15 @@ text prefixed with `'`). Both are Agent endpoints, not LLM tools. The `/api/resu
 endpoints are not scoped per notebook by design: they need a signed-in User (see Users), and reach only that
 User's tables (another User's table is a 404).
 
+A restricted table (ADR 0008) cannot be downloaded plain. A Display's Download PSV first asks
+`GET /api/results/<rt>/download-options` whether the table is restricted: an unrestricted one downloads at once, a
+restricted one opens a dialog offering a masked or an encrypted file. `psv?mode=plain|masked|encrypted` (plain by
+default) refuses, with a 403, a restricted table in plain mode, and one of unknown lineage in plain or masked mode. A
+masked file (`<rt>.masked.psv`) has a token in place of each Restricted Column value, equal for equal values within the
+file, under a secret made for that download and never kept. An encrypted file (`<rt>.psv.age`) is the plain one in
+age's binary format for the User's Public Key (`age -d -i <identity or SSH private key> <rt>.psv.age`); with no Public Key on
+file it is a 409. Each masked or encrypted download is logged, an encrypted one with the key's fingerprint.
+
 Formatting comes from Semantic Layer column metadata (`tables.flows.columns.<col>`):
 `enum` -> names (proto), `enum_bits` -> flag letters (S, SA, FPA), `unit: bytes` -> decimal
 KB/MB/GB/TB, `unit: epoch ms ...` -> UTC timestamps (never local time). A Result Table
@@ -156,6 +169,10 @@ charts with a time x axis, Ctrl+scroll to zoom that axis, drag to pan and double
 - `web.py` + `templates/` - FastAPI, Jinja, htmx (SSE), Alpine table and chart components.
 - `users.py` + `sign_in.py` - the configured Users, their password hashes and where their databases are; the sign-in page, sessions and the
   check every request passes.
+- `lineage.py` - column lineage: which output columns of a query carry values from a Restricted Column.
+- `sqlite_sql.py` - a query rewritten, by SQLite's lexing rules, so that lineage's parser reads it as SQLite does.
+- `downloads.py` - a table's PSV download: the modes it may be had in (plain, masked, encrypted) and the file.
+- `public_keys.py` - a User's one Public Key: what an upload may be, and where it is kept.
 - `semantic_layer.yaml` - hand-authored Semantic Layer rendered into the system prompt.
 
 ## Eval set and runner (on demand, not CI)

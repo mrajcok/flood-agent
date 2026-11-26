@@ -204,7 +204,9 @@ def result_tables_section(tables: "list[Table]") -> str:
         "Result Table from another notebook can also be shown directly with show_table or show_chart.",
     ]
     for t in tables:
-        cols = ", ".join(f"{c['name']} {c['type']}" for c in t.columns)
+        cols = ", ".join(
+            f"{c['name']} {c['type']}" + (" (restricted)" if c["name"] in t.schema.restricted else "")
+            for c in t.columns)
         if t.request == table_names.SQL_CELL_REQUEST:
             lines.append(f"- {t.name} (SQL Cell) {t.title}: columns {cols}")
         else:

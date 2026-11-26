@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES = "src/flood_agent/templates/"
 SHARED_FILES = {
     f"{TEMPLATES}{name}"
-    for name in ("_head.html", "_topbar.html", "_dialogs.html", "notebook.html", "notebook_style.html")
+    for name in ("_head.html", "_topbar.html", "_signed_in.html", "_dialogs.html", "notebook.html", "notebook_style.html")
 } | {"tests/conftest.py"}
 SHARED_DIRS = ("src/flood_agent/static/",)
 

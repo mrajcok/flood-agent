@@ -150,9 +150,9 @@ tables:
           DIAMETER_ERROR_USER_UNKNOWN, unlike 5001 in result_code.
         example: 5001
         enum: {4181: DIAMETER_AUTHENTICATION_DATA_UNAVAILABLE, 5001: DIAMETER_ERROR_USER_UNKNOWN, 5004: DIAMETER_ERROR_ROAMING_NOT_ALLOWED, 5420: DIAMETER_ERROR_UNKNOWN_EPS_SUBSCRIPTION}
-      imsi: {type: TEXT, description: "The Subscriber's IMSI: digits, leading zeros kept", example: "001010000000000"}
-      msisdn: {type: TEXT, description: "The Subscriber's phone number, E.164 digits without +. On every Gx and Gy record; on S6a only on a successfully answered ULR and on an IDR", example: "99912345678"}
-      imei: {type: TEXT, description: "Device identity, 15 digits; S6a ULR only. For a Subscriber's IMEI, e.g. one found by flows_subscriber_join, match their ULR rows (application_id 16777251, command_code 316) by imsi; a ULR may be well before the time of interest", example: "000000000000000"}
+      imsi: {type: TEXT, restricted: true, description: "The Subscriber's IMSI: digits, leading zeros kept", example: "001010000000000"}
+      msisdn: {type: TEXT, restricted: true, description: "The Subscriber's phone number, E.164 digits without +. On every Gx and Gy record; on S6a only on a successfully answered ULR and on an IDR", example: "99912345678"}
+      imei: {type: TEXT, restricted: true, description: "Device identity, 15 digits; S6a ULR only. For a Subscriber's IMEI, e.g. one found by flows_subscriber_join, match their ULR rows (application_id 16777251, command_code 316) by imsi; a ULR may be well before the time of interest", example: "000000000000000"}
       home_plmn_id: {type: TEXT, description: "The Subscriber's home network, MCC+MNC digits. The home PLMN is '00101', so a Subscriber with any other value is an inbound roamer", example: "00101"}
       visited_plmn_id: {type: TEXT, description: "Network serving the Subscriber, MCC+MNC digits; S6a ULR and AIR. A home Subscriber with another value here is an outbound roamer", example: "00101"}
       ue_ip_address: {type: TEXT, description: "The Subscriber device's IPv4 address; Gx and Gy only. The probe correlates a session, so every record of it has it (on Gy, from PS-Information). An address passes between Subscribers, so match it by session time (see flows_subscriber_join)", example: "192.0.2.33"}

@@ -4,9 +4,8 @@ A thin layer over the signed-in User's parts of the Agent (`UserSpace`), chiefly
 endpoint is the Agent's internal data path to the browser; it is a plain HTTP route, never registered as an MCP tool.
 """
 
-import csv
-import io
 import json
+import logging
 import time
 from contextlib import aclosing, asynccontextmanager
 from dataclasses import dataclass, field, replace
@@ -14,7 +13,7 @@ from html import escape
 from pathlib import Path
 from typing import Annotated, AsyncGenerator, Literal, cast
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -37,20 +36,25 @@ from flood_agent.cell import (
 )
 from flood_agent.cell_kinds import AI, MARKDOWN, SQL
 from flood_agent.context_usage import context_usage
+from flood_agent.downloads import DownloadRefused, Mode, NoPublicKey
 from flood_agent.events import CountEvent, DisplayEvent, FlagEvent, LlmCallStarted, TextDelta, TraceLive, TurnEnd
 from flood_agent.lookup_tables import InvalidLookupTable
 from flood_agent.model_choices import NO_MODEL
 from flood_agent.notebook import COUNT_KIND, NotebookBusy, PageCell, TablesChoice, UnknownCell, UnknownNotebook
+from flood_agent.public_keys import KeyRefused, parse_public_key
 from flood_agent.queries import InvalidSort, QueryFailed, QueryRejected
 from flood_agent.show_commands import SHOW_COMMANDS
 from flood_agent.sign_in import SignInConfig
 from flood_agent.table_replacement import RefreshInProgress
 from flood_agent.trace import short_model, split_system_prompt
 
+log = logging.getLogger("uvicorn.error")  # the app's terminal log
+
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 TEMPLATES.env.filters["split_system_prompt"] = split_system_prompt
 TEMPLATES.env.filters["short_model"] = short_model
 STATIC_DIR = Path(__file__).parent / "static"
+KEY_FILE_READ_LIMIT = 1_048_576  # bytes of an uploaded key file that are looked at, a private key in it included
 
 
 def static_version(name: str) -> int:
@@ -139,7 +143,8 @@ def live_event_sse(ev, key: str, live: LiveCounter, refreshable_counts: bool = T
 def _table_display_urls(result_table: str) -> dict:
     """The URLs a table Display (display_table.html) loads and saves through."""
     base = f"/api/results/{result_table}"
-    return {"rows_url": f"{base}/rows", "psv_url": f"{base}/psv", "settings_url": f"{base}/settings"}
+    return {"rows_url": f"{base}/rows", "psv_url": f"{base}/psv", "options_url": f"{base}/download-options",
+            "settings_url": f"{base}/settings"}
 
 
 NEEDS_KEY = "needs OPENROUTER_API_KEY"
@@ -553,6 +558,33 @@ def create_app(agent: Agent, sign_in_config: SignInConfig, picker: list[PickerEn
         """Stop a running cell now; its stream still ends. Does nothing if it already ended."""
         space.notebooks.stop_cell(notebook_id, cell_id)
 
+    # --- Settings --------------------------------------------------------------------------------------
+
+    def settings_page(request: Request, space: UserSpace, error: str = ""):
+        return TEMPLATES.TemplateResponse(
+            request, "settings.html", {"user": request.state.user, "key": space.public_keys.get(), "error": error},
+            422 if error else 200)
+
+    @app.get("/settings", response_class=HTMLResponse)
+    def open_settings(space: Space, request: Request):
+        return settings_page(request, space)
+
+    @app.post("/settings/public-key")
+    def save_public_key(space: Space, request: Request, key: str = Form(""), file: UploadFile | None = File(None)):
+        """Keep the one key pasted or uploaded, in place of any on file; the page again, with why not, otherwise."""
+        if file is not None:
+            key += "\n" + file.file.read(KEY_FILE_READ_LIMIT).decode("utf-8-sig", errors="replace")
+        try:
+            space.public_keys.save(parse_public_key(key))
+        except KeyRefused as e:
+            return settings_page(request, space, str(e))
+        return RedirectResponse("/settings", status_code=303)
+
+    @app.post("/settings/public-key/remove")
+    def remove_public_key(space: Space):
+        space.public_keys.remove()
+        return RedirectResponse("/settings", status_code=303)
+
     if dev:
         @app.post("/api/dev/shift-timestamps")
         def shift_timestamps():
@@ -706,29 +738,40 @@ def create_app(agent: Agent, sign_in_config: SignInConfig, picker: list[PickerEn
         except ValueError as e:
             raise HTTPException(422, str(e))
 
-    @app.get("/api/results/{result_table}/psv")
-    def psv_download(space: Space, result_table: str):
+    @app.get("/api/results/{result_table}/download-options")
+    def download_options(space: Space, result_table: str):
+        """Whether the table is restricted, and by which columns, and the User's Public Key, for the Display's download
+        dialog."""
         try:
-            columns, rows_iter = space.iter_all_rows(result_table)
+            table = space.tables.for_download(result_table)
         except KeyError:
             raise HTTPException(404, "unknown result table")
+        key = space.public_keys.get()
+        return {"restricted": table.restricted, "restricted_columns": list(table.restriction.columns or ()),
+                "lineage_unknown": table.restriction.unknown,
+                "public_key": None if key is None else {"type": key.type, "fingerprint": key.fingerprint}}
 
-        def body():
-            buf = io.StringIO()
-            w = csv.writer(buf, delimiter="|", lineterminator="\r\n")
-            w.writerow([_psv_safe(c) for c in columns])
-            for row in rows_iter:
-                w.writerow([_psv_safe(v) for v in row])
-                if buf.tell() > 65536:
-                    yield buf.getvalue()
-                    buf.seek(0)
-                    buf.truncate()
-            yield buf.getvalue()
-
+    @app.get("/api/results/{result_table}/psv")
+    def psv_download(request: Request, space: Space, result_table: str, mode: Mode = "plain"):
+        """The whole table as a PSV file, in `mode`. 403 with the reason if it may not be had that way, 409 for an
+        encrypted one with no Public Key on file."""
+        try:
+            download = space.download(result_table, mode)
+        except KeyError:
+            raise HTTPException(404, "unknown result table")
+        except DownloadRefused as e:
+            raise HTTPException(403, str(e))
+        except NoPublicKey as e:
+            raise HTTPException(409, str(e))
+        if mode != "plain":  # who took what from a restricted table; the names are quoted, as the User chose them
+            table, key = download.allowed.table, download.allowed.key
+            log.info("download: user=%s table=%s mode=%s restricted_columns=%s%s", request.state.user,
+                     table.name, mode, json.dumps(table.restriction.columns or ()),
+                     f" key={key.fingerprint}" if key else "")
         return StreamingResponse(
-            body(),
-            media_type="text/plain; charset=utf-8",
-            headers={"Content-Disposition": f'attachment; filename="{result_table}.psv"'},
+            download.chunks,
+            media_type=download.media_type,
+            headers={"Content-Disposition": f'attachment; filename="{download.filename}"'},
         )
 
     @app.get("/api/results/{result_table}/chart-rows")
@@ -757,12 +800,3 @@ def _parse_retention_days(raw: str) -> float:
         return float(raw)
     except ValueError:
         raise HTTPException(422, "retention must be a number of days")
-
-
-def _psv_safe(v):
-    """Neutralise spreadsheet formula injection in text cells; numbers pass through."""
-    if v is None:
-        return ""
-    if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r"):
-        return "'" + v
-    return v

@@ -35,6 +35,7 @@ from flood_agent.cell_kinds import SQL as SQL_KIND
 from flood_agent.config import Settings
 from flood_agent.events import TextDelta
 from flood_agent.generator import generate
+from flood_agent.lineage import SchemaProvider
 from flood_agent.llm import TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_server import ServerSettings, create_server
 from flood_agent.model_choices import ModelChoices
@@ -412,9 +413,6 @@ class AgentForTest(Agent):
     def fetch_chart_rows(self, result_table: str) -> list[dict]:
         return self.user.fetch_chart_rows(result_table)
 
-    def iter_all_rows(self, result_table: str):
-        return self.user.iter_all_rows(result_table)
-
     def refresh_table(self, name: str) -> Table:
         return self.user.refresh_table(name)
 
@@ -424,17 +422,18 @@ class AgentForTest(Agent):
 
 @pytest.fixture
 def query_runner(tmp_path, telemetry_db):
-    """`query_runner(readable=set(), timeout_s=None)` -> a QueryRunner over the test Telemetry Database and the
+    """`query_runner(readable=set(), timeout_s=None, schema=...)` -> a QueryRunner over the test Telemetry Database and the
     test User's results database (`databases_for_test`). `readable` is the set of tables a query may read,
-    which the test may change afterwards, or a function returning it (e.g. a Catalog's `readable`)."""
+    which the test may change afterwards, or a function returning it (e.g. a Catalog's `readable`). `schema` is what
+    column lineage knows of those tables (a Catalog's `schema`)."""
     results_db = databases_for_test(tmp_path).results_db
 
-    def _build(readable: set[str] | Callable[[], set[str]] | None = None,
-               timeout_s: float | None = None) -> QueryRunner:
+    def _build(readable: set[str] | Callable[[], set[str]] | None = None, timeout_s: float | None = None,
+               schema: SchemaProvider = lambda name: None) -> QueryRunner:
         tables = set() if readable is None else readable
         return QueryRunner(telemetry_db, results_db,
                            default_agent_config().query_timeout_s if timeout_s is None else timeout_s,
-                           tables if callable(tables) else lambda: tables)
+                           tables if callable(tables) else lambda: tables, schema)
 
     return _build
 

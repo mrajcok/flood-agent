@@ -17,7 +17,7 @@ from typing import Callable, Iterator
 
 from mcp import StdioServerParameters
 
-from flood_agent import queries
+from flood_agent import downloads, queries
 from flood_agent.ai_cell_run import AiCellRuns, ClientFactory, ConnectionProvider
 from flood_agent.catalog import Catalog, Table
 from flood_agent.mcp_connection import McpConnection, Transport, stdio_transport
@@ -25,6 +25,7 @@ from flood_agent.mcp_server import ServerSettings
 from flood_agent.model_choices import ModelChoices
 from flood_agent.notebook import Notebooks
 from flood_agent.notebook_store import NotebookStore
+from flood_agent.public_keys import PublicKeys
 from flood_agent.queries import QueryRunner
 from flood_agent.semantic_layer import SemanticLayer
 from flood_agent.sql_cell_run import SqlCellRuns
@@ -77,19 +78,21 @@ class Parts:
     ai_cells: AiCellRuns
     notebooks: Notebooks
     queries: QueryRunner
+    public_keys: PublicKeys
 
 
 def build_parts(config: AgentConfig, user: str, semantic_layer: SemanticLayer, client_for: ClientFactory,
                 connection: ConnectionProvider, started: Callable[[], bool]) -> Parts:
-    """Build Notebook storage, the query runner, the Table Catalog, Table Replacement, the Run modules and the Notebook
+    """Build Notebook storage, the Public Key store, the query runner, the Table Catalog, Table Replacement, the Run modules and the Notebook
     module for `user`, wired together over that User's databases (created if missing). `connection` and `started` are
     the MCP connection the AI Cell Runs use and whether it is up."""
     databases = user_databases(config.users_dir, user)
     store = NotebookStore(databases.app_db, config.clock)
     # The runner asks for the readable set only when it queries, by which time the Catalog below exists.
-    runner = QueryRunner(config.telemetry_db, databases.results_db, config.query_timeout_s, lambda: tables.readable())
+    runner = QueryRunner(config.telemetry_db, databases.results_db, config.query_timeout_s, lambda: tables.readable(),
+                         lambda name: tables.schema(name))
     tables = Catalog(
-        databases.app_db, config.clock, config.result_ttl_ms, telemetry_tables=semantic_layer.table_names(),
+        databases.app_db, config.clock, config.result_ttl_ms, telemetry_tables=semantic_layer.telemetry_schemas(),
         results_db=databases.results_db, on_rename=store.follow_rename,  # Displays follow a table's new name
         runner=runner,
     )
@@ -98,7 +101,8 @@ def build_parts(config: AgentConfig, user: str, semantic_layer: SemanticLayer, c
     ai_cells = AiCellRuns(user, store, tables, semantic_layer, client_for, connection, started, config.choices.spec_of,
                           config.max_llm_steps, config.max_failed_attempts, config.clock)
     notebooks = Notebooks(store, tables, sql_cells, ai_cells, config.choices)
-    return Parts(databases, store, tables, replacement, sql_cells, ai_cells, notebooks, runner)
+    return Parts(databases, store, tables, replacement, sql_cells, ai_cells, notebooks, runner,
+                 PublicKeys(databases.app_db, config.clock))
 
 
 class UserSpace:
@@ -109,7 +113,7 @@ class UserSpace:
         self.config, self.semantic_layer = config, semantic_layer
         self.databases = parts.databases
         self.tables, self.replacement, self.notebooks = parts.tables, parts.replacement, parts.notebooks
-        self.queries = parts.queries
+        self.queries, self.public_keys = parts.queries, parts.public_keys
         self._store, self._sql_cells, self._ai_cells = parts.store, parts.sql_cells, parts.ai_cells
         self._refreshing: set[tuple[str, str | int]] = set()  # ("count", id) being refreshed now (tables: see table_replacement)
         self._refreshing_lock = threading.Lock()
@@ -198,9 +202,18 @@ class UserSpace:
             self.notebooks.update_count(display_id, result["count"], computed_at_ms)
             return {"value": result["count"], "computed_at_ms": computed_at_ms}
 
-    def iter_all_rows(self, result_table: str):
-        """Internal data path for PSV export of the full Result Table. Not an LLM tool."""
-        return self.queries.all_rows(self.tables[result_table].name)
+    def download(self, result_table: str, mode: downloads.Mode) -> downloads.Download:
+        """Internal data path for downloading a whole Result or Saved Table as PSV. Not an LLM tool.
+
+        An encrypted one is for this User's Public Key. KeyError if unknown, `TableExpired` if no longer live,
+        `downloads.DownloadRefused` if the table may not be had in `mode`, `downloads.NoPublicKey` if there is no key
+        to encrypt for."""
+        key = self.public_keys.get() if mode == "encrypted" else None
+        with self.tables.settled():  # so the rows read are the ones the restriction checked here is about
+            table = self.tables.for_download(result_table)
+            allowed = downloads.check(table, mode, key)
+            columns, rows = self.queries.all_rows(table.name)
+        return downloads.psv_file(allowed, columns, rows)  # encrypting holds no replacement up
 
     def fetch_chart_rows(self, result_table: str) -> list[dict]:
         """Internal data path for the chart-rows endpoint (chart cap). Not an LLM tool."""
@@ -287,7 +300,7 @@ class Agent:
             users=self.config.users,
             query_timeout_s=self.config.query_timeout_s,
             chart_row_cap=self.config.chart_row_cap,
-            telemetry_tables=tuple(self.semantic_layer.table_names()),
+            telemetry_tables=self.semantic_layer.telemetry_schemas(),
             fixed_now_ms=self.config.fixed_now_ms,
         )
 

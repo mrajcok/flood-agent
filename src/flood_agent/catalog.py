@@ -8,17 +8,23 @@ the table is registered, so a later change to the configured default does not to
 
 import json
 import sqlite3
+import threading
 import time
-from contextlib import closing
-from dataclasses import asdict, dataclass, field
+from contextlib import closing, contextmanager
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Callable, Iterable, Literal
+from types import MappingProxyType
+from typing import Callable, Iterable, Iterator, Literal, Mapping
 
-from flood_agent import lookup_tables, table_names
+from flood_agent import lineage, lookup_tables, table_names
+from flood_agent.lineage import UNKNOWN, Restriction, TableSchema
 from flood_agent.queries import QueryRunner
 
-SCHEMA = """
+# The columns carrying restricted values, as a JSON list; NULL: its lineage is unknown (ADR 0008).
+_RESTRICTION_COLUMN = "restriction TEXT"
+
+SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS result_tables (
   name TEXT PRIMARY KEY,
   cell_id TEXT NOT NULL,
@@ -32,7 +38,8 @@ CREATE TABLE IF NOT EXISTS result_tables (
   retention_ms INTEGER NOT NULL,
   sql TEXT,
   max_rows INTEGER,
-  refreshed_at INTEGER
+  refreshed_at INTEGER,
+  {_RESTRICTION_COLUMN}
 );
 CREATE TABLE IF NOT EXISTS lookup_tables (
   name TEXT PRIMARY KEY,
@@ -96,6 +103,7 @@ class Table:
     cell_id: str = ""  # the Cell and Run that made it (a SQL Cell's re-run moves it to the new Run)
     run_id: str = ""
     created_at_ms: int = 0  # when it was registered; never changes (as_of_ms moves on a Refresh)
+    restriction: Restriction = Restriction()  # the columns carrying values from a Restricted Column (ADR 0008)
 
     @property
     def owner(self) -> Owner:
@@ -104,6 +112,18 @@ class Table:
     @property
     def retention_days(self) -> float:
         return self.retention_ms / DAY_MS
+
+    @property
+    def restricted(self) -> bool:
+        """Whether the table has a Restricted Column, or may have one (its lineage is unknown)."""
+        return self.restriction.restricted
+
+    @property
+    def schema(self) -> TableSchema:
+        """What a query reading this table is analysed against: with unknown lineage, every column is restricted."""
+        names = tuple(c["name"] for c in self.columns)
+        columns = self.restriction.columns
+        return TableSchema(names, frozenset(names if columns is None else columns))
 
     @property
     def refreshable(self) -> bool:
@@ -118,16 +138,29 @@ class Table:
         }
 
 
-
-
 def _as_of(row: sqlite3.Row) -> int:
     """When a table's rows are from: its last Refresh, else its creation. Retention counts from here.
     `created_at` itself never changes, so the order tables are listed in (and the system prompt) is stable."""
     return row["refreshed_at"] if row["refreshed_at"] is not None else row["created_at"]
 
 
+def _recorded(restriction: Restriction) -> str | None:
+    """What the `restriction` column holds for this."""
+    return None if restriction.columns is None else json.dumps(restriction.columns)
+
+
+def _restriction(recorded: str | None) -> Restriction:
+    return UNKNOWN if recorded is None else Restriction(tuple(json.loads(recorded)))
+
+
 def _now() -> int:
     return int(time.time() * 1000)
+
+
+def _add_restriction_column(con: sqlite3.Connection) -> None:
+    """Add the `restriction` column to a registry made before it was recorded. Its tables' lineage is unknown."""
+    if "restriction" not in {r["name"] for r in con.execute("PRAGMA table_info(result_tables)")}:
+        con.execute(f"ALTER TABLE result_tables ADD COLUMN {_RESTRICTION_COLUMN}")
 
 
 class CatalogView:
@@ -136,17 +169,20 @@ class CatalogView:
     types. The MCP server uses this (the app database must already exist)."""
 
     def __init__(
-        self, app_db: Path, clock: Callable[[], int] = _now, telemetry_tables: Iterable[str] = (),
+        self, app_db: Path, clock: Callable[[], int] = _now,
+        telemetry_tables: Mapping[str, TableSchema] = MappingProxyType({}),
         results_db: Path | None = None, _read_only: bool = True, default_retention_ms: int = DAY_MS,
     ):
-        """`clock` returns epoch ms; `telemetry_tables` are the Telemetry Database table names;
+        """`clock` returns epoch ms; `telemetry_tables` are the Telemetry Database table names, mapped to their
+        schemas;
         `results_db` is where Lookup Tables' rows are kept (needed only by the Lookup Table operations);
         `default_retention_ms` is the Result Table Retention that `policy` reports."""
         self.path = Path(app_db)
         self.results_db = Path(results_db) if results_db is not None else None
         self._now = clock
         self._read_only = _read_only
-        self.telemetry_tables = frozenset(canonical(t) for t in telemetry_tables)
+        self._telemetry_schemas = {canonical(t): s for t, s in telemetry_tables.items()}
+        self.telemetry_tables = frozenset(self._telemetry_schemas)
         self.policy = RetentionPolicy(result_days=default_retention_ms / DAY_MS)
 
     @property
@@ -199,6 +235,21 @@ class CatalogView:
             return [{**dict(r), "columns": json.loads(r["columns"])} for r in con.execute(
                 "SELECT name, created_at, columns, row_count FROM lookup_tables ORDER BY name")]
 
+    def schema(self, name: str) -> TableSchema | None:
+        """The columns and Restricted Columns of a table a query may read (any case), for column lineage; None if
+        there is no such table. A Lookup Table has no Restricted Columns."""
+        name = canonical(name)
+        if name in self.telemetry_tables:
+            return self._telemetry_schemas[name]
+        with closing(self._connect()) as con:
+            lookup = con.execute("SELECT columns FROM lookup_tables WHERE name=?", (name,)).fetchone()
+        if lookup is not None:
+            return TableSchema(tuple(json.loads(lookup["columns"])))
+        try:
+            return self[name].schema
+        except (KeyError, TableExpired):
+            return None
+
     def listing(self) -> dict:
         """The Tables dialog data: names by kind (each sorted), and each live Result or Saved Table's
         Retention in days and time left in ms."""
@@ -226,6 +277,7 @@ class CatalogView:
             retention_ms=row["retention_ms"], expires_in_ms=_as_of(row) + row["retention_ms"] - self._now(),
             as_of_ms=_as_of(row), sql=row["sql"], max_rows=row["max_rows"],
             policy=self.policy, cell_id=row["cell_id"], run_id=row["run_id"], created_at_ms=row["created_at"],
+            restriction=_restriction(row["restriction"]),
         )
 
     @staticmethod
@@ -319,7 +371,7 @@ class Catalog(CatalogView):
 
     def __init__(
         self, app_db: Path, clock: Callable[[], int] = _now, default_retention_ms: int = DAY_MS,
-        telemetry_tables: Iterable[str] = (), results_db: Path | None = None,
+        telemetry_tables: Mapping[str, TableSchema] = MappingProxyType({}), results_db: Path | None = None,
         on_rename: Callable[[sqlite3.Connection, str, str], None] | None = None, *, runner: QueryRunner,
     ):
         """`default_retention_ms` is the Retention a new Result Table is given (kept in `policy`). `on_rename(con, old, new)` is
@@ -330,28 +382,41 @@ class Catalog(CatalogView):
                          default_retention_ms=default_retention_ms)
         self._on_rename = on_rename
         self._runner = runner
+        self._swapping = threading.RLock()  # held while what is under a table's name changes
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as con, con:
             con.executescript(SCHEMA)
+            _add_restriction_column(con)
+
+    @contextmanager
+    def settled(self) -> Iterator[None]:
+        """While held, no table's name changes hands and every table's catalog row describes the rows under its
+        name: nothing renames or drops one, and no replacement is between writing the row and swapping in the rows
+        (it holds this too). For a reader that must have both of one table. Re-entrant."""
+        with self._swapping:
+            yield
 
     def register_for(
         self, owner: Owner, name: str, title: str = "", columns: list[dict] | None = None,
         request: str = "", truncated_to: int | None = None, sql: str | None = None, max_rows: int | None = None,
+        restriction: Restriction = UNKNOWN,
     ) -> None:
         """Record a new Result Table made by `owner`, with the current default Retention. `sql` and
-        `max_rows` (the query and the row cap it ran under) are what Refresh runs again."""
+        `max_rows` (the query and the row cap it ran under) are what Refresh runs again. `restriction` says which
+        columns carry restricted values."""
         now = self._now()
         with closing(self._connect()) as con, con:
             con.execute(
                 "INSERT OR IGNORE INTO result_tables(name, cell_id, run_id, created_at, title,"
-                " columns, request, truncated_to, retention_ms, sql, max_rows) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                " columns, request, truncated_to, retention_ms, sql, max_rows, restriction)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (canonical(name), owner.cell_id, owner.run_id, now, title, json.dumps(columns or []), request,
-                 truncated_to, self.default_retention_ms, sql, max_rows),
+                 truncated_to, self.default_retention_ms, sql, max_rows, _recorded(restriction)),
             )
 
     def record_replacement(self, after: Table) -> Table:
         """Record, in one write, that live table `after.name` is about to hold fresh rows described by `after`:
-        its columns, truncation, owner, title, SQL and row cap. Its "as of" time is now, and Retention restarts
+        its columns, truncation, owner, title, SQL, row cap and lineage. Its "as of" time is now, and Retention restarts
         (its length is kept). Returns the table as it was, for `restore_replacement`. `TableExpired` if it is
         not live."""
         before = self[after.name]
@@ -365,9 +430,43 @@ class Catalog(CatalogView):
     def _describe(self, table: Table, as_of_ms: int) -> None:
         with closing(self._connect()) as con, con:
             con.execute("UPDATE result_tables SET refreshed_at=?, columns=?, truncated_to=?,"
-                        " cell_id=?, run_id=?, title=?, sql=?, max_rows=? WHERE name=?",
+                        " cell_id=?, run_id=?, title=?, sql=?, max_rows=?, restriction=?"
+                        " WHERE name=?",
                         (as_of_ms, json.dumps(table.columns), table.truncated_to, table.cell_id, table.run_id,
-                         table.title, table.sql, table.max_rows, table.name))
+                         table.title, table.sql, table.max_rows, _recorded(table.restriction), table.name))
+
+    def record_restriction(self, name: str, restriction: Restriction) -> None:
+        """Record which columns of registered table `name` carry restricted values."""
+        with closing(self._connect()) as con, con:
+            con.execute("UPDATE result_tables SET restriction=? WHERE name=?",
+                        (_recorded(restriction), canonical(name)))
+
+    def for_download(self, name: str) -> Table:
+        """The live Result or Saved Table `name` as a download treats it (ADR 0008): lineage is worked out again from
+        its stored query, against the Telemetry tables' schemas and this Catalog as they are now, and any restricted
+        columns found are added to the recorded ones, never taken from them. KeyError or `TableExpired` as for
+        `self[name]`."""
+        return self._reanalysed(self[name], {})
+
+    def _reanalysed(self, table: Table, done: dict[str, Table]) -> Table:
+        """`for_download` of `table`. The live tables its query reads are reanalysed in turn, so a newly restricted
+        column carries down a chain of them; `done` holds each one reached so far."""
+        if table.name in done:
+            return done[table.name]
+        done[table.name] = table  # as recorded, for a query that (after a replacement) leads back to its own table
+        recorded = table.restriction.columns
+        if table.sql is None or recorded is None:
+            return table
+
+        def schema(source: str) -> TableSchema | None:
+            return self._reanalysed(self[source], done).schema if source in self else self.schema(source)
+
+        outcome = self._runner.stored_lineage(table.sql, [c["name"] for c in table.columns], schema)
+        if isinstance(outcome, lineage.Known):
+            restricted = {*recorded, *outcome.restricted}
+            done[table.name] = replace(table, restriction=Restriction(tuple(
+                c["name"] for c in table.columns if c["name"] in restricted)))
+        return done[table.name]
 
     def _drop_physical(self, names: Iterable[str]) -> None:
         names = list(names)
@@ -383,17 +482,19 @@ class Catalog(CatalogView):
     def drop_earlier_of_cell(self, cell_id: str, current_run_id: str | None) -> list[str]:
         """Drop the Result Tables a Cell's earlier Runs made that are still named `rt_*`, never a Saved Table
         nor the current Run's tables. They stay registered as expired. Returns the names dropped."""
-        names = [t.name for t in self.earlier_tables_of_cell(cell_id, current_run_id) if t.kind == "result"]
-        self._drop_physical(names)
-        self._mark_expired(names)
+        with self.settled():
+            names = [t.name for t in self.earlier_tables_of_cell(cell_id, current_run_id) if t.kind == "result"]
+            self._drop_physical(names)
+            self._mark_expired(names)
         return names
 
     def drop_of_cell(self, cell_id: str) -> list[str]:
         """Drop the Result Tables any Run of a Cell made that are still named `rt_*` (its current Run's and
         earlier ones'), never a Saved Table. They stay registered as expired. Returns the names dropped."""
-        names = [t.name for t in self.tables_of_cell(cell_id) if t.kind == "result"]
-        self._drop_physical(names)
-        self._mark_expired(names)
+        with self.settled():
+            names = [t.name for t in self.tables_of_cell(cell_id) if t.kind == "result"]
+            self._drop_physical(names)
+            self._mark_expired(names)
         return names
 
     def delete(self, name: str) -> None:
@@ -406,12 +507,13 @@ class Catalog(CatalogView):
         if kind is None:
             raise KeyError(name)
         name = canonical(name)
-        self._drop_physical([name])
-        if kind == "lookup":
-            with closing(self._connect()) as con, con:
-                con.execute("DELETE FROM lookup_tables WHERE name=?", (name,))
-        else:
-            self._mark_expired([name])
+        with self.settled():
+            self._drop_physical([name])
+            if kind == "lookup":
+                with closing(self._connect()) as con, con:
+                    con.execute("DELETE FROM lookup_tables WHERE name=?", (name,))
+            else:
+                self._mark_expired([name])
 
     def update(self, name: str, new_name: str | None = None, retention_days: float | None = None) -> Table:
         """Rename and/or set the Retention of a live Result or Saved Table; returns the new record.
@@ -421,21 +523,22 @@ class Catalog(CatalogView):
         Retention is given. ValueError, changing nothing, for a name that is taken (even by a dropped
         table), reserved, not an identifier or a Telemetry table's, or a Retention outside (0, cap].
         KeyError if unknown, `TableExpired` if no longer live."""
-        table = self[name]
-        retention_ms = None
-        if retention_days is not None:
-            if not 0 < retention_days <= self.policy.max_days:  # also rejects nan
-                raise ValueError(f"Retention must be more than 0 and at most {self.policy.max_days:g} days.")
-            retention_ms = max(1, round(retention_days * DAY_MS))
-        new = canonical(new_name) if new_name is not None else None
-        if new is not None and new != table.name:
-            if retention_ms is None and table.kind == "result":
-                retention_ms = max(table.retention_ms, round(self.policy.saved_days * DAY_MS))
-            self._rename(table.name, new, retention_ms)
-        elif retention_ms is not None:
-            with closing(self._connect()) as con, con:
-                con.execute("UPDATE result_tables SET retention_ms=? WHERE name=?", (retention_ms, table.name))
-        return self[new or table.name]
+        with self.settled():
+            table = self[name]
+            retention_ms = None
+            if retention_days is not None:
+                if not 0 < retention_days <= self.policy.max_days:  # also rejects nan
+                    raise ValueError(f"Retention must be more than 0 and at most {self.policy.max_days:g} days.")
+                retention_ms = max(1, round(retention_days * DAY_MS))
+            new = canonical(new_name) if new_name is not None else None
+            if new is not None and new != table.name:
+                if retention_ms is None and table.kind == "result":
+                    retention_ms = max(table.retention_ms, round(self.policy.saved_days * DAY_MS))
+                self._rename(table.name, new, retention_ms)
+            elif retention_ms is not None:
+                with closing(self._connect()) as con, con:
+                    con.execute("UPDATE result_tables SET retention_ms=? WHERE name=?", (retention_ms, table.name))
+            return self[new or table.name]
 
     def check_new_name(self, new_name: str) -> None:
         """ValueError unless `update` would accept this as a table's new name (it is lower-cased first)."""
@@ -512,18 +615,19 @@ class Catalog(CatalogView):
         old (left by a turn cancelled while its tool call was waiting). Nothing correct depends on this."""
         if self.results_db is None or not self.results_db.exists():
             return
-        now = self._now()
-        # The generated name holds local time (queries.py), so compare on that basis.
-        cutoff = datetime.fromtimestamp(now / 1000) - ORPHAN_AGE
-        with closing(self._connect()) as app, closing(self._connect_results()) as results:
-            rows = app.execute("SELECT * FROM result_tables").fetchall()
-            registered = {r["name"] for r in rows}
-            due = [r["name"] for r in rows if not r["expired"] and _as_of(r) + r["retention_ms"] <= now]
-            physical = [r[0] for r in results.execute("SELECT name FROM sqlite_master WHERE type='table'")]
-            orphans = [n for n in physical if table_names.GENERATED_RE.fullmatch(n) and n not in registered
-                       and (_name_time(n) or cutoff) < cutoff]
-        self._drop_physical(due + orphans)
-        self._mark_expired(due)
+        with self.settled():
+            now = self._now()
+            # The generated name holds local time (queries.py), so compare on that basis.
+            cutoff = datetime.fromtimestamp(now / 1000) - ORPHAN_AGE
+            with closing(self._connect()) as app, closing(self._connect_results()) as results:
+                rows = app.execute("SELECT * FROM result_tables").fetchall()
+                registered = {r["name"] for r in rows}
+                due = [r["name"] for r in rows if not r["expired"] and _as_of(r) + r["retention_ms"] <= now]
+                physical = [r[0] for r in results.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+                orphans = [n for n in physical if table_names.GENERATED_RE.fullmatch(n) and n not in registered
+                           and (_name_time(n) or cutoff) < cutoff]
+            self._drop_physical(due + orphans)
+            self._mark_expired(due)
 
 
 def _name_time(name: str) -> datetime | None:

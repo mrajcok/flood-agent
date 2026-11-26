@@ -361,3 +361,16 @@ def test_the_view_opens_the_results_database_read_only(tmp_path, clock, query_ru
 
     with closing(view._connect_results()) as con, pytest.raises(sqlite3.OperationalError):
         con.execute("CREATE TABLE x(y)")
+
+
+def test_tables_registered_before_lineage_was_recorded_have_unknown_lineage(tmp_path, query_runner):
+    app_db, clock = tmp_path / "app.db", Clock()
+    with closing(sqlite3.connect(app_db)) as con, con:  # the registry as it was first made
+        con.execute("CREATE TABLE result_tables (name TEXT PRIMARY KEY, cell_id TEXT NOT NULL, run_id TEXT NOT NULL,"
+                    " created_at INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '', columns TEXT NOT NULL DEFAULT '[]',"
+                    " request TEXT NOT NULL DEFAULT '', expired INTEGER NOT NULL DEFAULT 0, truncated_to INTEGER,"
+                    " retention_ms INTEGER NOT NULL, sql TEXT, max_rows INTEGER, refreshed_at INTEGER)")
+        con.execute("INSERT INTO result_tables(name, cell_id, run_id, created_at, retention_ms)"
+                    " VALUES ('rt_old', 'c', 'r', ?, ?)", (clock.now, HOUR))
+    catalog = Catalog(app_db, clock, runner=query_runner())
+    assert catalog["rt_old"].lineage_unknown and catalog["rt_old"].restricted

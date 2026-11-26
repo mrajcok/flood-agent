@@ -424,17 +424,18 @@ class AgentForTest(Agent):
 
 @pytest.fixture
 def query_runner(tmp_path, telemetry_db):
-    """`query_runner(readable=set(), timeout_s=None)` -> a QueryRunner over the test Telemetry Database and the
+    """`query_runner(readable=set(), timeout_s=None, schema=...)` -> a QueryRunner over the test Telemetry Database and the
     test User's results database (`databases_for_test`). `readable` is the set of tables a query may read,
-    which the test may change afterwards, or a function returning it (e.g. a Catalog's `readable`)."""
+    which the test may change afterwards, or a function returning it (e.g. a Catalog's `readable`). `schema` is what
+    column lineage knows of those tables (a Catalog's `schema`)."""
     results_db = databases_for_test(tmp_path).results_db
 
     def _build(readable: set[str] | Callable[[], set[str]] | None = None,
-               timeout_s: float | None = None) -> QueryRunner:
+               timeout_s: float | None = None, **kwargs) -> QueryRunner:
         tables = set() if readable is None else readable
         return QueryRunner(telemetry_db, results_db,
                            default_agent_config().query_timeout_s if timeout_s is None else timeout_s,
-                           tables if callable(tables) else lambda: tables)
+                           tables if callable(tables) else lambda: tables, **kwargs)
 
     return _build
 

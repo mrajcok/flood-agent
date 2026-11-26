@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 import yaml
 
 from flood_agent.ai_cell_context import SystemPrompt
+from flood_agent.lineage import TableSchema
 
 if TYPE_CHECKING:  # annotations only: no import-time coupling to the Catalog
     from flood_agent.catalog import Table
@@ -68,6 +69,8 @@ Metadata (column names, types, row counts). Rules:
   the user, write it as a UTC date and time (e.g. 2026-01-07 23:00 UTC), not epoch ms.
 - Map names (protocols, flags, record types, response codes) to values with the Semantic Layer
   enums; a column with `enum_bits` is a bitmask, so test it with `col & bit != 0`.
+- Columns marked restricted identify a Subscriber or device, and a table carrying their values can only be downloaded
+  masked or encrypted.
 - Use the functions and metrics documented in the Semantic Layer (e.g. in_cidr for CIDR filters).
 """
 
@@ -84,7 +87,8 @@ class SemanticLayer:
         return own or self.data.get("time_key") or ""
 
     def _validate(self) -> None:
-        """Refuse to start on a table without its Time Key column, or on one column name with two formats."""
+        """Refuse to start on a table without its Time Key column, on one column name with two formats, or on a
+        `restricted` that is not a boolean."""
         tables = self.data.get("tables") or {}
         seen: dict[str, tuple[str, tuple]] = {}
         for table, spec in tables.items():
@@ -94,6 +98,8 @@ class SemanticLayer:
                 raise ValueError(f"Semantic Layer: table {table!r} has no Time Key column {key!r}")
             for name, meta in cols.items():
                 meta = meta or {}
+                if not isinstance(meta.get("restricted", False), bool):
+                    raise ValueError(f"Semantic Layer: restricted on column {table}.{name} must be true or false")
                 fmt = (meta.get("unit"), meta.get("enum"), meta.get("enum_bits"))
                 if name in seen and seen[name][1] != fmt:
                     raise ValueError(
@@ -105,6 +111,15 @@ class SemanticLayer:
     def table_names(self) -> list[str]:
         """Names of the Telemetry Database tables described in the Semantic Layer's `tables:` map."""
         return list(self.data.get("tables") or {})
+
+    def telemetry_schemas(self) -> dict[str, TableSchema]:
+        """Each Telemetry Database table's columns as described here, with its Restricted Columns."""
+        out = {}
+        for table, spec in (self.data.get("tables") or {}).items():
+            columns = (spec or {}).get("columns") or {}
+            restricted = frozenset(name for name, meta in columns.items() if (meta or {}).get("restricted"))
+            out[table] = TableSchema(tuple(columns), restricted)
+        return out
 
     def column_formats(self, columns: list[str]) -> dict:
         """Display format per Result Table column, from Semantic Layer column metadata.

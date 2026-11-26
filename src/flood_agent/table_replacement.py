@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Iterator
 
+from flood_agent import lineage
 from flood_agent.catalog import Catalog, CellRun, Table, canonical
 from flood_agent.queries import QueryRunner
 
@@ -71,7 +72,10 @@ class TableReplacement:
                 raise ReplacementFailed(result["error"], result.get("raw_error") or result["error"],
                                         bool(result.get("stopped")))
             temp, undo = result["result_table"], None
-            after = dataclasses.replace(before, columns=result["columns"], truncated_to=result.get("truncated_to"))
+            restricted = lineage.restricted_columns(result["lineage"])
+            after = dataclasses.replace(before, columns=result["columns"], truncated_to=result.get("truncated_to"),
+                                        restricted_columns=tuple(restricted or ()),
+                                        lineage_unknown=restricted is None)
             if rerun:
                 after = dataclasses.replace(after, cell_id=rerun.owner.cell_id, run_id=rerun.owner.run_id,
                                             title=rerun.title, sql=sql, max_rows=max_rows)

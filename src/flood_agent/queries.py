@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterator
 
-from flood_agent import table_names
+from flood_agent import lineage, table_names
 
 
 def _rename_table(results_db: Path, old: str, new: str) -> None:
@@ -652,17 +652,21 @@ def _iter_all_rows(results_db: Path, name: str):
 class QueryRunner:
     """How callers query: built once with the Telemetry Database, the results database, the query timeout and
     `readable`, which returns the tables a query may read now (ADR 0003: every live Result Table, Saved Table and
-    Lookup Table). Each operation takes only what varies per call.
+    Lookup Table). `schema` gives the columns, and the Restricted Columns, of a table a query may read, for column
+    lineage; without it every query that reads a table has unknown lineage. Each operation takes only what varies per
+    call.
 
     A database error is raised as `QueryFailed`; `run` and `count` instead report a failure of the query itself
     in the dict they return. The operations that take a table name do not check that it is live: the caller has."""
 
-    def __init__(self, telemetry_db: Path, results_db: Path, timeout_s: float, readable: Callable[[], set[str]]):
+    def __init__(self, telemetry_db: Path, results_db: Path, timeout_s: float, readable: Callable[[], set[str]],
+                 schema: lineage.SchemaProvider = lambda name: None):
         self._telemetry_db, self._results_db = telemetry_db, results_db
-        self._timeout_s, self._readable = timeout_s, readable
+        self._timeout_s, self._readable, self._schema = timeout_s, readable, schema
 
     def run(self, sql: str, max_rows: int, title: str = "", stop: threading.Event | None = None) -> dict:
-        """Run the SQL as CTAS into a new Result Table. Returns Query Metadata only.
+        """Run the SQL as CTAS into a new Result Table. Returns Query Metadata, and under `lineage` which of its
+        columns carry restricted values (a `lineage.Outcome`, worked out from the SQL as given).
 
         At most `max_rows` rows are kept; a result of exactly `max_rows` rows is reported as truncated
         (`truncated_to`, `note`).
@@ -672,8 +676,11 @@ class QueryRunner:
         Setting `stop` aborts the query; the failure then has `stopped` set."""
         readable = self._readable()  # outside: a failure to read the set is not a query failure
         with _database_errors():
-            return _run_query(self._telemetry_db, self._results_db, sql, self._timeout_s, max_rows, readable, title,
-                              stop)
+            result = _run_query(self._telemetry_db, self._results_db, sql, self._timeout_s, max_rows, readable, title,
+                                stop)
+        if result["success"]:
+            result["lineage"] = lineage.analyse(sql, self._schema, [c["name"] for c in result["columns"]])
+        return result
 
     def count(self, sql: str, stop: threading.Event | None = None) -> dict:
         """Run a `SELECT COUNT(...) FROM ...` and return the number itself (no Result Table). The one

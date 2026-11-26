@@ -8,13 +8,14 @@ the table is registered, so a later change to the configured default does not to
 
 import json
 import sqlite3
+import threading
 import time
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType
-from typing import Callable, Iterable, Literal, Mapping
+from typing import Callable, Iterable, Iterator, Literal, Mapping
 
 from flood_agent import lineage, lookup_tables, table_names
 from flood_agent.lineage import UNKNOWN, Restriction, TableSchema
@@ -381,10 +382,19 @@ class Catalog(CatalogView):
                          default_retention_ms=default_retention_ms)
         self._on_rename = on_rename
         self._runner = runner
+        self._swapping = threading.RLock()  # held while what is under a table's name changes
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as con, con:
             con.executescript(SCHEMA)
             _add_restriction_column(con)
+
+    @contextmanager
+    def settled(self) -> Iterator[None]:
+        """While held, no table's name changes hands and every table's catalog row describes the rows under its
+        name: nothing renames or drops one, and no replacement is between writing the row and swapping in the rows
+        (it holds this too). For a reader that must have both of one table. Re-entrant."""
+        with self._swapping:
+            yield
 
     def register_for(
         self, owner: Owner, name: str, title: str = "", columns: list[dict] | None = None,
@@ -472,17 +482,19 @@ class Catalog(CatalogView):
     def drop_earlier_of_cell(self, cell_id: str, current_run_id: str | None) -> list[str]:
         """Drop the Result Tables a Cell's earlier Runs made that are still named `rt_*`, never a Saved Table
         nor the current Run's tables. They stay registered as expired. Returns the names dropped."""
-        names = [t.name for t in self.earlier_tables_of_cell(cell_id, current_run_id) if t.kind == "result"]
-        self._drop_physical(names)
-        self._mark_expired(names)
+        with self.settled():
+            names = [t.name for t in self.earlier_tables_of_cell(cell_id, current_run_id) if t.kind == "result"]
+            self._drop_physical(names)
+            self._mark_expired(names)
         return names
 
     def drop_of_cell(self, cell_id: str) -> list[str]:
         """Drop the Result Tables any Run of a Cell made that are still named `rt_*` (its current Run's and
         earlier ones'), never a Saved Table. They stay registered as expired. Returns the names dropped."""
-        names = [t.name for t in self.tables_of_cell(cell_id) if t.kind == "result"]
-        self._drop_physical(names)
-        self._mark_expired(names)
+        with self.settled():
+            names = [t.name for t in self.tables_of_cell(cell_id) if t.kind == "result"]
+            self._drop_physical(names)
+            self._mark_expired(names)
         return names
 
     def delete(self, name: str) -> None:
@@ -495,12 +507,13 @@ class Catalog(CatalogView):
         if kind is None:
             raise KeyError(name)
         name = canonical(name)
-        self._drop_physical([name])
-        if kind == "lookup":
-            with closing(self._connect()) as con, con:
-                con.execute("DELETE FROM lookup_tables WHERE name=?", (name,))
-        else:
-            self._mark_expired([name])
+        with self.settled():
+            self._drop_physical([name])
+            if kind == "lookup":
+                with closing(self._connect()) as con, con:
+                    con.execute("DELETE FROM lookup_tables WHERE name=?", (name,))
+            else:
+                self._mark_expired([name])
 
     def update(self, name: str, new_name: str | None = None, retention_days: float | None = None) -> Table:
         """Rename and/or set the Retention of a live Result or Saved Table; returns the new record.
@@ -510,21 +523,22 @@ class Catalog(CatalogView):
         Retention is given. ValueError, changing nothing, for a name that is taken (even by a dropped
         table), reserved, not an identifier or a Telemetry table's, or a Retention outside (0, cap].
         KeyError if unknown, `TableExpired` if no longer live."""
-        table = self[name]
-        retention_ms = None
-        if retention_days is not None:
-            if not 0 < retention_days <= self.policy.max_days:  # also rejects nan
-                raise ValueError(f"Retention must be more than 0 and at most {self.policy.max_days:g} days.")
-            retention_ms = max(1, round(retention_days * DAY_MS))
-        new = canonical(new_name) if new_name is not None else None
-        if new is not None and new != table.name:
-            if retention_ms is None and table.kind == "result":
-                retention_ms = max(table.retention_ms, round(self.policy.saved_days * DAY_MS))
-            self._rename(table.name, new, retention_ms)
-        elif retention_ms is not None:
-            with closing(self._connect()) as con, con:
-                con.execute("UPDATE result_tables SET retention_ms=? WHERE name=?", (retention_ms, table.name))
-        return self[new or table.name]
+        with self.settled():
+            table = self[name]
+            retention_ms = None
+            if retention_days is not None:
+                if not 0 < retention_days <= self.policy.max_days:  # also rejects nan
+                    raise ValueError(f"Retention must be more than 0 and at most {self.policy.max_days:g} days.")
+                retention_ms = max(1, round(retention_days * DAY_MS))
+            new = canonical(new_name) if new_name is not None else None
+            if new is not None and new != table.name:
+                if retention_ms is None and table.kind == "result":
+                    retention_ms = max(table.retention_ms, round(self.policy.saved_days * DAY_MS))
+                self._rename(table.name, new, retention_ms)
+            elif retention_ms is not None:
+                with closing(self._connect()) as con, con:
+                    con.execute("UPDATE result_tables SET retention_ms=? WHERE name=?", (retention_ms, table.name))
+            return self[new or table.name]
 
     def check_new_name(self, new_name: str) -> None:
         """ValueError unless `update` would accept this as a table's new name (it is lower-cased first)."""
@@ -601,18 +615,19 @@ class Catalog(CatalogView):
         old (left by a turn cancelled while its tool call was waiting). Nothing correct depends on this."""
         if self.results_db is None or not self.results_db.exists():
             return
-        now = self._now()
-        # The generated name holds local time (queries.py), so compare on that basis.
-        cutoff = datetime.fromtimestamp(now / 1000) - ORPHAN_AGE
-        with closing(self._connect()) as app, closing(self._connect_results()) as results:
-            rows = app.execute("SELECT * FROM result_tables").fetchall()
-            registered = {r["name"] for r in rows}
-            due = [r["name"] for r in rows if not r["expired"] and _as_of(r) + r["retention_ms"] <= now]
-            physical = [r[0] for r in results.execute("SELECT name FROM sqlite_master WHERE type='table'")]
-            orphans = [n for n in physical if table_names.GENERATED_RE.fullmatch(n) and n not in registered
-                       and (_name_time(n) or cutoff) < cutoff]
-        self._drop_physical(due + orphans)
-        self._mark_expired(due)
+        with self.settled():
+            now = self._now()
+            # The generated name holds local time (queries.py), so compare on that basis.
+            cutoff = datetime.fromtimestamp(now / 1000) - ORPHAN_AGE
+            with closing(self._connect()) as app, closing(self._connect_results()) as results:
+                rows = app.execute("SELECT * FROM result_tables").fetchall()
+                registered = {r["name"] for r in rows}
+                due = [r["name"] for r in rows if not r["expired"] and _as_of(r) + r["retention_ms"] <= now]
+                physical = [r[0] for r in results.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+                orphans = [n for n in physical if table_names.GENERATED_RE.fullmatch(n) and n not in registered
+                           and (_name_time(n) or cutoff) < cutoff]
+            self._drop_physical(due + orphans)
+            self._mark_expired(due)
 
 
 def _name_time(name: str) -> datetime | None:

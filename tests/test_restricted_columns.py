@@ -8,6 +8,7 @@ from contextlib import closing
 from pathlib import Path
 
 import pytest
+import yaml
 from conftest import databases_for_test
 from sqlglot.dialects.postgres import Postgres
 
@@ -274,6 +275,75 @@ def test_names_differing_only_in_the_case_of_a_non_ascii_letter_are_not_confused
     assert tables.run(sql)["lineage"] == Unknown()
 
 
+# Shapes outside the ones whose names SQLite and the parser are sure to read alike.
+@pytest.mark.parametrize("sql", [
+    # One name for two things
+    "SELECT d.apn FROM diameter d, (SELECT d.ip FROM lookup_one d) s",
+    "SELECT diameter.ip FROM lookup_one AS diameter, diameter AS d",
+    "SELECT a.apn FROM (SELECT apn FROM diameter) a UNION ALL SELECT a.sip FROM flows a",
+    "SELECT x.apn FROM (diameter AS d JOIN lookup_one AS l ON 1) AS x",
+    # A column qualified with its database
+    "SELECT main.diameter.apn FROM diameter",
+    # A subquery or CTE column without a plain name of its own
+    "SELECT n.apn FROM (SELECT apn, 1 + 1 FROM diameter) AS n",
+    "WITH s AS (SELECT apn, apn FROM diameter) SELECT 1 AS one FROM s",
+    'SELECT s.apn FROM (SELECT apn, ue_ip_address AS "x:1" FROM diameter) s',
+    # A reference to an outer query without a qualifier, or from a FROM subquery or a CTE
+    "SELECT (SELECT max(bytes) FROM flows WHERE sip = ue_ip_address) AS b FROM diameter",
+    "SELECT apn AS q FROM diameter WHERE EXISTS (SELECT 1 FROM flows WHERE sip = q)",
+    "SELECT (SELECT s.v FROM (SELECT d.apn AS v) s) AS o FROM diameter d",
+    "SELECT (WITH c AS (SELECT d.apn AS v) SELECT c.v FROM c) AS o FROM diameter d",
+    # Joins that name columns for the query
+    "SELECT d.apn FROM diameter d NATURAL JOIN lookup_one",
+    "SELECT d.apn FROM diameter d RIGHT JOIN lookup_one USING (imsi)",
+    # A subquery that decides how many rows there are
+    "SELECT sip FROM flows LIMIT (SELECT max(imsi) FROM diameter) % 10",
+    "SELECT sip FROM flows LIMIT 10 OFFSET (SELECT max(imsi) FROM diameter) % 10",
+    "WITH c AS (SELECT count(*) AS n FROM diameter WHERE imsi > '') SELECT sip FROM flows LIMIT (SELECT n FROM c)",
+])
+def test_a_query_whose_names_might_be_read_two_ways_is_unknown(tables, sql):
+    tables.catalog.add_lookup("one", "ip,imsi\n10.0.0.1,001010000000000")
+    assert tables.run(sql)["lineage"] == Unknown()
+
+
+@pytest.mark.parametrize("sql", [
+    # One alias used twice for one table, as in the two halves of a UNION
+    "SELECT f.sip FROM flows f JOIN diameter d ON d.imsi = f.circuit "
+    "UNION ALL SELECT f.dip FROM flows f JOIN diameter d ON d.imsi = f.circuit",
+    # A correlated subquery that says which query it reads
+    "SELECT (SELECT count(*) FROM flows f WHERE f.sip = d.ue_ip_address) AS n, d.apn FROM diameter d",
+    # A name a subquery's own sources have is the subquery's own, though an outer query has it too
+    "SELECT apn, (SELECT max(apn) FROM diameter WHERE result_code = 3004) AS worst FROM diameter",
+    # A query's own output names, in the clauses that only filter, group and order
+    "WITH s(network, n) AS (SELECT apn, count(*) AS total FROM diameter GROUP BY apn HAVING total > 0 "
+    "ORDER BY total) SELECT network, n FROM s",
+])
+def test_ordinary_queries_stay_known(tables, sql):
+    assert tables.restricted(sql) == []
+
+
+def shipped_queries() -> list:
+    """Every query CANOPY ships as an example of what to ask."""
+    from flood_agent.evalset.golden import load_golden
+    layer = yaml.safe_load(REAL.read_text())
+    metrics = [(name, m["sql"]) for name, m in layer["metrics"].items() if m["sql"].startswith(("SELECT", "WITH"))]
+    golden = [(q.id, q.sql) for q in load_golden()]
+    cells = [(f"{q.id}-above", cell["sql"]) for q in load_golden() for cell in q.above or [] if cell["kind"] == "sql"]
+    prompts = yaml.safe_load((REAL.parent / "src/flood_agent/canned_prompts.yaml").read_text())
+    canned = [(f"{prompt['id']}-{n}", call["args"]["sql"])
+              for prompt in prompts if not {"failed_tool_calls", "notice"} & prompt["expect"].keys()
+              for n, call in enumerate(c for step in prompt["steps"] for c in step.get("tool_calls", []))
+              if "{" not in call.get("args", {}).get("sql", "{")]
+    return [pytest.param(sql.replace("<start>", "0").replace("<end>", "2000000000000"), id=name)
+            for name, sql in metrics + golden + cells + canned]
+
+
+@pytest.mark.parametrize("sql", shipped_queries())
+def test_the_lineage_of_every_shipped_query_is_worked_out(tables, sql):
+    tables.catalog.add_lookup("watchlist", "ip\n10.0.0.1")
+    assert tables.run(sql)["lineage"] != Unknown()
+
+
 def identifiers(telemetry_db: Path) -> set[str]:
     """Every value of a Restricted Column in the test Telemetry Database: what no unrestricted column may hold."""
     with closing(sqlite3.connect(telemetry_db)) as con:
@@ -376,6 +446,25 @@ def leaks(tables):
     # The name SQLite makes for the second of two columns of one name
     'SELECT (SELECT "x:1" FROM (SELECT apn AS x, imsi AS x FROM diameter)) AS v '
     'FROM (SELECT sip AS "x:1" FROM flows)',
+    # In a FROM subquery or a CTE, SQLite does not look at the sources beside it, only further out
+    "SELECT (SELECT s.v FROM lookup_one AS d, (SELECT d.imsi AS v) AS s LIMIT 1) AS o FROM diameter d "
+    "WHERE d.imsi IS NOT NULL",
+    "SELECT (WITH c AS (SELECT d.imsi AS v) SELECT c.v FROM c, lookup_one AS d LIMIT 1) AS o FROM diameter d "
+    "WHERE d.imsi IS NOT NULL",
+    # A column qualified with its database
+    "SELECT (SELECT main.diameter.imsi FROM lookup_one AS diameter) AS o FROM diameter WHERE imsi > ''",
+    # Names SQLite makes up for a subquery's columns, which an outer query also has
+    'SELECT (SELECT max("1+1:1") FROM (SELECT 1+1, msisdn AS "1+1" FROM diameter)) AS o '
+    'FROM (SELECT 2 AS "1+1:1")',
+    'SELECT (SELECT "x:2" FROM (SELECT apn AS x, apn AS x, imsi AS "x:1" FROM diameter) a) AS o '
+    'FROM (SELECT 2 AS "x:2") b',
+    'SELECT (SELECT column1 FROM (SELECT imsi AS "true" FROM diameter)) AS o FROM (SELECT 2 AS column1)',
+    # A subquery in a window's frame, whose value the rows counted give away
+    "SELECT count(*) OVER (ORDER BY k ROWS BETWEEN (SELECT max(imsi) FROM diameter) % 7 + 0 PRECEDING "
+    "AND CURRENT ROW) AS o FROM lookup_one",
+    # `x IN name` reads the table of that name, though a column has the name too
+    "SELECT '001010000000001' IN lookup_one AS o FROM (SELECT '1' AS lookup_one) "
+    "WHERE EXISTS (SELECT 1 FROM diameter d WHERE d.imsi > '')",
 ])
 def test_no_output_column_holding_an_identifier_is_called_unrestricted(tables, leaks, sql):
     tables.catalog.add_lookup("one", "imsi,k\n001010000000000,x")

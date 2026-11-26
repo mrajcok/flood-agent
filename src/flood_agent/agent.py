@@ -209,7 +209,7 @@ class UserSpace:
         `downloads.DownloadRefused` if the table may not be had in `mode`, `downloads.NoPublicKey` if there is no key
         to encrypt for."""
         key = self.public_keys.get() if mode == "encrypted" else None
-        with self.replacement.settled():  # so the rows read are the ones the restriction checked here is about
+        with self.tables.settled():  # so the rows read are the ones the restriction checked here is about
             table = self.tables.for_download(result_table)
             allowed = downloads.check(table, mode, key)
             columns, rows = self.queries.all_rows(table.name)

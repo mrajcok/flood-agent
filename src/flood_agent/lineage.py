@@ -4,7 +4,8 @@
 is within the query's reach comes from SQLite alone. Which output columns its values reach comes from parsing the
 query, rewritten so the parser reads it as SQLite does (`sqlite_sql`), with sqlglot (the postgres dialect), following
 each output column back through expressions, set operations, CTEs and subqueries to the columns it takes its values
-from. It fails closed: whatever it cannot be sure of is `Unknown`, never "nothing restricted".
+from. Only query shapes whose names both are sure to resolve alike are followed (`_check_shape`, and the `_check_*`
+methods of `_Lineage`). It fails closed: whatever it cannot be sure of is `Unknown`, never "nothing restricted".
 """
 
 import logging
@@ -123,6 +124,7 @@ def analyse(sql: str, schema: SchemaProvider, result_columns: list[str], reads: 
                 sqlite_sql.check_name(column)
         query = _parse(sqlite_sql.canonical(sql, (c for t in read.values() for c in t.columns)))
         listed = _tables_read(query)
+        _check_shape(query)
         if not read.keys() <= listed:
             raise _Unresolved("a table SQLite reads that the parser does not see")
         tables = read | {name: _known_table(schema, name) for name in listed - read.keys()}
@@ -165,6 +167,83 @@ def _mark_unnamed(query: exp.Query) -> None:
         alias.set("this", projection)
 
 
+def _check_shape(query: exp.Query) -> None:
+    """That the query, before it is qualified, has none of the shapes SQLite and the parser may read differently."""
+    for column in query.find_all(exp.Column):
+        if column.args.get("db") or column.args.get("catalog"):
+            raise _Unresolved("a column qualified with its database")
+    for join in query.find_all(exp.Join):
+        if join.method == "NATURAL" or join.args.get("using") and join.side in ("RIGHT", "FULL"):
+            raise _Unresolved("a NATURAL join, or a RIGHT or FULL join with USING")
+    if any(test.args.get("field") for test in query.find_all(exp.In)):
+        raise _Unresolved("a table named after IN")  # which the parser would take for a column
+    for clause in query.find_all(exp.Limit, exp.Offset, exp.WindowSpec):  # they say how many rows are returned or counted
+        if clause.find(exp.Select):
+            raise _Unresolved("a subquery in LIMIT, OFFSET or a window frame")
+    _check_one_meaning_per_name(query)
+
+
+def _check_one_meaning_per_name(query: exp.Query) -> None:
+    """That every name of a table, CTE or source alias stands for one thing wherever it is written. Which of two things
+    of one name a qualifier means depends on rules of scope in which the two differ; with one meaning it cannot matter."""
+    meanings: dict[str, set[tuple[str, object]]] = {}
+
+    def means(name: str, kind: str, which: object) -> None:
+        meanings.setdefault(name, set()).add((kind, which))
+
+    for table in query.find_all(exp.Table):
+        kind = "cte" if not table.db and table.name in _cte_names(table) else "table"
+        means(table.name, kind, table.name)
+        means(table.alias_or_name, kind, table.name)
+    for cte in query.find_all(exp.CTE):
+        means(cte.alias_or_name, "cte", cte.alias_or_name)
+    for subquery in query.find_all(exp.Subquery):
+        if subquery.alias:
+            if not isinstance(subquery.this, exp.Select | exp.SetOperation):
+                raise _Unresolved("an alias for something in brackets that is not a query")
+            means(subquery.alias, "subquery", id(subquery))
+    if any(len(found) > 1 for found in meanings.values()):
+        raise _Unresolved("one name for two things")
+
+
+@dataclass(frozen=True)
+class _BareColumn:
+    """A column written without a qualifier: its name, the query it is written in, and whether it may be one of that
+    query's output names (in a clause that only filters, groups or orders)."""
+
+    name: str
+    query: exp.Expr
+    own_alias: bool
+
+
+def _bare_columns(query: exp.Query) -> list[_BareColumn]:
+    """The columns written without a qualifier. To be taken before the query is qualified."""
+    bare = []
+    for column in query.find_all(exp.Column):
+        if column.table:
+            continue
+        child, parent = column, column.parent
+        while parent is not None and not isinstance(parent, exp.Select | exp.SetOperation):
+            child, parent = parent, parent.parent
+        if parent is None:
+            raise _Unresolved("a column outside any query")
+        named = column.name in cast(exp.Query, parent).named_selects
+        bare.append(_BareColumn(column.name, parent, named and child.arg_key in ("where", "group", "having", "order")))
+    return bare
+
+
+def _inner_queries(query: exp.Query) -> list[exp.Expr]:
+    """The queries of the CTEs and of the subqueries in FROM and JOIN: those whose columns the query around them reads
+    by name."""
+    inner = [cte.this for cte in query.find_all(exp.CTE)]
+    for subquery in query.find_all(exp.Subquery):
+        if subquery.arg_key == "this" and isinstance(subquery.parent, exp.From | exp.Join):
+            body = subquery.unnest()
+            if isinstance(body, exp.Select | exp.SetOperation):
+                inner.append(body)
+    return inner
+
+
 def _cte_names(node: exp.Expr) -> set[str]:
     """The names of the CTEs of every WITH clause around `node`."""
     names: set[str] = set()
@@ -186,10 +265,6 @@ def _tables_read(query: exp.Query) -> set[str]:
             raise _Unresolved("another database")
         if table.db or table.name not in _cte_names(table):
             names.add(table.name)
-    for test in query.find_all(exp.In):  # SQLite's `x IN table_name`
-        operand = test.args.get("field")
-        if operand is not None:
-            names.add(operand.name)
     return names
 
 
@@ -201,7 +276,11 @@ class _Lineage:
             # The parser puts a USING column first in `*`, and SQLite leaves it in place.
             if any(not isinstance(star.parent, exp.Count) for star in query.find_all(exp.Star)):
                 raise _Unresolved("a * over a join with USING")
-        self._drop_database_names(query)
+        bare = _bare_columns(query)
+        column_lists = [(cte.this, cte.args["alias"].columns) for cte in query.find_all(exp.CTE)]
+        column_lists = [(body, [c.name for c in names]) for body, names in column_lists if names]
+        for table in query.find_all(exp.Table):
+            table.set("db", None)  # each name here means one thing (`_check_shape`)
         self._restricted = {name: {fold(c) for c in t.restricted} for name, t in tables.items()}
         self._columns = {name: [fold(c) for c in t.columns] for name, t in tables.items()}  # in table order
         mapping: dict[str, object] = {name: dict.fromkeys(columns, "TEXT") for name, columns in self._columns.items()}
@@ -215,16 +294,8 @@ class _Lineage:
         self._scopes = {id(scope.expression): scope for scope in scopes}
         self._outputs: dict[int, list[tuple[str, bool]]] = {}
         self._check(scopes)
-
-    @staticmethod
-    def _drop_database_names(query: exp.Query) -> None:
-        for table in query.find_all(exp.Table):
-            if table.db:
-                if table.name in _cte_names(table):
-                    raise _Unresolved("a table and a CTE of one name")
-                table.set("db", None)
-        for column in query.find_all(exp.Column):
-            column.set("db", None)
+        self._check_inner_names(column_lists)
+        self._check_bare_columns(bare)
 
     def _check(self, scopes: list[Scope]) -> None:
         ctes = [cte.alias_or_name for cte in self._query.find_all(exp.CTE)]
@@ -245,18 +316,28 @@ class _Lineage:
                 # SQLite may see a CTE here that sqlglot takes for a table: one named before it is defined.
                 if isinstance(source, exp.Table) and source.name in _cte_names(source):
                     raise _Unresolved("a CTE used before it is defined")
-        for scope in scopes:
-            if scope.is_derived_table or scope.is_cte:
-                self._check_names(self._scope_outputs(scope))
 
-    @staticmethod
-    def _check_names(outputs: list[tuple[str, bool]]) -> None:
-        """That each restricted column of a subquery or CTE has the same name in SQLite as here. Otherwise a reference
-        by SQLite's name, which the parser would take elsewhere, could read it: SQLite names a column without an
-        alias after its text, and the second of two columns of one name `name:1`."""
-        names = [name for name, _ in outputs]
-        if any(carries and (name.startswith(_UNNAMED) or names.count(name) > 1) for name, carries in outputs):
-            raise _Unresolved("a restricted column of a subquery without a name of its own")
+    def _check_inner_names(self, column_lists: list[tuple[exp.Expr, list[str]]]) -> None:
+        """That each column of a subquery or CTE has the same name in SQLite as here. SQLite makes up a name for a
+        column that has none of its own (its text), for the second of two of one name (`name:1`) and for one called
+        true or false; a reference by such a name would be taken elsewhere here."""
+        for inner in _inner_queries(self._query):
+            names = [name for name, _ in self._scope_outputs(self._scopes[id(inner)])]
+            if len(set(names)) != len(names) or any(
+                    name.startswith(_UNNAMED) or ":" in name or name in ("true", "false") for name in names):
+                raise _Unresolved("a subquery column without a plain name of its own")
+        for body, listed in column_lists:
+            if [name for name, _ in self._scope_outputs(self._scopes[id(body)])] != listed:
+                raise _Unresolved("a CTE's column list that is not followed")
+
+    def _check_bare_columns(self, bare: list[_BareColumn]) -> None:
+        """That each column written without a qualifier is one of the sources of its own query (or, where allowed, one
+        of its output names), which both look at first. Further out the two search in different ways."""
+        for column in bare:
+            scope = self._scopes[id(column.query)]
+            if not column.own_alias and not any(column.name in self._names_of(source)
+                                                for _, source in scope.selected_sources.values()):
+                raise _Unresolved("a column without a qualifier that its own query does not have")
 
     def known(self, result_columns: list[str]) -> Known:
         outputs = self._scope_outputs(self._scopes[id(self._query)])
@@ -298,18 +379,10 @@ class _Lineage:
         clause = column.find_ancestor(exp.Where, exp.Group, exp.Having, exp.Order, exp.Query)
         if clause is None or isinstance(clause, exp.Query):
             raise _Unresolved("a column that does not resolve")
-        named = column.name in cast(exp.Query, scope.expression).named_selects
-        if named and isinstance(clause, exp.Order):
+        if column.name in cast(exp.Query, scope.expression).named_selects and isinstance(clause, exp.Order):
             return set()
-        outer: Scope | None = scope
-        while outer is not None:
-            found = [source for _, source in outer.selected_sources.values() if column.name in self._names_of(source)]
-            if found:
-                return {(source.name, column.name) for source in found if isinstance(source, exp.Table)}
-            outer = outer.parent
-        if not named:
-            raise _Unresolved("a column that does not resolve")
-        return set()
+        return {(source.name, column.name) for _, source in scope.selected_sources.values()
+                if isinstance(source, exp.Table) and column.name in self._names_of(source)}
 
     def _names_of(self, source: exp.Table | Scope) -> list[str]:
         """The column names of a table or a subquery."""
@@ -319,10 +392,13 @@ class _Lineage:
 
     @staticmethod
     def _source(column: exp.Column, scope: Scope | None) -> exp.Table | Scope:
-        """What `column`'s qualifier names, looking outwards from `scope` (a correlated subquery)."""
+        """What `column`'s qualifier names, looking outwards from `scope` (a correlated subquery, which a subquery in
+        FROM or a CTE may not be)."""
         while scope is not None:
             if column.table in scope.selected_sources:
                 return scope.selected_sources[column.table][1]
+            if _walled(scope.expression):
+                break
             scope = scope.parent
         raise _Unresolved("a column that does not resolve")
 
@@ -365,6 +441,14 @@ class _Lineage:
         if not matches:
             raise _Unresolved("a column its subquery does not have")
         return any(matches)
+
+
+def _walled(query: exp.Expr) -> bool:
+    """Whether `query` is a CTE's, or a subquery in FROM or JOIN: one that SQLite resolves apart from the sources
+    around it."""
+    while isinstance(query.parent, exp.Subquery):
+        query = query.parent
+    return isinstance(query.parent, exp.CTE | exp.From | exp.Join) and query.arg_key == "this"
 
 
 def _carried_name(projection: exp.Expr) -> str | None:

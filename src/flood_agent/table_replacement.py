@@ -54,14 +54,6 @@ class TableReplacement:
         self.tables, self.runner = tables, runner
         self._busy: set[str] = set()  # tables being replaced now
         self._lock = threading.Lock()
-        self._swapping = threading.Lock()  # held while a table's catalog row and rows do not yet match
-
-    @contextmanager
-    def settled(self) -> Iterator[None]:
-        """While held, every table's catalog row describes the rows under its name: no replacement is between
-        writing the one and swapping in the other. For a reader that must have both from the same side."""
-        with self._swapping:
-            yield
 
     def replace(self, name: str, sql: str, max_rows: int, *, stop: threading.Event | None = None,
                 rerun: Rerun | None = None) -> Replaced:
@@ -86,7 +78,7 @@ class TableReplacement:
             if rerun:
                 after = dataclasses.replace(after, cell_id=rerun.owner.cell_id, run_id=rerun.owner.run_id,
                                             title=rerun.title, sql=sql, max_rows=max_rows)
-            with self._swapping:
+            with self.tables.settled():  # the catalog row and the rows do not match until both are written
                 try:
                     # The one catalog write is the step that can be undone, and it refuses a table a sweep expired.
                     # Until the swap is done the row may be read beside the old rows or the new, by a query too (which

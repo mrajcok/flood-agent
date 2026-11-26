@@ -89,9 +89,10 @@ def build_parts(config: AgentConfig, user: str, semantic_layer: SemanticLayer, c
     databases = user_databases(config.users_dir, user)
     store = NotebookStore(databases.app_db, config.clock)
     # The runner asks for the readable set only when it queries, by which time the Catalog below exists.
-    runner = QueryRunner(config.telemetry_db, databases.results_db, config.query_timeout_s, lambda: tables.readable())
+    runner = QueryRunner(config.telemetry_db, databases.results_db, config.query_timeout_s, lambda: tables.readable(),
+                         lambda name: tables.schema(name))
     tables = Catalog(
-        databases.app_db, config.clock, config.result_ttl_ms, telemetry_tables=semantic_layer.table_names(),
+        databases.app_db, config.clock, config.result_ttl_ms, telemetry_tables=semantic_layer.telemetry_schemas(),
         results_db=databases.results_db, on_rename=store.follow_rename,  # Displays follow a table's new name
         runner=runner,
     )
@@ -290,7 +291,7 @@ class Agent:
             users=self.config.users,
             query_timeout_s=self.config.query_timeout_s,
             chart_row_cap=self.config.chart_row_cap,
-            telemetry_tables=tuple(self.semantic_layer.table_names()),
+            telemetry_tables=self.semantic_layer.telemetry_schemas(),
             fixed_now_ms=self.config.fixed_now_ms,
         )
 

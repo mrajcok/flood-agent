@@ -42,6 +42,10 @@ _Avoid_: response, xDR, CDR, message
 A mobile customer, identified by IMSI; the MSISDN (phone number) and IMEI (device) are its attributes.
 _Avoid_: user (the CANOPY user), customer, UE
 
+**Restricted Column**:
+A Telemetry Database column that identifies a Subscriber or device, or a Result Table column whose values come from one. A table with a Restricted Column can only be downloaded masked or encrypted.
+_Avoid_: sensitive field, PII column
+
 **Circuit**:
 An opaque 12-character identifier for the monitored link a Flow Record was observed on.
 _Avoid_: Link, interface, port

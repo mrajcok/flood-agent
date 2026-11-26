@@ -10,6 +10,8 @@ import json
 from dataclasses import dataclass, fields
 from typing import Any
 
+from flood_agent import lineage
+
 UNREADABLE = "The tool returned an unreadable result."
 
 
@@ -22,6 +24,7 @@ class ResultTableMade:
     truncated_to: int | None = None
     note: str | None = None
     executed_sql: str | None = None  # internal: the CTAS that ran
+    restricted_columns: list | None = None  # internal, for the Table Catalog; None: lineage unknown
 
 
 @dataclass(frozen=True)
@@ -63,7 +66,7 @@ class Stopped:
 
 Outcome = ResultTableMade | Counted | TableDescribed | DisplayMade | Failed | Stopped
 
-_INTERNAL = {"raw_error", "executed_sql", "raw_content"}
+_INTERNAL = {"raw_error", "executed_sql", "raw_content", "restricted_columns"}
 _KINDS: dict[str, type] = {
     "result_table_made": ResultTableMade, "counted": Counted, "table_described": TableDescribed,
     "display_made": DisplayMade, "failed": Failed, "stopped": Stopped,
@@ -93,7 +96,7 @@ def decode(text: str) -> Outcome:
 _TYPES: dict[str, Any] = {
     "result_table": str, "columns": list, "row_count": int, "truncated_to": int, "note": str, "count": int,
     "name": str, "kind": str, "display": dict, "error": str, "raw_error": str, "executed_sql": str,
-    "raw_content": str,
+    "raw_content": str, "restricted_columns": list,
 }
 
 
@@ -127,6 +130,7 @@ def from_query_result(result: dict) -> Outcome:
         return ResultTableMade(
             result["result_table"], result["columns"], result["row_count"],
             result.get("truncated_to"), result.get("note"), result.get("executed_sql"),
+            lineage.restricted_columns(result["lineage"]) if "lineage" in result else None,
         )
     kind = Stopped if result.get("stopped") else Failed
     return kind(result["error"], result.get("raw_error"), result.get("executed_sql"))

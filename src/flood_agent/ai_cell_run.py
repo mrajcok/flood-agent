@@ -493,7 +493,7 @@ class AiCellRuns:
         self.tables.register_for(
             active.cell_run, made.result_table, title if isinstance(title, str) else "",
             made.columns, active.prompt, made.truncated_to, args.get("sql"), active.max_rows,
-            made.restricted_columns,
+            made.restriction,
         )
 
     def _prepare_displays(

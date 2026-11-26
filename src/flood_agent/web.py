@@ -747,8 +747,8 @@ def create_app(agent: Agent, sign_in_config: SignInConfig, picker: list[PickerEn
         except KeyError:
             raise HTTPException(404, "unknown result table")
         key = space.public_keys.get()
-        return {"restricted": table.restricted, "restricted_columns": list(table.restricted_columns),
-                "lineage_unknown": table.lineage_unknown,
+        return {"restricted": table.restricted, "restricted_columns": list(table.restriction.columns or ()),
+                "lineage_unknown": table.restriction.unknown,
                 "public_key": None if key is None else {"type": key.type, "fingerprint": key.fingerprint}}
 
     @app.get("/api/results/{result_table}/psv")
@@ -764,9 +764,10 @@ def create_app(agent: Agent, sign_in_config: SignInConfig, picker: list[PickerEn
         except NoPublicKey as e:
             raise HTTPException(409, str(e))
         if mode != "plain":  # who took what from a restricted table; the names are quoted, as the User chose them
+            table, key = download.allowed.table, download.allowed.key
             log.info("download: user=%s table=%s mode=%s restricted_columns=%s%s", request.state.user,
-                     download.table.name, mode, json.dumps(download.table.restricted_columns),
-                     f" key={download.key.fingerprint}" if download.key else "")
+                     table.name, mode, json.dumps(table.restriction.columns or ()),
+                     f" key={key.fingerprint}" if key else "")
         return StreamingResponse(
             download.chunks,
             media_type=download.media_type,

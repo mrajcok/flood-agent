@@ -33,42 +33,55 @@ class NoPublicKey(Exception):
 
 
 @dataclass(frozen=True)
-class Download:
-    """A file to send: its name and media type, the table as the download treats it, and its content in pieces (a
-    PSV file's text is made as it is read)."""
+class Allowed:
+    """A download `check` has allowed, of `table` as the download treats it. `masked` names the columns to write as
+    tokens, and is None unless the file is a masked one; `key` is the one an encrypted file is for."""
 
-    filename: str
     table: Table
+    masked: tuple[str, ...] | None = None
+    key: PublicKey | None = None
+
+
+@dataclass(frozen=True)
+class Download:
+    """A file to send: what was allowed, its name and media type, and its content in pieces (a PSV file's text is
+    made as it is read)."""
+
+    allowed: Allowed
+    filename: str
     chunks: Iterator[str] | Iterator[bytes]
     media_type: str = "text/plain; charset=utf-8"
-    key: PublicKey | None = None  # the one an encrypted file is for
 
 
-def check(table: Table, mode: Mode, key: PublicKey | None = None) -> None:
-    """`DownloadRefused` unless `table` may be downloaded in `mode`; `NoPublicKey` for an encrypted one without the
-    User's `key`."""
-    if mode == "encrypted" and key is None:
-        raise NoPublicKey("No public key on file")
-    if not table.restricted or mode == "encrypted" or (mode == "masked" and not table.lineage_unknown):
-        return
-    if table.lineage_unknown:
+def check(table: Table, mode: Mode, key: PublicKey | None = None) -> Allowed:
+    """The download of `table` in `mode`; `DownloadRefused` if it may not be had that way, `NoPublicKey` for an
+    encrypted one without the User's `key`."""
+    if mode == "encrypted":
+        if key is None:
+            raise NoPublicKey("No Public Key on file")
+        return Allowed(table, key=key)
+    columns = table.restriction.columns
+    if columns is None:
         raise DownloadRefused(f"CANOPY couldn't tell which columns of {table.name} carry restricted values, "
                               "so it can only be downloaded encrypted.")
-    raise DownloadRefused(f"{table.name} has Restricted Columns ({', '.join(table.restricted_columns)}), "
-                          "so it cannot be downloaded plain. Download it masked or encrypted.")
-
-
-def psv_file(table: Table, mode: Mode, columns: Sequence[str], rows: Iterable[tuple],
-             key: PublicKey | None = None) -> Download:
-    """The download of `table`'s `rows` in `mode`, which `check` has allowed; an encrypted one is for `key`, and all
-    the rows have been read and encrypted when this returns."""
-    if mode == "encrypted":
-        assert key is not None
-        return Download(f"{table.name}.psv.age", table, _encrypted(_psv(columns, rows), key),
-                        "application/octet-stream", key)
     if mode == "masked":
-        return Download(f"{table.name}.masked.psv", table, _psv(columns, rows, table.restricted_columns))
-    return Download(f"{table.name}.psv", table, _psv(columns, rows))
+        return Allowed(table, masked=columns)
+    if columns:
+        raise DownloadRefused(f"{table.name} has Restricted Columns ({', '.join(columns)}), "
+                              "so it cannot be downloaded plain. Download it masked or encrypted.")
+    return Allowed(table)
+
+
+def psv_file(allowed: Allowed, columns: Sequence[str], rows: Iterable[tuple]) -> Download:
+    """The file of the `allowed` download, holding `rows`. All the rows of an encrypted one have been read and
+    encrypted when this returns."""
+    name = allowed.table.name
+    if allowed.key is not None:
+        return Download(allowed, f"{name}.psv.age", _encrypted(_psv(columns, rows), allowed.key),
+                        "application/octet-stream")
+    if allowed.masked is not None:
+        return Download(allowed, f"{name}.masked.psv", _psv(columns, rows, allowed.masked))
+    return Download(allowed, f"{name}.psv", _psv(columns, rows))
 
 
 def _psv(columns: Sequence[str], rows: Iterable[tuple], masked: Collection[str] = ()) -> Iterator[str]:

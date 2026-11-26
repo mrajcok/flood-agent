@@ -12,9 +12,12 @@ from conftest import (
 )
 
 from flood_agent.catalog import Catalog, CatalogView, CellRun, TableExpired
+from flood_agent.lineage import TableSchema
 
 HOUR = 3_600_000
 DAY = 24 * HOUR
+
+FLOWS = {"flows": TableSchema(("sip", "dip"))}
 
 
 class Clock:
@@ -138,13 +141,13 @@ def test_read_only_view_reads_but_has_no_write_operations_and_cannot_write(world
 
 def test_kind_of_any_case_covers_telemetry_result_saved_lookup_and_unknown(tmp_path, clock, query_runner):
     app_db = tmp_path / "app.db"
-    catalog = Catalog(app_db, clock, default_retention_ms=HOUR, telemetry_tables=["flows"], runner=query_runner())
+    catalog = Catalog(app_db, clock, default_retention_ms=HOUR, telemetry_tables=FLOWS, runner=query_runner())
     cid = "cell-1"
     register_table(catalog, "rt_20260101_000000", cid, 1)
     register_table(catalog, "busy_ports", cid, 1)
     with closing(sqlite3.connect(app_db)) as con, con:
         con.execute("INSERT INTO lookup_tables(name, created_at) VALUES ('lookup_ips', 1)")
-    view = CatalogView(app_db, clock, ["flows"])
+    view = CatalogView(app_db, clock, FLOWS)
 
     kinds = {n: view.kind_of(n) for n in ("FLOWS", "rt_20260101_000000", "Busy_Ports", "lookup_IPS", "nope")}
 
@@ -245,7 +248,7 @@ def _exists(path, name) -> bool:
 def full(tmp_path, clock, query_runner):
     """(catalog, cell id, results db path): a Catalog that knows a Telemetry table `flows`."""
     app_db, results_db = tmp_path / "app.db", databases_for_test(tmp_path).results_db
-    catalog = Catalog(app_db, clock, default_retention_ms=HOUR, results_db=results_db, telemetry_tables=["flows"],
+    catalog = Catalog(app_db, clock, default_retention_ms=HOUR, results_db=results_db, telemetry_tables=FLOWS,
                       runner=query_runner())
     return catalog, "cell-1", results_db
 
@@ -373,4 +376,4 @@ def test_tables_registered_before_lineage_was_recorded_have_unknown_lineage(tmp_
         con.execute("INSERT INTO result_tables(name, cell_id, run_id, created_at, retention_ms)"
                     " VALUES ('rt_old', 'c', 'r', ?, ?)", (clock.now, HOUR))
     catalog = Catalog(app_db, clock, runner=query_runner())
-    assert catalog["rt_old"].lineage_unknown and catalog["rt_old"].restricted
+    assert catalog["rt_old"].restriction.unknown and catalog["rt_old"].restricted

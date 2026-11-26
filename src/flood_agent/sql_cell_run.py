@@ -263,7 +263,7 @@ class SqlCellRuns:
         try:
             self.tables.register_for(owner, name, title, result["columns"], table_names.SQL_CELL_REQUEST,
                                      result.get("truncated_to"), sql, max_rows,
-                                     lineage.restricted_columns(result["lineage"]))
+                                     lineage.restriction(result["lineage"]))
         except BaseException:
             self.runner.drop(name)
             raise

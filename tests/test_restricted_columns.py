@@ -2,15 +2,18 @@
 runner both Cell kinds use. Each query runs for real, and the columns lineage says it read are checked against the
 SQLite authorizer's read set."""
 
+import re
 import sqlite3
 from contextlib import closing
 from pathlib import Path
 
 import pytest
 from conftest import databases_for_test
+from sqlglot.dialects.postgres import Postgres
 
+from flood_agent import sqlite_sql
 from flood_agent.catalog import Catalog, CellRun
-from flood_agent.lineage import Known, Unknown, Unrestricted, restricted_columns
+from flood_agent.lineage import Known, Unknown, Unrestricted, restriction
 from flood_agent.queries import in_cidr, now_ms
 from flood_agent.semantic_layer import SemanticLayer
 
@@ -62,7 +65,7 @@ class Tables:
         """Run `sql` and register its Result Table, as a Cell Run does."""
         result = self.run(sql)
         self.catalog.register_for(CellRun("cell", "run"), result["result_table"], columns=result["columns"],
-                                  restricted_columns=restricted_columns(result["lineage"]))
+                                  restriction=restriction(result["lineage"]))
         return result["result_table"]
 
     def restricted(self, sql: str) -> list[str]:
@@ -175,7 +178,7 @@ def test_a_renamed_table_is_read_under_its_new_name(tables):
     first = tables.make("SELECT imsi AS id, apn FROM diameter")
     tables.catalog.update(first, "subscribers")
     assert tables.restricted("SELECT id, apn FROM subscribers") == ["id"]
-    assert tables.catalog["subscribers"].restricted_columns == ("id",)
+    assert tables.catalog["subscribers"].restriction.columns == ("id",)
 
 
 def test_columns_named_by_the_database_can_be_read_from_a_result_table(tables):
@@ -186,7 +189,7 @@ def test_columns_named_by_the_database_can_be_read_from_a_result_table(tables):
 
 def test_every_column_of_a_result_table_with_unknown_lineage_counts_as_restricted(tables):
     first = tables.make('SELECT apn, "no such column" AS text FROM diameter')
-    assert tables.catalog[first].lineage_unknown and tables.catalog[first].restricted
+    assert tables.catalog[first].restriction.unknown and tables.catalog[first].restricted
     assert tables.restricted(f"SELECT apn AS a, COUNT(text) AS n FROM {first} GROUP BY apn") == ["a"]
 
 
@@ -214,11 +217,9 @@ def test_lineage_that_cannot_be_worked_out_for_restricted_data_is_unknown(tables
     assert tables.run(sql)["lineage"] == Unknown()
 
 
-@pytest.mark.parametrize("word", ["current_user", "count(apn)"])
-def test_a_restricted_column_with_a_name_that_reads_as_something_else_is_not_missed(tables, word):
-    first = tables.make(f'SELECT imsi AS "{word}" FROM diameter')
-    quoted = f"[{word}]" if "(" in word else word  # both read the column in SQLite
-    assert tables.run(f"SELECT {quoted} AS x FROM {first}")["lineage"] == Unknown()
+def test_a_restricted_column_named_like_a_call_is_not_missed_between_square_brackets(tables):
+    first = tables.make('SELECT imsi AS "count(apn)" FROM diameter')
+    assert tables.run(f"SELECT [count(apn)] AS x FROM {first}")["lineage"] == Unknown()  # SQLite reads the column
 
 
 @pytest.mark.parametrize("sql", [
@@ -228,10 +229,204 @@ def test_a_restricted_column_with_a_name_that_reads_as_something_else_is_not_mis
     "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 3) SELECT i, sip FROM n, flows",
     "SELECT question FROM dns_metadata",
     "SELECT 1 AS imsi",
+    # Syntax the parser does not follow: SQLite alone says which tables are read
+    "SELECT `sip` FROM flows",
+    "SELECT [sip] FROM [flows]",
+    "SELECT sip AS 'Gr\u00f6\u00dfe' FROM flows",
+    "SELECT sip AS offset FROM flows NATURAL JOIN dns_metadata",
+    "SELECT /* /* */ sip FROM flows -- */",
+    "SELECT date 'zz' FROM (SELECT sip AS date FROM flows)",
 ])
 def test_a_query_reading_no_restricted_columns_is_unrestricted_even_when_lineage_would_fail(tables, sql):
     assert tables.run(sql)["lineage"] == Unrestricted()
 
 
-def test_a_query_that_does_not_parse_is_unknown_as_its_tables_cannot_be_listed(tables):
-    assert tables.run("SELECT `sip` FROM flows")["lineage"] == Unknown()
+# SQL that SQLite and the parser read differently. Each of these was classified as carrying nothing restricted.
+@pytest.mark.parametrize("sql, restricted", [
+    # Block comments do not nest in SQLite
+    ("SELECT sip FROM flows /* /* */ UNION SELECT imsi FROM diameter -- */", ["sip"]),
+    ("SELECT /* /* */ imsi AS x FROM diameter -- */ sip AS x FROM diameter", ["x"]),
+    # A carriage return does not end a line comment in SQLite
+    ("SELECT sip FROM flows --\r/*\n UNION SELECT imsi FROM diameter --*/", ["sip"]),
+])
+def test_comments_are_read_as_sqlite_reads_them(tables, sql, restricted):
+    assert tables.restricted(sql) == restricted
+
+
+@pytest.mark.parametrize("word", [
+    "date", "e", "n", "time", "timestamp", "interval", "text", "int", "json", "uuid", "decimal", "bit", "inet",
+])
+def test_a_word_and_a_string_are_a_column_and_its_alias_not_a_typed_literal(tables, word):
+    assert tables.restricted(f"""SELECT {word} 'zz' FROM (SELECT imsi AS "{word}" FROM diameter)""") == ["zz"]
+
+
+@pytest.mark.parametrize("word", [
+    "current_user", "session_user", "user", "localtime", "localtimestamp", "current_schema", "current_catalog",
+    "sysdate", "current_role",
+])
+def test_a_word_that_is_a_function_elsewhere_is_a_column_in_sqlite(tables, word):
+    assert tables.restricted(f'SELECT {word} FROM (SELECT imsi AS "{word}" FROM diameter)') == [word]
+
+
+def test_names_differing_only_in_the_case_of_a_non_ascii_letter_are_not_confused(tables):
+    sql = ('WITH "é" AS (SELECT imsi AS v FROM diameter), "É" AS (SELECT sip AS v FROM diameter) '
+           'SELECT v FROM "é"')
+    assert tables.run(sql)["lineage"] == Unknown()
+
+
+def identifiers(telemetry_db: Path) -> set[str]:
+    """Every value of a Restricted Column in the test Telemetry Database: what no unrestricted column may hold."""
+    with closing(sqlite3.connect(telemetry_db)) as con:
+        return {value for column in ("imsi", "msisdn", "imei")
+                for value, in con.execute(f"SELECT DISTINCT {column} FROM diameter WHERE {column} IS NOT NULL")}
+
+
+@pytest.fixture
+def leaks(tables):
+    """`leaks(sql)`: the output columns that hold an identifier although the query's lineage calls them unrestricted.
+    None where SQLite itself refuses the SQL."""
+    secret = identifiers(tables.telemetry_db)
+
+    def find(sql: str) -> list[str] | None:
+        result = tables.runner.run(sql, max_rows=5)
+        if not result["success"]:
+            return None
+        outcome, rows = result["lineage"], tables.runner.fetch_rows(result["result_table"])
+        tables.runner.drop(result["result_table"])
+        if isinstance(outcome, Unknown):
+            return []
+        restricted = outcome.restricted if isinstance(outcome, Known) else ()
+        return [column for i, column in enumerate(rows["columns"]) if column not in restricted
+                and any(secret.intersection(re.findall("[0-9]+", str(row[i]))) for row in rows["rows"])]
+
+    return find
+
+
+# One query per way the parser and SQLite could part company; each puts identifiers in an output column.
+@pytest.mark.parametrize("sql", [
+    # A join with USING, whose columns SQLite's authorizer does not always report
+    "SELECT imsi FROM lookup_one FULL JOIN diameter USING (imsi)",
+    "SELECT imsi AS v FROM diameter FULL JOIN lookup_one USING (imsi)",
+    "SELECT * FROM lookup_one NATURAL FULL JOIN diameter",
+    "WITH s(p, q) AS (SELECT * FROM (SELECT 1 AS a, imsi AS k FROM diameter) JOIN lookup_one USING (k)) "
+    "SELECT p, q FROM s",
+    # Names SQLite makes from an expression's text, which the parser would look for elsewhere
+    'SELECT (SELECT "likely(imsi)" FROM (SELECT likely(imsi) FROM diameter)) AS v '
+    'FROM (SELECT sip AS "likely(imsi)" FROM flows)',
+    'SELECT (SELECT "+imsi" FROM (SELECT +imsi FROM diameter)) AS v FROM (SELECT sip AS "+imsi" FROM flows)',
+    'SELECT (SELECT "CAST(imsi AS TEXT)" FROM (SELECT CAST(imsi AS TEXT) FROM diameter)) AS v '
+    'FROM (SELECT sip AS "CAST(imsi AS TEXT)" FROM flows)',
+    "SELECT 'x' AS \"max(imsi)\", \"max(imsi)\" AS v FROM (SELECT max(imsi) FROM diameter)",
+    'SELECT (SELECT "_col_0" FROM (SELECT 1 + 1 FROM flows)) AS v FROM (SELECT imsi AS "_col_0" FROM diameter)',
+    # An alias that has the name of an outer column
+    "SELECT (SELECT w FROM (SELECT sip AS q, q AS w FROM flows)) AS v FROM (SELECT imsi AS q FROM diameter)",
+    "SELECT (SELECT max(w) FROM (SELECT q AS w FROM (SELECT 1 AS k) WHERE 'x' <> q)) AS v "
+    "FROM (SELECT imsi AS q FROM diameter)",
+    # Comments, white space and statement ends
+    "SELECT imsi FROM diameter /* open",
+    "SELECT/**/imsi/*/ */AS x FROM diameter",
+    "SELECT imsi--x\r, sip\nAS x FROM diameter",
+    "SELECT\fimsi\tAS\r\nx FROM diameter;-- ;",
+    "SELECT\x0bimsi FROM diameter",
+    "SELECT\u00a0imsi FROM diameter",
+    "SELECT imsi AS x\u00a0FROM FROM diameter",
+    "\ufeffSELECT imsi FROM diameter",
+    "SELECT imsi\x00 FROM diameter",
+    "SELECT imsi AS x\u2028 FROM diameter",
+    # Quoting, and strings where names go
+    "SELECT `imsi` AS v FROM diameter",
+    "SELECT [imsi] AS v FROM [diameter]",
+    "SELECT imsi 'v' FROM diameter",
+    "SELECT v FROM (SELECT imsi 'v' FROM 'diameter')",
+    "SELECT d.'imsi' AS v FROM diameter d",
+    "SELECT '--' AS a, imsi AS b FROM diameter",
+    "SELECT '\\' AS a, imsi AS b, '\\' AS c FROM diameter",
+    "SELECT E'\\' AS a, imsi AS b FROM (SELECT 1 AS E), diameter",
+    "SELECT '$$' AS a, imsi AS b, '$$' AS c FROM diameter",
+    'SELECT "imsi""" AS v FROM (SELECT imsi AS "imsi""" FROM diameter)',
+    "SELECT x'00' AS a, imsi AS b FROM diameter",
+    'SELECT x "y" FROM (SELECT imsi AS x FROM diameter)',
+    # Numbers
+    "SELECT 0x1F AS a, imsi AS b FROM diameter",
+    "SELECT 1e+1 AS a, .5 AS b, 1. AS c, imsi AS d FROM diameter",
+    "SELECT 1abc FROM (SELECT imsi AS abc FROM diameter)",
+    "SELECT 1_000 AS a, imsi AS b FROM diameter",
+    # Operators
+    "SELECT imsi || '' AS a, +imsi AS b, - -imsi AS c, imsi + 0 AS d, imsi & -1 AS e, ~~imsi AS f, imsi << 0 AS g, "
+    "imsi >> 0 AS h, imsi * 1 AS i, imsi % 999999999999999999 AS j, imsi / 1 AS k FROM diameter",
+    "SELECT json_object('v', imsi) ->> 'v' AS a, json_array(imsi) -> 0 AS b FROM diameter",
+    "SELECT imsi COLLATE nocase AS a, CAST(imsi AS varchar(20)) AS b, CAST(imsi AS unsigned big int) AS c "
+    "FROM diameter",
+    "SELECT x FROM (SELECT CAST(imsi AS TEXT) AS x FROM diameter)",
+    "WITH s AS MATERIALIZED (SELECT imsi AS v FROM diameter), t AS NOT MATERIALIZED (SELECT v FROM s) "
+    "SELECT v FROM t",
+    "SELECT v FROM (SELECT imsi AS v FROM diameter UNION SELECT sip FROM flows) ORDER BY v",
+    "SELECT v FROM (SELECT sip AS v FROM flows UNION ALL SELECT +imsi FROM diameter)",
+    "SELECT \"count\"(1) AS n, \"max\"(imsi) AS v FROM diameter",
+    "SELECT max (imsi) AS a, coalesce/**/(imsi, '') AS b FROM diameter",
+    "SELECT group_concat(DISTINCT imsi) AS v FROM diameter",
+    "SELECT max(imsi) FILTER (WHERE 1) OVER w AS v FROM diameter WINDOW w AS (ORDER BY etime)",
+    # Table names
+    'SELECT v FROM (SELECT imsi AS v FROM "MAIN"."DIAMETER")',
+    "SELECT flows.imsi AS v FROM diameter AS flows",
+    "SELECT d.imsi AS v FROM (diameter d)",
+    # Inside a CTE's body, a later CTE of its WITH hides an outer one of the same name
+    "WITH c AS (SELECT sip AS v FROM flows) "
+    "SELECT * FROM (WITH d AS (SELECT * FROM c), c AS (SELECT imsi AS v FROM diameter) SELECT * FROM d)",
+    # The name SQLite makes for the second of two columns of one name
+    'SELECT (SELECT "x:1" FROM (SELECT apn AS x, imsi AS x FROM diameter)) AS v '
+    'FROM (SELECT sip AS "x:1" FROM flows)',
+])
+def test_no_output_column_holding_an_identifier_is_called_unrestricted(tables, leaks, sql):
+    tables.catalog.add_lookup("one", "imsi,k\n001010000000000,x")
+    assert leaks(sql) in (None, [])
+
+
+# Every word SQLite or the parser's lexer may take for something other than a name.
+WORDS = sorted({
+    word.lower() for word in [*sqlite_sql.KEYWORDS, *Postgres.Tokenizer.KEYWORDS]
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", word)
+} | {"true", "false", "rowid", "oid", "_rowid_", "date", "e", "n", "x", "user", "sysdate", "canopy_fn"})
+
+
+@pytest.mark.parametrize("query", [
+    'SELECT {word} AS v FROM (SELECT imsi AS "{word}" FROM diameter)',
+    'SELECT {word} v FROM (SELECT imsi AS "{word}" FROM diameter)',
+    """SELECT {word} 'v' FROM (SELECT imsi AS "{word}" FROM diameter)""",
+    """SELECT 'a ' || {word} AS v FROM (SELECT imsi AS "{word}" FROM diameter)""",
+    'SELECT max({word}) AS v, apn FROM (SELECT imsi AS "{word}", apn FROM diameter)',
+    'SELECT t.{word} AS v FROM (SELECT imsi AS "{word}" FROM diameter) t',
+    "SELECT {word} AS v FROM (SELECT imsi {word} FROM diameter)",
+    "SELECT * FROM (SELECT imsi {word} FROM diameter)",
+    "SELECT {word} FROM (SELECT imsi AS {word} FROM diameter)",
+    "WITH s({word}) AS (SELECT imsi FROM diameter) SELECT {word} AS v FROM s",
+    "WITH {word} AS (SELECT imsi AS v FROM diameter) SELECT v FROM {word}",
+    "SELECT {word}.imsi AS v FROM diameter AS {word}",
+    "SELECT {word}(imsi) AS v FROM diameter",
+])
+def test_no_word_hides_an_identifier_under_a_name_of_that_word(leaks, query):
+    found = {}
+    for word in WORDS:
+        if columns := leaks(query.format(word=word)):
+            found[word] = columns
+    assert found == {}
+
+
+def test_every_function_of_sqlite_carries_the_identifiers_it_is_given(tables, leaks):
+    with closing(sqlite3.connect(":memory:")) as con:
+        functions = sorted({name for name, in con.execute("SELECT name FROM pragma_function_list")
+                            if re.fullmatch(r"[a-z_][a-z0-9_]*", name)})
+    found = {}
+    for name in functions:
+        for arguments in ("imsi", "imsi, 1", "1, imsi", "imsi, imsi, imsi"):
+            sql = f"SELECT {name}({arguments}) AS v FROM diameter"
+            if columns := leaks(sql):
+                found[sql] = columns
+    assert found == {}
+
+
+def test_the_words_taken_for_keywords_without_looking_further_are_ones_sqlite_reserves():
+    with closing(sqlite3.connect(":memory:")) as con:
+        for word in sqlite_sql.RESERVED - {"null"}:
+            with pytest.raises(sqlite3.OperationalError):
+                con.execute(f'SELECT {word} FROM (SELECT 1 AS "{word}")')

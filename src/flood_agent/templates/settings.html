@@ -32,20 +32,20 @@
     <button type="button" class="toggle-all" onclick="document.getElementById('remove-key-dialog').showModal()">Remove</button>
     <dialog id="remove-key-dialog" aria-labelledby="remove-key-title">
       <form method="post" action="/settings/public-key/remove">
-        <h3 id="remove-key-title">Remove your public key?</h3>
-        <p>Encrypted downloads will be unavailable until you add a key again.</p>
+        <h3 id="remove-key-title">Remove your Public Key?</h3>
+        <p>Encrypted downloads will be unavailable until you add a Public Key again.</p>
         <div class="actions"><button class="danger">Remove</button> <button formmethod="dialog">Cancel</button></div>
       </form>
     </dialog>
     {% else %}
-    <p>No public key on file</p>
+    <p>No Public Key on file</p>
     {% endif %}
     {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
     <form class="key-form" method="post" action="/settings/public-key" enctype="multipart/form-data">
-      <label for="public-key">Paste a public key</label>
+      <label for="public-key">Paste a Public Key</label>
       <textarea id="public-key" name="key" rows="4" spellcheck="false" placeholder="age1&hellip;, ssh-ed25519 &hellip; or ssh-rsa &hellip;"></textarea>
       <label>Or upload a <code>.pub</code> file <input type="file" name="file" accept=".pub,text/plain"></label>
-      <button type="submit" class="toggle-all">{{ "Replace key" if key else "Add key" }}</button>
+      <button type="submit" class="toggle-all">{{ "Replace Public Key" if key else "Add Public Key" }}</button>
     </form>
   </main>
 </body>

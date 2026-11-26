@@ -13,7 +13,6 @@
 - validate against the Vega-Lite v5 JSON schema in show_chart. This catches every structural mistake, but it adds a dependency and a large schema file.
 - ability to paste an image into the prompt and have it be processed by the LLM.
 - Export / Import of a notebook as JSON.
-- Toggle to send prompt results/answer to the LLM. It conflicts with ADR 0001.
 - sql cell should also have a "Send to AI" checkbox. It should be ticked by default.
 - add the ability to add secondary indexes to a table
 

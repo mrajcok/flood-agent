@@ -38,7 +38,7 @@ def shown(client, nb):
 
 
 def set_stored_sql(agent, sql):
-    with closing(sqlite3.connect(agent.config.app_db)) as con, con:
+    with closing(sqlite3.connect(agent.databases.app_db)) as con, con:
         con.execute("UPDATE run_displays SET definition=json_set(definition, '$.sql', ?)", (sql,))
 
 

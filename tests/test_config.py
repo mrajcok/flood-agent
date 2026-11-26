@@ -4,10 +4,16 @@ import tomllib
 from pathlib import Path
 
 import pytest
-from conftest import ScriptedLLM, collect, tool_call
+from conftest import (
+    TEST_USER,
+    TEST_USERS,
+    AgentForTest,
+    ScriptedLLM,
+    collect,
+    tool_call,
+)
 from pydantic import ValidationError
 
-from flood_agent.agent import Agent
 from flood_agent.ai_cell_run import STEP_LIMIT_MESSAGE
 from flood_agent.config import DEFAULTS_FILE, Settings, render_env_example
 from flood_agent.events import TextDelta
@@ -40,6 +46,8 @@ def test_values_from_the_env_file_override_the_toml_defaults(tmp_path):
         TELEMETRY_DB=tmp_path / "t.db",
         RESULTS_DB=tmp_path / "r.db",
         APP_DB=tmp_path / "a.db",
+        USERS_DIR=tmp_path / "people",
+        USERS=TEST_USERS,
         SEMANTIC_LAYER=tmp_path / "s.yaml",
         RESULT_TTL_HOURS="1",
         QUERY_TIMEOUT_S="0.3",
@@ -55,8 +63,8 @@ def test_values_from_the_env_file_override_the_toml_defaults(tmp_path):
     assert settings.require_api_key() == "sk-from-the-file"
     assert cfg.choices.default_model == "qwen/qwen3.8-27b"
     assert cfg.telemetry_db == tmp_path / "t.db"
-    assert cfg.results_db == tmp_path / "r.db"
-    assert cfg.app_db == tmp_path / "a.db"
+    assert (settings.results_db, settings.app_db) == (tmp_path / "r.db", tmp_path / "a.db")
+    assert (cfg.users_dir, cfg.users) == (tmp_path / "people", (TEST_USER,))
     assert cfg.semantic_layer == tmp_path / "s.yaml"
     assert cfg.result_ttl_ms == 3600 * 1000
     assert cfg.query_timeout_s == 0.3
@@ -115,7 +123,7 @@ def test_defaults_toml_has_exactly_the_settings_that_have_defaults():
     in_toml = set(tomllib.loads(DEFAULTS_FILE.read_text()))
     fields = set(Settings.model_fields)
 
-    assert in_toml == fields - {"openrouter_api_key"}  # the only setting without a default is the secret
+    assert in_toml == fields - {"openrouter_api_key", "users"}  # only the secrets have no default
 
 
 def test_the_curated_model_list_parses_in_the_specs_order():
@@ -188,12 +196,12 @@ async def agent_from_env_file(tmp_path, telemetry_db, semantic_layer_path):
         env_file = write_env(
             tmp_path / ".env",
             TELEMETRY_DB=telemetry_db,
-            RESULTS_DB=tmp_path / "results.db",
-            APP_DB=tmp_path / "app.db",
+            USERS=TEST_USERS,
+            USERS_DIR=tmp_path / "users",
             SEMANTIC_LAYER=semantic_layer_path,
             **env,
         )
-        agent = Agent(Settings(_env_file=env_file).agent_config(), lambda model: llm)
+        agent = AgentForTest(Settings(_env_file=env_file).agent_config(), lambda model: llm)
         await agent.start()
         agents.append(agent)
         return agent
@@ -252,24 +260,10 @@ def test_tests_are_isolated_from_a_developers_dotenv_and_exports(tmp_path, monke
     assert Settings().max_llm_steps == default
 
 
-def test_build_app_creates_the_directories_of_both_databases(tmp_path):
-    from flood_agent.__main__ import build_app
-
-    env_file = write_env(
-        tmp_path / ".env",
-        OPENROUTER_API_KEY="sk-x",
-        RESULTS_DB=tmp_path / "results-dir" / "results.db",
-        APP_DB=tmp_path / "state-dir" / "app.db",
-    )
-    build_app(Settings(_env_file=env_file))
-
-    assert (tmp_path / "results-dir").is_dir() and (tmp_path / "state-dir").is_dir()
-
-
 def test_every_path_setting_is_made_absolute(tmp_path):
     env_file = write_env(
-        tmp_path / ".env", TELEMETRY_DB="t.db", RESULTS_DB="r.db", APP_DB="a.db", SEMANTIC_LAYER="rel/layer.yaml"
+        tmp_path / ".env", TELEMETRY_DB="t.db", USERS_DIR="people", SEMANTIC_LAYER="rel/layer.yaml"
     )
     cfg = Settings(_env_file=env_file).agent_config()
 
-    assert all(p.is_absolute() for p in (cfg.telemetry_db, cfg.results_db, cfg.app_db, cfg.semantic_layer))
+    assert all(p.is_absolute() for p in (cfg.telemetry_db, cfg.users_dir, cfg.semantic_layer))

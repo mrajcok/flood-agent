@@ -5,7 +5,14 @@ Plain HTTP for the web page, never an MCP tool, and names only (ADR 0001)."""
 import re
 import sqlite3
 
-from conftest import DAY, Clock, ScriptedLLM, ask, table_script
+from conftest import (
+    DAY,
+    Clock,
+    ScriptedLLM,
+    ask,
+    databases_for_test,
+    table_script,
+)
 
 
 def table_of(client, nb):
@@ -70,11 +77,12 @@ def app_db_counts(path):
 
 def test_listing_tables_creates_no_notebook_cell_message_or_trace(build_agent, web_client, tmp_path):
     client, a, _, _, _ = two_notebooks_with_tables(build_agent, web_client)
-    counts = app_db_counts(tmp_path / "app.db")
+    app_db = databases_for_test(tmp_path).app_db
+    counts = app_db_counts(app_db)
     assert counts[0] == 2 and counts[4] == 2  # sanity: the setup did write notebooks and Traces
     home, notebook = client.get("/").text, client.get(f"/n/{a}").text
     assert client.get("/api/tables").status_code == 200
-    assert app_db_counts(tmp_path / "app.db") == counts
+    assert app_db_counts(app_db) == counts
     assert client.get("/").text == home
     assert client.get(f"/n/{a}").text == notebook
 

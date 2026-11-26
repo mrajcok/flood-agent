@@ -4,8 +4,7 @@ import html
 import json
 import re
 
-from conftest import ScriptedLLM, ask, cell_ids, post_run
-from fastapi.testclient import TestClient
+from conftest import TEST_USERS, ScriptedLLM, ask, cell_ids, new_client, post_run, sign_in
 
 from flood_agent.__main__ import build_app
 from flood_agent.config import Settings
@@ -69,11 +68,12 @@ def test_the_real_client_factory_gives_the_stand_in_for_no_model_without_a_key()
 
 def test_the_app_starts_without_a_key_and_answers_no_model_prompts(tmp_path, telemetry_db, semantic_layer_path):
     settings = Settings(  # pyright: ignore[reportCallIssue]
-        telemetry_db=telemetry_db, results_db=tmp_path / "results.db", app_db=tmp_path / "app.db",
+        users=TEST_USERS, session_cookie_secure=False, telemetry_db=telemetry_db, users_dir=tmp_path / "users", results_db=tmp_path / "results.db", app_db=tmp_path / "app.db",
         semantic_layer=semantic_layer_path,
     )
 
-    with TestClient(build_app(settings)) as client:
+    with new_client(build_app(settings)) as client:
+        sign_in(client)
         assert first_cell_model(client.get("/").text) == NO_MODEL  # "/" opens a new notebook
         body = ask(client, "hello", model=NO_MODEL)[2]
         refused = post_run(client, model=SONNET)

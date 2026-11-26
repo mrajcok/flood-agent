@@ -6,8 +6,16 @@ import sqlite3
 from html import unescape
 
 import pytest
-from conftest import canned_params, collect, leakable_values, post_run, text_of
-from fastapi.testclient import TestClient
+from conftest import (
+    TEST_USERS,
+    canned_params,
+    collect,
+    leakable_values,
+    new_client,
+    post_run,
+    sign_in,
+    text_of,
+)
 
 from flood_agent.__main__ import build_app, picker_entries
 from flood_agent.config import Settings
@@ -165,11 +173,12 @@ def test_real_models_are_refused_without_a_key_and_refuses_real_models_until_one
     tmp_path, telemetry_db, semantic_layer_path
 ):
     settings = Settings(  # pyright: ignore[reportCallIssue]
-        telemetry_db=telemetry_db, results_db=tmp_path / "results.db",
-        app_db=tmp_path / "app.db", semantic_layer=semantic_layer_path,
+        users=TEST_USERS, session_cookie_secure=False, telemetry_db=telemetry_db, users_dir=tmp_path / "users",
+        results_db=tmp_path / "results.db", app_db=tmp_path / "app.db", semantic_layer=semantic_layer_path,
     )
 
-    with TestClient(build_app(settings)) as client:
+    with new_client(build_app(settings)) as client:
+        sign_in(client)
         refused = post_run(client, max_rows="10", model="anthropic/claude-sonnet-5.5")
     assert refused.status_code == 422 and "OPENROUTER_API_KEY" in refused.json()["detail"]
 

@@ -4,9 +4,16 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from conftest import ScriptedLLM, all_telemetry_values, collect, config_for_test, last_tool_result, tool_call
+from conftest import (
+    AgentForTest,
+    ScriptedLLM,
+    all_telemetry_values,
+    collect,
+    config_for_test,
+    last_tool_result,
+    tool_call,
+)
 
-from flood_agent.agent import Agent
 from flood_agent.generator import END_MS, START_MS
 from flood_agent.llm import TextChunk
 from flood_agent.semantic_layer import SemanticLayer
@@ -20,7 +27,7 @@ async def real_layer_agent(tmp_path, telemetry_db):
     agents = []
 
     async def _make(llm, tmp_path=tmp_path, telemetry_db=telemetry_db):
-        agent = Agent(config_for_test(tmp_path, telemetry_db, REAL), lambda model: llm)
+        agent = AgentForTest(config_for_test(tmp_path, telemetry_db, REAL), lambda model: llm)
         await agent.start()
         agents.append(agent)
         return agent

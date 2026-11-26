@@ -1,7 +1,7 @@
 """Settings, layered from defaults.toml, then a .env file, then the real environment.
 
 The row cap is deliberately not a setting here: the Agent sends the AI Cell's with every MCP tool
-call (in request `_meta`).
+call (in request `_meta`, with the User the call is for).
 """
 
 import tomllib
@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from dotenv import dotenv_values
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     DotEnvSettingsSource,
@@ -23,6 +23,8 @@ from flood_agent.ai_cell_run import ClientFactory
 from flood_agent.fake_llm import FakeClient, load_canned_prompts
 from flood_agent.llm import LLMClient, ModelSpec, OpenRouterClient
 from flood_agent.model_choices import NO_MODEL, ModelChoices
+from flood_agent.sign_in import SignInConfig
+from flood_agent.users import parse_users
 
 DEFAULTS_FILE = Path(__file__).with_name("defaults.toml")
 
@@ -44,11 +46,16 @@ class _LiteralDotEnvSource(DotEnvSettingsSource):
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", env_ignore_empty=True, extra="ignore", toml_file=DEFAULTS_FILE
+        env_file=".env", env_ignore_empty=True, extra="ignore", toml_file=DEFAULTS_FILE,
+        hide_input_in_errors=True,  # settings hold secrets, which a startup error must not print
     )
 
     openrouter_api_key: SecretStr | None = Field(
-        None, description="OpenRouter API key. Needed to send a prompt to a real model (not No model); the only setting without a default. Never commit a real key."
+        None, description="OpenRouter API key. Needed to send a prompt to a real model (not No model); has no default. Never commit a real key."
+    )
+    users: SecretStr | None = Field(
+        None, description="The Users who can sign in, as name:hash,name:hash; the app does not start without one, and it has no default.\n"
+        "Make each entry with: uv run flood-agent-user NAME"
     )
     default_model: str = Field(
         description="The model preselected under the prompt box: an id from the curated [[models]] list in\n"
@@ -60,9 +67,11 @@ class Settings(BaseSettings):
     telemetry_db: Path = Field(
         description="Read-only network telemetry (flow records, DNS response metadata and Diameter signaling). Create with: uv run python -m flood_agent.generator data/telemetry.db"
     )
-    results_db: Path = Field(description="Writable database holding Result Tables.")
+    results_db: Path = Field(
+        description="The single-user results database from before Users. Not used: the app deletes this file when it starts."
+    )
     app_db: Path = Field(
-        description="Notebooks, Cells, Runs, Displays and Traces, and the table registry."
+        description="The single-user app database from before Users. Not used: the app deletes this file when it starts."
     )
     semantic_layer: Path = Field(
         description="Hand-authored Semantic Layer."
@@ -77,6 +86,16 @@ class Settings(BaseSettings):
     )
     max_llm_steps: int = Field(
         ge=1, description="LLM calls allowed per user turn (a backstop against a model looping on tool calls)."
+    )
+    users_dir: Path = Field(
+        description="Directory holding each User's own databases, created on first use: NAME/app.db (Notebooks, Cells, Runs,\n"
+        "Displays, Traces and the table registry) and NAME/results.db (their tables)."
+    )
+    session_idle_timeout_hours: float = Field(
+        gt=0, description="A signed-in session ends after this many hours without a request."
+    )
+    session_cookie_secure: bool = Field(
+        description="Send the session cookie over HTTPS only. flood-agent-dev always turns this off."
     )
     host: str = Field(description="Address the web server listens on.")
     port: int = Field(ge=1, le=65535, description="Port the web server listens on.")
@@ -99,6 +118,13 @@ class Settings(BaseSettings):
         """Only defaults.toml, ignoring any .env file or environment variable. For reproducible runs."""
         return cls.model_validate(tomllib.loads(DEFAULTS_FILE.read_text()))
 
+    @field_validator("users")
+    @classmethod
+    def _users_are_well_formed(cls, users: SecretStr | None) -> SecretStr | None:
+        if users is not None:
+            parse_users(users.get_secret_value())
+        return users
+
     @model_validator(mode="after")
     def _default_model_is_listed(self) -> "Settings":
         if self.default_model not in {m.id for m in self.models}:
@@ -109,6 +135,17 @@ class Settings(BaseSettings):
         if self.openrouter_api_key is None:
             raise RuntimeError("OPENROUTER_API_KEY is not set")
         return self.openrouter_api_key.get_secret_value()
+
+    def sign_in_config(self, dev: bool = False) -> SignInConfig:
+        """Who can sign in and how. RuntimeError naming USERS when no User is configured. `dev`: the dev server, which
+        is plain http, so its session cookie is not Secure."""
+        if self.users is None:
+            raise RuntimeError("USERS is not set: add USERS=name:hash to .env (make one with: uv run flood-agent-user NAME)")
+        return SignInConfig(
+            users=parse_users(self.users.get_secret_value()),
+            idle_timeout_ms=int(self.session_idle_timeout_hours * 3600 * 1000),
+            cookie_secure=self.session_cookie_secure and not dev,
+        )
 
     def client_factory(self) -> ClientFactory:
         """The client per model id, made on first use (so the app starts without a key) and then
@@ -136,9 +173,9 @@ class Settings(BaseSettings):
     def agent_config(self) -> AgentConfig:
         return AgentConfig(
             telemetry_db=self.telemetry_db.resolve(),
-            results_db=self.results_db.resolve(),
+            users_dir=self.users_dir.resolve(),
+            users=tuple(parse_users(self.users.get_secret_value())) if self.users else (),
             semantic_layer=self.semantic_layer.resolve(),
-            app_db=self.app_db.resolve(),
             choices=self.model_choices(),
             result_ttl_ms=int(self.result_ttl_hours * 3600 * 1000),
             query_timeout_s=self.query_timeout_s,
@@ -158,9 +195,9 @@ _ENV_EXAMPLE_HEADER = """\
 # startup. A variable already set in the real environment wins over the same variable in
 # .env, and blank values count as unset.
 #
-# Only OPENROUTER_API_KEY needs a value. The other lines are commented out and show the
-# default from defaults.toml; uncomment one only to change it, so a copied file doesn't
-# pin defaults that may change later."""
+# Only USERS (to start the app) and OPENROUTER_API_KEY (to use a real model) need a value.
+# The other lines are commented out and show the default from defaults.toml; uncomment one
+# only to change it, so a copied file doesn't pin defaults that may change later."""
 
 _ENV_EXAMPLE_FOOTER = """\
 # The eval runner (python -m flood_agent.evalset)

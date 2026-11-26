@@ -56,6 +56,7 @@ def test_refresh_updates_the_count_in_place_and_moves_its_as_of_time(build_agent
     _, clock, page = ask_for_recent_count(build_agent, live_page, monkeypatch)
     line = page.locator(".count-display")
     expect(line.locator(".count-value")).to_have_text("2")
+    expect(line.locator(".as-of")).to_have_text(re.compile(r"^as of \d"))  # filled in by the page's script
     first_as_of = line.locator(".as-of").inner_text()
 
     monkeypatch.setenv("FIXED_NOW_MS", "1700000003600")
@@ -63,7 +64,7 @@ def test_refresh_updates_the_count_in_place_and_moves_its_as_of_time(build_agent
     line.get_by_role("button", name="Refresh").click()
 
     expect(line.locator(".count-value")).to_have_text("1")
-    assert line.locator(".as-of").inner_text() != first_as_of
+    expect(line.locator(".as-of")).not_to_have_text(first_as_of)
     expect(line.get_by_role("button", name="Refresh")).to_be_enabled()
 
 
@@ -87,7 +88,7 @@ def test_the_count_control_is_disabled_while_a_refresh_runs(build_agent, live_pa
 
 def test_a_failed_count_refresh_keeps_the_number_and_shows_a_plain_error(build_agent, live_page, monkeypatch):
     agent, _, page = ask_for_recent_count(build_agent, live_page, monkeypatch)
-    with closing(sqlite3.connect(agent.config.app_db)) as con, con:
+    with closing(sqlite3.connect(agent.databases.app_db)) as con, con:
         con.execute("UPDATE run_displays SET definition=json_set(definition, '$.sql', 'DROP TABLE flows')")
     line = page.locator(".count-display")
 

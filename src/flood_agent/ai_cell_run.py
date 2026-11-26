@@ -137,15 +137,16 @@ def _resolve_data(node, table: str, url: dict):
 
 
 class AiCellRuns:
-    """Runs AI Cells and stops them. Built once by the Agent; the Notebook module keeps the rule that one Cell runs
-    per Notebook at a time, and the Agent supervises the MCP connection this gets from `connection`."""
+    """Runs one User's AI Cells and stops them. Built once per User by the Agent; the Notebook module keeps the rule that
+    one Cell runs per Notebook at a time, and the Agent supervises the MCP connection this gets from `connection`.
+    Every tool call is made for `user`."""
 
     def __init__(
-        self, store: NotebookStore, tables: Catalog, semantic_layer: SemanticLayer, client_for: ClientFactory,
+        self, user: str, store: NotebookStore, tables: Catalog, semantic_layer: SemanticLayer, client_for: ClientFactory,
         connection: ConnectionProvider, started: Callable[[], bool], spec_of: Callable[[str], ModelSpec | None],
         max_llm_steps: int, max_failed_attempts: int, clock: Callable[[], int],
     ):
-        self._store, self.tables, self.semantic_layer = store, tables, semantic_layer
+        self._user, self._store, self.tables, self.semantic_layer = user, store, tables, semantic_layer
         self.client_for, self._connection, self._started = client_for, connection, started
         self.spec_of = spec_of
         self.max_llm_steps, self.max_failed_attempts, self.clock = max_llm_steps, max_failed_attempts, clock
@@ -429,7 +430,7 @@ class AiCellRuns:
             else:
                 args = parsed
                 try:
-                    result = await connection.call_tool(c.name, args, active.max_rows)
+                    result = await connection.call_tool(c.name, args, self._user, active.max_rows)
                 except Exception as e:  # a broken tool call must not corrupt or abort the Run
                     trace.add("tool_error", name=c.name, detail=f"{type(_unwrap(e)).__name__}: {_unwrap(e)}")
                     return project(Failed("The tool failed to run. Try again.")), args, None, 1, None

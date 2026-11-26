@@ -39,5 +39,6 @@
     <button type="button" class="toggle-all" :disabled="show.report" x-data="{ collapsed: false }"
             @click="collapsed = !collapsed; document.body.classList.toggle('outputs-collapsed', collapsed); document.querySelectorAll('.output-shown').forEach(c => c.classList.remove('output-shown'))"
             ><span class="toggle-label" :class="{ 'label-hidden': collapsed }">Collapse outputs</span><span class="toggle-label label-hidden" :class="{ 'label-hidden': !collapsed }">Expand outputs</span></button>
+    <form class="signed-in" method="post" action="/sign-out"><span title="Signed in as">{{ user }}</span> <button type="submit" class="toggle-all">Sign out</button></form>
     </div>
   </div>

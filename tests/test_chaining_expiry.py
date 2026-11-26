@@ -1,7 +1,16 @@
 """Result Table chaining across cells and expiry, through the Agent notebook seam and thin HTTP layer."""
 
 import pytest
-from conftest import Clock, ScriptedLLM, all_telemetry_values, ask, collect, last_tool_result, tool_call
+from conftest import (
+    Clock,
+    ScriptedLLM,
+    all_telemetry_values,
+    ask,
+    collect,
+    databases_for_test,
+    last_tool_result,
+    tool_call,
+)
 
 from flood_agent.events import DisplayEvent
 from flood_agent.llm import TextChunk
@@ -179,14 +188,14 @@ def test_single_composed_authorizer_enforces_action_list_and_table_scope(query_r
         "SELECT 1) ; CREATE TABLE main.evil(a); --",
     ]:
         assert run(sql)["success"] is False
-    con = sqlite3.connect(tmp_path / "results.db")
+    con = sqlite3.connect(databases_for_test(tmp_path).results_db)
     assert {r[0] for r in con.execute("SELECT name FROM sqlite_master")} >= {own, other}
 
 
 def _physical(agent):
     import sqlite3
 
-    con = sqlite3.connect(agent.config.results_db)
+    con = sqlite3.connect(agent.databases.results_db)
     try:
         return {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     finally:

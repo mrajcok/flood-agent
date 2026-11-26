@@ -6,7 +6,10 @@ from dataclasses import replace
 from datetime import datetime
 
 import pytest
-from conftest import register_table
+from conftest import (
+    databases_for_test,
+    register_table,
+)
 
 from flood_agent.catalog import Catalog, CatalogView, CellRun, TableExpired
 
@@ -156,7 +159,7 @@ def test_kind_of_any_case_covers_telemetry_result_saved_lookup_and_unknown(tmp_p
 # --- the sweep ---
 
 def _results_db(tmp_path, *names):
-    path = tmp_path / "results.db"
+    path = databases_for_test(tmp_path).results_db
     con = sqlite3.connect(path)
     for n in names:
         con.execute(f'CREATE TABLE "{n}" (x INTEGER)')
@@ -241,7 +244,7 @@ def _exists(path, name) -> bool:
 @pytest.fixture
 def full(tmp_path, clock, query_runner):
     """(catalog, cell id, results db path): a Catalog that knows a Telemetry table `flows`."""
-    app_db, results_db = tmp_path / "app.db", tmp_path / "results.db"
+    app_db, results_db = tmp_path / "app.db", databases_for_test(tmp_path).results_db
     catalog = Catalog(app_db, clock, default_retention_ms=HOUR, results_db=results_db, telemetry_tables=["flows"],
                       runner=query_runner())
     return catalog, "cell-1", results_db
@@ -337,7 +340,7 @@ def test_the_default_retention_follows_the_policy(world):
 
 
 def test_is_lookup_and_canonical_take_any_case(tmp_path, clock, query_runner):
-    results = tmp_path / "results.db"
+    results = databases_for_test(tmp_path).results_db
     sqlite3.connect(results).close()
     app_db = tmp_path / "app.db"
     catalog = Catalog(app_db, clock, results_db=results, runner=query_runner())
@@ -350,7 +353,7 @@ def test_is_lookup_and_canonical_take_any_case(tmp_path, clock, query_runner):
 
 
 def test_the_view_opens_the_results_database_read_only(tmp_path, clock, query_runner):
-    results = tmp_path / "results.db"
+    results = databases_for_test(tmp_path).results_db
     sqlite3.connect(results).close()
     catalog = Catalog(tmp_path / "app.db", clock, results_db=results, runner=query_runner())
     catalog.add_lookup("hosts", "ip,name\n1,a")

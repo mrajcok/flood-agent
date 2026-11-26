@@ -4,7 +4,10 @@ import sqlite3
 from contextlib import closing
 
 import pytest
-from conftest import register_table
+from conftest import (
+    databases_for_test,
+    register_table,
+)
 
 from flood_agent.catalog import Catalog
 from flood_agent.queries import QueryFailed
@@ -30,7 +33,7 @@ def physical(results_db) -> set[str]:
 
 def make(tmp_path, runner, on_rename=None, telemetry=("flows",)):
     """(catalog, cell id, results db path) with one Result Table, registered and physical, 1-day default."""
-    app_db, results_db = tmp_path / "app.db", tmp_path / "results.db"
+    app_db, results_db = tmp_path / "app.db", databases_for_test(tmp_path).results_db
     clock = Clock()
     catalog = Catalog(app_db, clock, default_retention_ms=DAY, telemetry_tables=telemetry, results_db=results_db,
                       on_rename=on_rename, runner=runner)

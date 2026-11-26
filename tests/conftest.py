@@ -5,6 +5,7 @@ import copy
 import functools
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -26,8 +27,8 @@ from mcp.shared.memory import create_client_server_memory_streams
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
 
-from flood_agent.agent import Agent, AgentConfig, build_parts
-from flood_agent.catalog import Catalog, CellRun
+from flood_agent.agent import Agent, AgentConfig, UserSpace, build_parts
+from flood_agent.catalog import Catalog, CellRun, Table
 from flood_agent.cell import AiDraft, AiRunSettings, MarkdownDraft, SqlDraft, SqlRunSettings
 from flood_agent.cell_kinds import AI, MARKDOWN
 from flood_agent.cell_kinds import SQL as SQL_KIND
@@ -41,6 +42,9 @@ from flood_agent.notebook import Notebooks, Position
 from flood_agent.notebook_store import DEFAULT_MAX_ROWS, NotebookStore
 from flood_agent.queries import QueryRunner
 from flood_agent.semantic_layer import SemanticLayer
+from flood_agent.sign_in import SignInConfig
+from flood_agent.table_replacement import TableReplacement
+from flood_agent.users import UserDatabases, parse_users, user_databases
 from flood_agent.web import create_app
 
 # SQLite fsyncs on every commit, and on a disk filesystem (WSL's ext4 especially) that was over
@@ -243,6 +247,11 @@ class GatedLLM(ScriptedLLM):
 
 DAY = 24 * 3_600_000  # ms
 
+TEST_USER, TEST_PASSWORD = "tester", "test password"
+# TEST_PASSWORD's hash, with scrypt parameters far too cheap for real use so that signing in costs a test nothing.
+TEST_PASSWORD_HASH = "scrypt$16$8$1$Y2Fub3B5LXRlc3Qtc2FsdA==$mfyEa7C+f7AQqmCrGJ0g7p6FXXLqzAMcV1oGBX5VuRg="
+TEST_USERS = f"{TEST_USER}:{TEST_PASSWORD_HASH}"
+
 
 class Clock:
     """An injectable store clock (epoch ms) that tests move forward by setting `ms`."""
@@ -260,6 +269,15 @@ def tool_call(name: str, call_id: str = "c1", **args) -> ToolCallChunk:
 
 def last_tool_result(messages) -> dict:
     return json.loads([m for m in messages if m["role"] == "tool"][-1]["content"])
+
+
+@pytest.fixture
+def app_log(caplog):
+    """`caplog`, also hearing the app's log, which uvicorn's configuration stops reaching the root."""
+    log = logging.getLogger("uvicorn.error")
+    log.addHandler(caplog.handler)
+    yield caplog
+    log.removeHandler(caplog.handler)
 
 
 @pytest.fixture
@@ -335,29 +353,86 @@ def model_choices_for_test(api_key: bool = True) -> ModelChoices:
     return default_settings().model_choices(has_api_key=api_key)
 
 
+def databases_for_test(tmp_path, user: str = TEST_USER) -> UserDatabases:
+    """Where `config_for_test` keeps a User's databases, with their directory made, for tests that open them directly."""
+    databases = user_databases(tmp_path / "users", user)
+    databases.app_db.parent.mkdir(parents=True, exist_ok=True)
+    return databases
+
+
 def config_for_test(tmp_path, telemetry_db, semantic_layer, api_key: bool = True, **overrides) -> AgentConfig:
-    """The defaults.toml settings, pointed at this test's files, with an API key set unless `api_key=False`."""
-    return replace(
-        default_agent_config(),
-        choices=model_choices_for_test(api_key),
-        telemetry_db=telemetry_db,
-        results_db=tmp_path / "results.db",
-        app_db=tmp_path / "app.db",
-        semantic_layer=semantic_layer,
-        **overrides,
-    )
+    """The defaults.toml settings, pointed at this test's files, for the test User alone (unless `users` says
+    otherwise), with an API key set unless `api_key=False`."""
+    settings: dict = {
+        "choices": model_choices_for_test(api_key), "telemetry_db": telemetry_db, "users_dir": tmp_path / "users",
+        "users": (TEST_USER,), "semantic_layer": semantic_layer, **overrides,
+    }
+    return replace(default_agent_config(), **settings)
+
+
+class AgentForTest(Agent):
+    """The Agent with the test User's parts at hand, which tests of one User's behaviour use directly."""
+
+    @property
+    def user(self) -> UserSpace:
+        return self.for_user(TEST_USER)
+
+    @property
+    def notebooks(self) -> Notebooks:
+        return self.user.notebooks
+
+    @property
+    def tables(self) -> Catalog:
+        return self.user.tables
+
+    @property
+    def databases(self) -> UserDatabases:
+        return self.user.databases
+
+    # Tests swap these two for ones that fail or wait, so setting them sets the User's own.
+    @property
+    def queries(self) -> QueryRunner:
+        return self.user.queries
+
+    @queries.setter
+    def queries(self, runner: QueryRunner) -> None:
+        self.user.queries = runner
+
+    @property
+    def replacement(self) -> TableReplacement:
+        return self.user.replacement
+
+    @replacement.setter
+    def replacement(self, replacement: TableReplacement) -> None:
+        self.user.replacement = replacement
+
+    def fetch_rows(self, *args, **kwargs) -> dict:
+        return self.user.fetch_rows(*args, **kwargs)
+
+    def fetch_chart_rows(self, result_table: str) -> list[dict]:
+        return self.user.fetch_chart_rows(result_table)
+
+    def iter_all_rows(self, result_table: str):
+        return self.user.iter_all_rows(result_table)
+
+    def refresh_table(self, name: str) -> Table:
+        return self.user.refresh_table(name)
+
+    def refresh_count(self, display_id: int) -> dict:
+        return self.user.refresh_count(display_id)
 
 
 @pytest.fixture
 def query_runner(tmp_path, telemetry_db):
-    """`query_runner(readable=set(), timeout_s=None)` -> a QueryRunner over the test Telemetry Database and this
-    test's results database (the one `config_for_test` names). `readable` is the set of tables a query may read,
+    """`query_runner(readable=set(), timeout_s=None)` -> a QueryRunner over the test Telemetry Database and the
+    test User's results database (`databases_for_test`). `readable` is the set of tables a query may read,
     which the test may change afterwards, or a function returning it (e.g. a Catalog's `readable`)."""
+    results_db = databases_for_test(tmp_path).results_db
 
     def _build(readable: set[str] | Callable[[], set[str]] | None = None,
                timeout_s: float | None = None) -> QueryRunner:
         tables = set() if readable is None else readable
-        return QueryRunner(telemetry_db, tmp_path / "results.db",
+        return QueryRunner(telemetry_db, results_db,
                            default_agent_config().query_timeout_s if timeout_s is None else timeout_s,
                            tables if callable(tables) else lambda: tables)
 
@@ -369,9 +444,9 @@ def build_agent(tmp_path, telemetry_db, semantic_layer_path):
     """Factory for an Agent that is NOT started (web tests: the app lifespan starts it). `api_key=False`: as if no
     API key were set, so only No model can be used."""
 
-    def _build(llm, api_key: bool = True, **overrides) -> Agent:
-        return Agent(config_for_test(tmp_path, telemetry_db, semantic_layer_path, api_key, **overrides),
-                     lambda model: llm)
+    def _build(llm, api_key: bool = True, **overrides) -> AgentForTest:
+        return AgentForTest(config_for_test(tmp_path, telemetry_db, semantic_layer_path, api_key, **overrides),
+                            lambda model: llm)
 
     return _build
 
@@ -394,10 +469,10 @@ async def make_agent(build_agent):
 
 @pytest.fixture
 def notebook_store(tmp_path) -> NotebookStore:
-    """Notebook storage on the app database this test's Agents use (`build_agent`, `make_agent`), for storage-level
+    """Notebook storage on the test User's app database, which this test's Agents use (`build_agent`, `make_agent`), for storage-level
     setup and checks the Notebook module does not offer: starting or finishing a Run by hand, adding messages or an
     older Cell, a Run's Displays and settings. Its clock is the wall clock, like the Agents'."""
-    return NotebookStore(config_for_test(tmp_path, None, None).app_db)
+    return NotebookStore(databases_for_test(tmp_path).app_db)
 
 
 @dataclass
@@ -422,9 +497,10 @@ def notebook_parts(tmp_path, telemetry_db, semantic_layer_path):
         async def no_connection():
             raise RuntimeError("no MCP server here")
 
-        parts = build_parts(cfg, SemanticLayer(cfg.semantic_layer), lambda model: ScriptedLLM(), no_connection,
-                            lambda: False)
-        return NotebookParts(parts.notebooks, parts.store, parts.tables, cfg.results_db, clock)
+        parts = build_parts(cfg, TEST_USER, SemanticLayer(cfg.semantic_layer), lambda model: ScriptedLLM(),
+                            no_connection, lambda: False)
+        results_db = databases_for_test(tmp_path).results_db
+        return NotebookParts(parts.notebooks, parts.store, parts.tables, results_db, clock)
 
     return _build
 
@@ -455,25 +531,54 @@ def add_markdown_cell(agent: Agent, notebook_id: str, text: str = "", send_to_ai
                                     draft=MarkdownDraft(text, send_to_ai, ()))
 
 
+ORIGIN = "http://testserver"  # where a TestClient says the app is
+
+
+def sign_in_for_test(cookie_secure: bool = False, idle_timeout_ms: int = 10_000 * DAY,
+                     users: tuple[str, ...] = (TEST_USER,)) -> SignInConfig:
+    """The test User alone (or `users`, each with the test password). The cookie is not Secure by default: tests are plain http. Sessions far outlast the days a
+    test moves the Agent's clock on to expire tables."""
+    configured = parse_users(",".join(f"{name}:{TEST_PASSWORD_HASH}" for name in users))
+    return SignInConfig(configured, idle_timeout_ms=idle_timeout_ms, cookie_secure=cookie_secure)
+
+
+def new_client(app) -> TestClient:
+    """A browser on the app, not signed in, whose requests come from the app's own origin."""
+    return TestClient(app, headers={"origin": ORIGIN})
+
+
+def sign_in(client, name: str = TEST_USER, password: str = TEST_PASSWORD, **data):
+    """Post the sign-in form (the test User's, by default); the response is returned unfollowed."""
+    return client.post("/sign-in", data={"name": name, "password": password, **data}, follow_redirects=False)
+
+
 @pytest.fixture
 def web_client():
-    """`web_client(agent)` -> a TestClient used as a context manager, so the app lifespan runs
-    (starting the Agent's MCP server) and is left again at teardown."""
+    """`web_client(agent)` -> a TestClient signed in as the test User (unless `signed_in=False`), used as a context
+    manager, so the app lifespan runs (starting the Agent's MCP server) and is left again at teardown."""
     with ExitStack() as stack:
-        yield lambda agent, **kwargs: stack.enter_context(TestClient(create_app(agent, **kwargs)))
+        def _client(agent: Agent, signed_in: bool = True, sign_in_config: SignInConfig | None = None, **app_kwargs):
+            app = create_app(agent, sign_in_config or sign_in_for_test(), **app_kwargs)
+            client = stack.enter_context(new_client(app))
+            if signed_in:
+                assert sign_in(client).status_code == 303
+            return client
+
+        yield _client
 
 
 @pytest.fixture
 def live_server(build_agent):
     """`live_server(agent=None, **app_kwargs)` -> base URL of the real app served by uvicorn on a free
-    port, for browser tests. Defaults to an Agent with a ScriptedLLM that has no steps."""
+    port, for browser tests, with the test User configured. Defaults to an Agent with a ScriptedLLM that has no
+    steps."""
     servers: list[tuple[uvicorn.Server, threading.Thread]] = []
 
     def _start(agent: Agent | None = None, **app_kwargs) -> str:
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
-        app = create_app(agent or build_agent(ScriptedLLM()), **app_kwargs)
+        app = create_app(agent or build_agent(ScriptedLLM()), sign_in_for_test(), **app_kwargs)
         server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
         thread = threading.Thread(target=server.run, daemon=True)
         thread.start()
@@ -509,8 +614,9 @@ def chrome():
 
 @pytest.fixture
 def live_page(chrome, live_server, request):
-    """`live_page(path="/", agent=None, timezone=None, **create_app_kwargs)` -> a fresh page (its own browser context) in
-    headless system Chrome, opened on the live app; `timezone` (e.g. "America/New_York") sets the
+    """`live_page(path="/", agent=None, timezone=None, signed_in=True, **create_app_kwargs)` -> a fresh page (its own
+    browser context) in headless system Chrome, opened on the live app and signed in as the test User (with
+    `signed_in=False` it is not, so it lands on the sign-in page); `timezone` (e.g. "America/New_York") sets the
     browser's. CDN scripts (htmx, Alpine, Vega) are served from pytest's cache after the first
     download, so browser tests run offline once warmed; with a cold cache and no internet they skip."""
     cache_dir = request.config.cache.mkdir("cdn")
@@ -532,15 +638,22 @@ def live_page(chrome, live_server, request):
             os.replace(tmp, path)
         route.fulfill(path=path, content_type="application/javascript")
 
-    def _open(path: str = "/", agent: Agent | None = None, timezone: str | None = None, **app_kwargs):
+    def _open(path: str = "/", agent: Agent | None = None, timezone: str | None = None, signed_in: bool = True,
+              **app_kwargs):
         context = chrome.new_context(timezone_id=timezone)
         contexts.append(context)
         page = context.new_page()
         page.set_default_timeout(5000)  # the app is local: fail fast instead of Playwright's 30s
         for pattern in CDN_HOSTS:
             page.route(pattern, serve_cached)
-        page.goto(live_server(agent, **app_kwargs) + path)
-        if not page.evaluate("() => !!(window.Alpine && window.htmx)"):
+        base = live_server(agent, **app_kwargs)
+        if signed_in:  # the context shares cookies with its pages; the redirect is not followed ("/" makes a Notebook)
+            response = context.request.post(f"{base}/sign-in", headers={"origin": base}, max_redirects=0,
+                                            form={"name": TEST_USER, "password": TEST_PASSWORD})
+            assert response.status == 303
+        page.goto(base + path)
+        # The sign-in page loads neither script.
+        if signed_in and not page.evaluate("() => !!(window.Alpine && window.htmx)"):
             pytest.skip("CDN scripts unavailable (no internet and nothing cached yet)")
         return page
 

@@ -3,7 +3,12 @@
 import re
 import sqlite3
 
-from conftest import ScriptedLLM, collect, tool_call
+from conftest import (
+    ScriptedLLM,
+    collect,
+    databases_for_test,
+    tool_call,
+)
 
 from flood_agent import queries, table_names
 from flood_agent.llm import TextChunk
@@ -27,7 +32,7 @@ def test_two_tables_in_the_same_second_get_distinct_names(query_runner, tmp_path
     a, b, c = (runner.run(SQL, max_rows=1_000_000, title=title)["result_table"]
                for title in ("Top ports", "Other title", "Top ports"))
     assert (a, b, c) == ("rt_20261101_230402", "rt_20261101_230402_2", "rt_20261101_230402_3")
-    con = sqlite3.connect(tmp_path / "results.db")
+    con = sqlite3.connect(databases_for_test(tmp_path).results_db)
     assert con.execute(f"SELECT COUNT(*) FROM {c}").fetchone()[0] > 0
 
 

@@ -23,7 +23,7 @@ uv run python -m flood_agent.generator data/telemetry.db   # 7 days of Flow, DNS
 ## Run
 
 ```
-cp .env.example .env     # then set OPENROUTER_API_KEY in .env (never commit it)
+cp .env.example .env     # then set USERS (see Users) and OPENROUTER_API_KEY in .env (never commit it)
 uv run python -m flood_agent                    # http://127.0.0.1:8000
 ```
 
@@ -32,6 +32,30 @@ To restart automatically when the code, templates, Semantic Layer or `.env` chan
 the Telemetry Database's timestamps so its latest record is the current time (the generated data is a
 fixed week, and "the last hour" means the real last hour).
 Reload the page after a restart.
+
+### Users
+
+Every page and API needs a signed-in User, and the app does not start until `.env` lists at least one:
+
+```
+uv run flood-agent-user alice     # prompts for a password twice and prints alice:<hash>
+```
+
+Put the entries in `.env`, separated by commas: `USERS=alice:<hash>,bob:<hash>`. A name is a lower-case letter
+followed by up to 30 lower-case letters, digits or underscores. (A hash holds `$` signs, which `.env` keeps as
+they are; to set `USERS` in a shell instead, put it in single quotes.)
+
+Each User has their own Notebooks, Result Tables, Saved Tables and Lookup Tables, which no other User can see; all
+Users read the same Telemetry Database. A User's databases, `app.db` and `results.db`, are in `USERS_DIR/<name>/`
+(default `data/users/`) and are created on first use. The app deletes the single-user databases of earlier versions
+(`APP_DB` and `RESULTS_DB`, default `data/app.db` and `data/results.db`) when it starts: nothing in them is migrated.
+Taking a name out of `USERS` leaves that User's directory in place.
+
+A session ends after `SESSION_IDLE_TIMEOUT_HOURS` without a request, on Sign out, or when the app restarts.
+Sessions are held in memory, so run one process. The session cookie is Secure, so over a network serve the app
+through HTTPS (`flood-agent-dev` turns the flag off for plain http). A request that changes something must come
+from the app's own origin: a reverse proxy has to pass on the `Host` header and, if it terminates HTTPS,
+`X-Forwarded-Proto` (uvicorn trusts it from 127.0.0.1, or the addresses in `FORWARDED_ALLOW_IPS`).
 
 ### Fake Mode ("No model")
 
@@ -64,6 +88,11 @@ and `defaults.toml`; a test fails if it is stale. After changing either, regener
 uv run python -m flood_agent.config > .env.example
 ```
 
+## Users in Ocient
+
+Setting up a User in production Ocient (a DBA SQL script), the design for the future Ocient query
+runner and the checks to make on a real cluster are in [`docs/ocient/`](docs/ocient/README.md).
+
 ## Test
 
 ```
@@ -84,7 +113,8 @@ Tables are paginated (50 rows/page, max 500) and sortable on any column by the A
 Result Table; `sort` must exactly match a column of that Result Table or the request is a
 400. `GET /api/results/<rt>/psv` streams the full Result Table as pipe-separated values (fields containing `|`, a quote or a newline are double-quoted, CSV-style; raw values, formula-leading
 text prefixed with `'`). Both are Agent endpoints, not LLM tools. The `/api/results/...`
-endpoints are not scoped per notebook by design: CANOPY is single-user and local, with no authentication.
+endpoints are not scoped per notebook by design: they need a signed-in User (see Users), and reach only that
+User's tables (another User's table is a 404).
 
 Formatting comes from Semantic Layer column metadata (`tables.flows.columns.<col>`):
 `enum` -> names (proto), `enum_bits` -> flag letters (S, SA, FPA), `unit: bytes` -> decimal
@@ -115,14 +145,17 @@ charts with a time x axis, Ctrl+scroll to zoom that axis, drag to pan and double
 
 ## Layout
 
-- `agent.py` - the Agent: builds the app's parts, supervises the MCP server, Refresh and row reads.
-- `notebook.py` - the Notebook module (`agent.notebooks`): Notebook and Cell lifecycle; `run_cell(notebook_id, cell_id)` yields `TextDelta`, `DisplayEvent`, `TurnEnd`.
+- `agent.py` - the Agent: builds each User's parts (`agent.for_user(name)`), supervises the one MCP server, Refresh and
+  row reads.
+- `notebook.py` - the Notebook module (a User's `notebooks`): Notebook and Cell lifecycle; `run_cell(notebook_id, cell_id)` yields `TextDelta`, `DisplayEvent`, `TurnEnd`.
 - `llm.py` - `LLMClient` protocol and the OpenRouter implementation.
 - `fake_llm.py` + `canned_prompts.yaml` - the Fake Mode `LLMClient` and its Canned Prompts.
 - `mcp_server.py` - stdio MCP server; the only LLM tools are `run_query`, `run_count_query`, `show_table` and `show_chart`.
 - `queries.py` - the query runner (`QueryRunner`): read-only Telemetry Database access, CTAS into the results DB,
   internal row access.
 - `web.py` + `templates/` - FastAPI, Jinja, htmx (SSE), Alpine table and chart components.
+- `users.py` + `sign_in.py` - the configured Users, their password hashes and where their databases are; the sign-in page, sessions and the
+  check every request passes.
 - `semantic_layer.yaml` - hand-authored Semantic Layer rendered into the system prompt.
 
 ## Eval set and runner (on demand, not CI)

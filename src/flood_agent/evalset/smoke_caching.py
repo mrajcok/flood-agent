@@ -29,7 +29,13 @@ from pydantic import ValidationError
 from flood_agent.agent import Agent
 from flood_agent.config import Settings
 from flood_agent.evalset.golden import Question, load_golden
-from flood_agent.evalset.notebook import add_cells_above, eval_model_choices, run_ai_cell
+from flood_agent.evalset.notebook import (
+    EVAL_USER,
+    add_cells_above,
+    eval_model_choices,
+    eval_user_config,
+    run_ai_cell,
+)
 from flood_agent.events import TextDelta, TurnError
 from flood_agent.llm import OpenRouterClient, UsageChunk
 
@@ -213,19 +219,17 @@ async def run_notebook(model: str, questions: list[Question], settings: Settings
     tee = _Tee(provider, cache_at, delay, inner)
     recorder = _Recorder(OpenRouterClient(key.get_secret_value(), model, transport=tee))
     workdir.mkdir(parents=True, exist_ok=True)
-    results_db, app_db = workdir / "results.db", workdir / "app.db"
-    for p in (results_db, app_db):
-        p.unlink(missing_ok=True)
-    agent = Agent(replace(settings.agent_config(), choices=eval_model_choices(settings, model), results_db=results_db, app_db=app_db),
-                  lambda _model: recorder)
+    config = eval_user_config(settings.agent_config(), workdir)
+    agent = Agent(replace(config, choices=eval_model_choices(settings, model)), lambda _model: recorder)
+    user = agent.for_user(EVAL_USER)
     error, reply, cells = None, "", []
     async with agent:
-        notebook_id = agent.notebooks.create_notebook("caching smoke check")
+        notebook_id = user.notebooks.create_notebook("caching smoke check")
         for q in questions:
-            await add_cells_above(agent, notebook_id, q.above)
+            await add_cells_above(user, notebook_id, q.above)
             first_call = len(tee.calls)
             reply = ""
-            _, events = await run_ai_cell(agent, notebook_id, q.question, 1000)
+            _, events = await run_ai_cell(user, notebook_id, q.question, 1000)
             async for event in events:
                 if isinstance(event, TurnError):
                     error = error or event.detail
@@ -278,7 +282,7 @@ def main(argv=None) -> int:
                    help="experiment: 'system' moves cache_control from the request's top level onto the system message block")
     p.add_argument("--delay", type=float, default=0,
                    help="experiment: seconds to wait before every request after the first, so a new cache entry can become readable")
-    p.add_argument("--workdir", default="data/smoke-work", help="scratch results/app databases")
+    p.add_argument("--workdir", default="data/smoke-work", help="scratch databases")
     a = p.parse_args(argv)
     try:
         settings = Settings()  # pyright: ignore[reportCallIssue]  # pydantic-settings fills fields from env/TOML

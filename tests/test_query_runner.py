@@ -4,6 +4,7 @@ their own files."""
 import sqlite3
 
 import pytest
+from conftest import databases_for_test
 
 from flood_agent import queries
 
@@ -42,7 +43,7 @@ def test_a_table_made_readable_after_the_runner_was_built_can_be_read(query_runn
     lambda runner: runner.rename("t", "other"),
 ])
 def test_a_database_error_is_the_runners_own_error(query_runner, tmp_path, operation):
-    (tmp_path / "results.db").write_text("this is not a database " * 100)
+    (databases_for_test(tmp_path).results_db).write_text("this is not a database " * 100)
     with pytest.raises(queries.QueryFailed):
         operation(query_runner())
 

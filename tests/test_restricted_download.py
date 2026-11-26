@@ -331,3 +331,30 @@ def test_a_download_that_has_started_keeps_the_rows_it_was_checked_for(client, a
     assert "".join(chunks) == "v\r\nold\r\n"
     replacing.join()
     assert agent.tables[table].restricted
+
+
+@pytest.mark.parametrize("change", ["rename", "delete"])
+def test_no_table_can_be_renamed_or_deleted_between_a_downloads_check_and_its_rows(
+        client, agent, monkeypatch, change):
+    plain = make_table(client, agent, "SELECT 'old' AS v")
+    agent.tables.update(plain, "shared")
+    restricted = make_table(client, agent, "SELECT imsi AS v FROM diameter")
+
+    def swap_in_the_restricted_table():
+        if change == "delete":
+            agent.tables.delete("shared")
+        else:
+            agent.tables.update("shared", "elsewhere")
+            agent.tables.update(restricted, "shared")
+
+    all_rows, changing = agent.queries.all_rows, threading.Thread(target=swap_in_the_restricted_table)
+
+    def change_then_read(name: str):  # the download has been allowed; its rows are not yet being read
+        changing.start()
+        changing.join(0.5)
+        return all_rows(name)
+
+    monkeypatch.setattr(agent.queries, "all_rows", change_then_read)
+    chunks = agent.user.download("shared", "plain").chunks
+    assert "".join(chunks) == "v\r\nold\r\n"
+    changing.join()

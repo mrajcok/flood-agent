@@ -170,8 +170,6 @@ charts with a time x axis, Ctrl+scroll to zoom that axis, drag to pan and double
 - `web.py` + `templates/` - FastAPI, Jinja, htmx (SSE), Alpine table and chart components.
 - `users.py` + `sign_in.py` - the configured Users, their password hashes and where their databases are; the sign-in page, sessions and the
   check every request passes.
-- `lineage.py` - column lineage: which output columns of a query carry values from a Restricted Column.
-- `sqlite_sql.py` - a query rewritten, by SQLite's lexing rules, so that lineage's parser reads it as SQLite does.
 - `table_sources.py` - which Telemetry tables a query's rows came from, which decides whether its table is restricted.
 - `downloads.py` - a table's PSV download: the modes it may be had in (plain, encrypted) and the file.
 - `public_keys.py` - a User's one Public Key: what an upload may be, and where it is kept.

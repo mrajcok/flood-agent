@@ -13,7 +13,6 @@ dependencies = [
     "python-dotenv>=1.2.4",
     "pydantic-settings>=2.16,<3",
     "pyrage>=1.4.0",
-    "sqlglot>=30.35.0",
 ]
 
 [project.scripts]

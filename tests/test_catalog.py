@@ -12,12 +12,11 @@ from conftest import (
 )
 
 from flood_agent.catalog import Catalog, CatalogView, CellRun, TableExpired
-from flood_agent.lineage import TableSchema
 
 HOUR = 3_600_000
 DAY = 24 * HOUR
 
-FLOWS = {"flows": TableSchema(("sip", "dip"))}
+FLOWS = {"flows": ()}
 
 
 class Clock:
@@ -366,14 +365,16 @@ def test_the_view_opens_the_results_database_read_only(tmp_path, clock, query_ru
         con.execute("CREATE TABLE x(y)")
 
 
-def test_tables_registered_before_lineage_was_recorded_have_unknown_lineage(tmp_path, query_runner):
+def test_tables_registered_before_sources_were_recorded_are_restricted(tmp_path, query_runner):
     app_db, clock = tmp_path / "app.db", Clock()
     with closing(sqlite3.connect(app_db)) as con, con:  # the registry as it was first made
         con.execute("CREATE TABLE result_tables (name TEXT PRIMARY KEY, cell_id TEXT NOT NULL, run_id TEXT NOT NULL,"
                     " created_at INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '', columns TEXT NOT NULL DEFAULT '[]',"
                     " request TEXT NOT NULL DEFAULT '', expired INTEGER NOT NULL DEFAULT 0, truncated_to INTEGER,"
-                    " retention_ms INTEGER NOT NULL, sql TEXT, max_rows INTEGER, refreshed_at INTEGER)")
-        con.execute("INSERT INTO result_tables(name, cell_id, run_id, created_at, retention_ms)"
-                    " VALUES ('rt_old', 'c', 'r', ?, ?)", (clock.now, HOUR))
+                    " retention_ms INTEGER NOT NULL, sql TEXT, max_rows INTEGER, refreshed_at INTEGER, restriction TEXT)")
+        con.execute("INSERT INTO result_tables(name, cell_id, run_id, created_at, retention_ms, restriction)"
+                    " VALUES ('rt_old', 'c', 'r', ?, ?, '[]')", (clock.now, HOUR))  # no Restricted Column, as was
     catalog = Catalog(app_db, clock, runner=query_runner())
-    assert catalog["rt_old"].restriction.unknown and catalog["rt_old"].restricted
+    assert catalog["rt_old"].sources is None
+    assert catalog.restriction(catalog["rt_old"]).restricted
+    assert catalog.recorded_sources("rt_old") is None

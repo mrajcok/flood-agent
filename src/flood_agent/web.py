@@ -740,15 +740,17 @@ def create_app(agent: Agent, sign_in_config: SignInConfig, picker: list[PickerEn
 
     @app.get("/api/results/{result_table}/download-options")
     def download_options(space: Space, result_table: str):
-        """Whether the table is restricted, and by which columns, and the User's Public Key, for the Display's download
-        dialog."""
+        """Whether the table is restricted, the Telemetry tables that make it so with their Restricted Columns,
+        whether its origin is unknown, and the User's Public Key, for the Display's download dialog."""
         try:
-            table = space.tables.for_download(result_table)
+            restriction = space.tables.restriction(space.tables[result_table])
         except KeyError:
             raise HTTPException(404, "unknown result table")
         key = space.public_keys.get()
-        return {"restricted": table.restricted, "restricted_columns": list(table.restriction.columns or ()),
-                "lineage_unknown": table.restriction.unknown,
+        return {"restricted": restriction.restricted,
+                "sources": [{"table": table, "restricted_columns": list(columns)}
+                            for table, columns in restriction.sources],
+                "unknown_origin": restriction.unknown_origin,
                 "public_key": None if key is None else {"type": key.type, "fingerprint": key.fingerprint}}
 
     @app.get("/api/results/{result_table}/psv")
@@ -763,11 +765,11 @@ def create_app(agent: Agent, sign_in_config: SignInConfig, picker: list[PickerEn
             raise HTTPException(403, str(e))
         except NoPublicKey as e:
             raise HTTPException(409, str(e))
-        if mode != "plain":  # who took what from a restricted table; the names are quoted, as the User chose them
-            table, key = download.allowed.table, download.allowed.key
-            log.info("download: user=%s table=%s mode=%s restricted_columns=%s%s", request.state.user,
-                     table.name, mode, json.dumps(table.restriction.columns or ()),
-                     f" key={key.fingerprint}" if key else "")
+        allowed = download.allowed
+        if allowed.key and allowed.restriction.restricted:  # who took what from a Restricted Table
+            sources = allowed.table.sources
+            log.info("download: user=%s table=%s sources=%s key=%s", request.state.user, allowed.table.name,
+                     "unknown" if sources is None else json.dumps(sorted(sources)), allowed.key.fingerprint)
         return StreamingResponse(
             download.chunks,
             media_type=download.media_type,

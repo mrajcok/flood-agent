@@ -10,7 +10,6 @@ from conftest import (
 )
 
 from flood_agent.catalog import Catalog
-from flood_agent.lineage import TableSchema
 from flood_agent.queries import QueryFailed
 
 HOUR = 3_600_000
@@ -18,7 +17,7 @@ DAY = 24 * HOUR
 RT = "rt_20260101_000000"
 RT2 = "rt_20260101_000001"
 
-FLOWS = {"flows": TableSchema(("sip", "dip"))}
+FLOWS = {"flows": ()}
 
 
 class Clock:

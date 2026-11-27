@@ -22,9 +22,8 @@ def test_the_system_prompt_asks_for_thousands_separators_in_stated_counts():
 
 
 def test_only_the_diameter_subscriber_and_device_columns_are_restricted():
-    schemas = SemanticLayer(REAL).telemetry_schemas()
-    assert {name: schema.restricted for name, schema in schemas.items()} == {
-        "flows": frozenset(), "dns_metadata": frozenset(), "diameter": frozenset({"imsi", "msisdn", "imei"})}
+    assert SemanticLayer(REAL).restricted_columns() == {
+        "flows": (), "dns_metadata": (), "diameter": ("imsi", "msisdn", "imei")}
 
 
 def test_a_restricted_that_is_not_a_boolean_is_refused(tmp_path):
@@ -36,6 +35,7 @@ def test_a_restricted_that_is_not_a_boolean_is_refused(tmp_path):
 
 def test_the_system_prompt_says_what_a_restricted_column_means_and_which_columns_are():
     prompt = " ".join(SemanticLayer(REAL).system_prompt().split())
-    assert ("Columns marked restricted identify a Subscriber or device, and a table carrying their values can only "
-            "be downloaded masked or encrypted.") in prompt
+    assert ("Columns marked restricted identify a Subscriber or device. The result of any query that reads a table with "
+            "such a column, even without selecting it, and anything queried from that result, can only be downloaded "
+            "encrypted.") in prompt
     assert "restricted: true" in prompt

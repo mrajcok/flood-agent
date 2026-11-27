@@ -14,7 +14,7 @@ import sqlite3
 import sys
 import threading
 import time
-from contextlib import ExitStack, asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager, closing
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
@@ -35,7 +35,6 @@ from flood_agent.cell_kinds import SQL as SQL_KIND
 from flood_agent.config import Settings
 from flood_agent.events import TextDelta
 from flood_agent.generator import generate
-from flood_agent.lineage import SchemaProvider
 from flood_agent.llm import TextChunk, ToolCallChunk, UsageChunk
 from flood_agent.mcp_server import ServerSettings, create_server
 from flood_agent.model_choices import ModelChoices
@@ -45,6 +44,7 @@ from flood_agent.queries import QueryRunner
 from flood_agent.semantic_layer import SemanticLayer
 from flood_agent.sign_in import SignInConfig
 from flood_agent.table_replacement import TableReplacement
+from flood_agent.table_sources import Recorded
 from flood_agent.users import UserDatabases, parse_users, user_databases
 from flood_agent.web import create_app
 
@@ -171,6 +171,17 @@ def telemetry_db(request, tmp_path: Path, telemetry_db_template: Path) -> Path:
     generated = request.node.get_closest_marker("generated_data") is not None
     source = request.getfixturevalue("generated_db") if generated else telemetry_db_template
     return Path(shutil.copy(source, tmp_path / "telemetry.db"))
+
+
+def empty_copy(source: Path, to: Path) -> Path:
+    """A Telemetry Database with `source`'s tables and indexes and no rows: a query compiles on it as it would on
+    `source`, and no join, however it is written, can build anything large."""
+    with closing(sqlite3.connect(source)) as made:
+        statements = [sql for sql, in made.execute("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL")]
+    with closing(sqlite3.connect(to)) as con, con:
+        for sql in statements:
+            con.execute(sql)
+    return to
 
 
 def needs_generated_data(canned_id: str) -> bool:
@@ -422,18 +433,18 @@ class AgentForTest(Agent):
 
 @pytest.fixture
 def query_runner(tmp_path, telemetry_db):
-    """`query_runner(readable=set(), timeout_s=None, schema=...)` -> a QueryRunner over the test Telemetry Database and the
+    """`query_runner(readable=set(), timeout_s=None, recorded=...)` -> a QueryRunner over the test Telemetry Database and the
     test User's results database (`databases_for_test`). `readable` is the set of tables a query may read,
-    which the test may change afterwards, or a function returning it (e.g. a Catalog's `readable`). `schema` is what
-    column lineage knows of those tables (a Catalog's `schema`)."""
+    which the test may change afterwards, or a function returning it (e.g. a Catalog's `readable`). `recorded` is the
+    record of each of those tables' sources (a Catalog's `recorded_sources`); by default none is known."""
     results_db = databases_for_test(tmp_path).results_db
 
     def _build(readable: set[str] | Callable[[], set[str]] | None = None, timeout_s: float | None = None,
-               schema: SchemaProvider = lambda name: None) -> QueryRunner:
+               recorded: Recorded = lambda name: None) -> QueryRunner:
         tables = set() if readable is None else readable
         return QueryRunner(telemetry_db, results_db,
                            default_agent_config().query_timeout_s if timeout_s is None else timeout_s,
-                           tables if callable(tables) else lambda: tables, schema)
+                           tables if callable(tables) else lambda: tables, recorded)
 
     return _build
 

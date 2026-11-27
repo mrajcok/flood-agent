@@ -30,7 +30,6 @@ from mcp.server.fastmcp import Context, FastMCP
 
 from flood_agent import logs, queries
 from flood_agent.catalog import CatalogView
-from flood_agent.lineage import TableSchema
 from flood_agent.mcp_protocol import META_MAX_RESULT_ROWS, META_USER
 from flood_agent.notebook_store import rename_data_source
 from flood_agent.tool_outcome import DisplayMade, Failed, TableDescribed, encode, from_query_result
@@ -47,8 +46,8 @@ class ServerSettings:
     users: tuple[str, ...]
     query_timeout_s: float
     chart_row_cap: int
-    # The Telemetry Database tables with their columns and Restricted Columns, static, from the Semantic Layer
-    telemetry_tables: dict[str, TableSchema] = field(default_factory=dict)
+    # The Telemetry Database tables with their Restricted Columns, static, from the Semantic Layer
+    telemetry_tables: dict[str, tuple[str, ...]] = field(default_factory=dict)
     fixed_now_ms: int | None = None  # pins SQL now() (evals); None is the wall clock
 
     def to_env(self) -> dict[str, str]:
@@ -58,9 +57,7 @@ class ServerSettings:
             "USER_NAMES": json.dumps(list(self.users)),
             "QUERY_TIMEOUT_S": str(self.query_timeout_s),
             "CHART_ROW_CAP": str(self.chart_row_cap),
-            "TELEMETRY_TABLES": json.dumps({
-                name: {"columns": list(t.columns), "restricted": sorted(t.restricted)}
-                for name, t in self.telemetry_tables.items()}),
+            "TELEMETRY_TABLES": json.dumps(self.telemetry_tables),
         }
         if self.fixed_now_ms is not None:
             env["FIXED_NOW_MS"] = str(self.fixed_now_ms)
@@ -75,8 +72,7 @@ class ServerSettings:
             query_timeout_s=float(env["QUERY_TIMEOUT_S"]),
             chart_row_cap=int(env["CHART_ROW_CAP"]),
             telemetry_tables={
-                name: TableSchema(tuple(t["columns"]), frozenset(t["restricted"]))
-                for name, t in json.loads(env.get("TELEMETRY_TABLES", "{}")).items()},
+                name: tuple(columns) for name, columns in json.loads(env.get("TELEMETRY_TABLES", "{}")).items()},
             fixed_now_ms=int(env["FIXED_NOW_MS"]) if env.get("FIXED_NOW_MS") else None,
         )
 
@@ -241,7 +237,8 @@ def create_server(settings: ServerSettings, clock: Callable[[], int] | None = No
         databases = user_databases(settings.users_dir, user)
         catalog = CatalogView(databases.app_db, clock or _wall_clock, settings.telemetry_tables)
         runner = queries.QueryRunner(
-            settings.telemetry_db, databases.results_db, settings.query_timeout_s, catalog.readable, catalog.schema)
+            settings.telemetry_db, databases.results_db, settings.query_timeout_s, catalog.readable,
+            catalog.recorded_sources)
         return catalog, runner
 
     @mcp.tool()
@@ -265,8 +262,7 @@ def create_server(settings: ServerSettings, clock: Callable[[], int] | None = No
     @mcp.tool()
     @_in_worker_thread
     def describe_table(name: str, ctx: Context) -> str:
-        """Describe a table the user names: its kind, column names and types (marking restricted
-        columns), and row count. Works for any live table from any notebook, not only those listed in
+        """Describe a table the user names: its kind, column names and types, and row count. Works for any live table from any notebook, not only those listed in
         your prompt. Never returns rows. Query it by name with run_query."""
         catalog, runner = for_caller(ctx)
         kind = catalog.kind_of(name)
@@ -275,9 +271,7 @@ def create_server(settings: ServerSettings, clock: Callable[[], int] | None = No
         described = runner.describe(name) if kind else None
         if described is None or kind is None:
             return encode(Failed("No such table."))
-        restricted = catalog[name].schema.restricted if kind != "lookup" else ()
-        columns = [c | {"restricted": True} if c["name"] in restricted else c for c in described["columns"]]
-        return encode(TableDescribed(name, kind, columns, described["row_count"]))
+        return encode(TableDescribed(name, kind, described["columns"], described["row_count"]))
 
     @mcp.tool()
     @_in_worker_thread

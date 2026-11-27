@@ -46,6 +46,7 @@ from flood_agent.queries import InvalidSort, QueryFailed, QueryRejected
 from flood_agent.show_commands import SHOW_COMMANDS
 from flood_agent.sign_in import SignInConfig
 from flood_agent.table_replacement import RefreshInProgress
+from flood_agent.table_sources import sources_json
 from flood_agent.trace import short_model, split_system_prompt
 
 log = logging.getLogger("uvicorn.error")  # the app's terminal log
@@ -749,7 +750,7 @@ def create_app(agent: Agent, sign_in_config: SignInConfig, picker: list[PickerEn
         key = space.public_keys.get()
         return {"restricted": restriction.restricted,
                 "sources": [{"table": table, "restricted_columns": list(columns)}
-                            for table, columns in restriction.sources],
+                            for table, columns in restriction.restricting_sources],
                 "unknown_origin": restriction.unknown_origin,
                 "public_key": None if key is None else {"type": key.type, "fingerprint": key.fingerprint}}
 
@@ -767,9 +768,8 @@ def create_app(agent: Agent, sign_in_config: SignInConfig, picker: list[PickerEn
             raise HTTPException(409, str(e))
         allowed = download.allowed
         if allowed.key and allowed.restriction.restricted:  # who took what from a Restricted Table
-            sources = allowed.table.sources
             log.info("download: user=%s table=%s sources=%s key=%s", request.state.user, allowed.table.name,
-                     "unknown" if sources is None else json.dumps(sorted(sources)), allowed.key.fingerprint)
+                     sources_json(allowed.table.sources) or "unknown", allowed.key.fingerprint)
         return StreamingResponse(
             download.chunks,
             media_type=download.media_type,

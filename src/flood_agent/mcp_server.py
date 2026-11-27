@@ -46,8 +46,8 @@ class ServerSettings:
     users: tuple[str, ...]
     query_timeout_s: float
     chart_row_cap: int
-    # The Telemetry Database tables with their Restricted Columns, static, from the Semantic Layer
-    telemetry_tables: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # Each Telemetry Database table mapped to its Restricted Columns, static, from the Semantic Layer
+    restricted_columns_by_table: dict[str, tuple[str, ...]] = field(default_factory=dict)
     fixed_now_ms: int | None = None  # pins SQL now() (evals); None is the wall clock
 
     def to_env(self) -> dict[str, str]:
@@ -57,7 +57,7 @@ class ServerSettings:
             "USER_NAMES": json.dumps(list(self.users)),
             "QUERY_TIMEOUT_S": str(self.query_timeout_s),
             "CHART_ROW_CAP": str(self.chart_row_cap),
-            "TELEMETRY_TABLES": json.dumps(self.telemetry_tables),
+            "RESTRICTED_COLUMNS_BY_TABLE": json.dumps(self.restricted_columns_by_table),
         }
         if self.fixed_now_ms is not None:
             env["FIXED_NOW_MS"] = str(self.fixed_now_ms)
@@ -71,8 +71,9 @@ class ServerSettings:
             users=tuple(json.loads(env["USER_NAMES"])),
             query_timeout_s=float(env["QUERY_TIMEOUT_S"]),
             chart_row_cap=int(env["CHART_ROW_CAP"]),
-            telemetry_tables={
-                name: tuple(columns) for name, columns in json.loads(env.get("TELEMETRY_TABLES", "{}")).items()},
+            restricted_columns_by_table={
+                name: tuple(columns)
+                for name, columns in json.loads(env.get("RESTRICTED_COLUMNS_BY_TABLE", "{}")).items()},
             fixed_now_ms=int(env["FIXED_NOW_MS"]) if env.get("FIXED_NOW_MS") else None,
         )
 
@@ -235,10 +236,10 @@ def create_server(settings: ServerSettings, clock: Callable[[], int] | None = No
         if not isinstance(user, str) or user not in settings.users:
             raise ValueError("The request must carry a known User in its _meta.")
         databases = user_databases(settings.users_dir, user)
-        catalog = CatalogView(databases.app_db, clock or _wall_clock, settings.telemetry_tables)
+        catalog = CatalogView(databases.app_db, clock or _wall_clock, settings.restricted_columns_by_table)
         runner = queries.QueryRunner(
             settings.telemetry_db, databases.results_db, settings.query_timeout_s, catalog.readable,
-            catalog.recorded_sources)
+            catalog.recorded_sources, catalog.holds)
         return catalog, runner
 
     @mcp.tool()
@@ -262,8 +263,9 @@ def create_server(settings: ServerSettings, clock: Callable[[], int] | None = No
     @mcp.tool()
     @_in_worker_thread
     def describe_table(name: str, ctx: Context) -> str:
-        """Describe a table the user names: its kind, column names and types, and row count. Works for any live table from any notebook, not only those listed in
-        your prompt. Never returns rows. Query it by name with run_query."""
+        """Describe a table the user names: its kind, column names and types, and row count. Works
+        for any live table from any notebook, not only those listed in your prompt. Never returns
+        rows. Query it by name with run_query."""
         catalog, runner = for_caller(ctx)
         kind = catalog.kind_of(name)
         kind = kind if kind in ("lookup", "result", "saved") else None

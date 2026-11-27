@@ -436,7 +436,8 @@ def query_runner(tmp_path, telemetry_db):
     """`query_runner(readable=set(), timeout_s=None, recorded=...)` -> a QueryRunner over the test Telemetry Database and the
     test User's results database (`databases_for_test`). `readable` is the set of tables a query may read,
     which the test may change afterwards, or a function returning it (e.g. a Catalog's `readable`). `recorded` is the
-    record of each of those tables' sources (a Catalog's `recorded_sources`); by default none is known."""
+    record of each of those tables' sources (a Catalog's `recorded_sources`); by default none is known. No registry
+    holds any name."""
     results_db = databases_for_test(tmp_path).results_db
 
     def _build(readable: set[str] | Callable[[], set[str]] | None = None, timeout_s: float | None = None,
@@ -444,7 +445,7 @@ def query_runner(tmp_path, telemetry_db):
         tables = set() if readable is None else readable
         return QueryRunner(telemetry_db, results_db,
                            default_agent_config().query_timeout_s if timeout_s is None else timeout_s,
-                           tables if callable(tables) else lambda: tables, recorded)
+                           tables if callable(tables) else lambda: tables, recorded, lambda name: False)
 
     return _build
 

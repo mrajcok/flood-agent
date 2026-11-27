@@ -12,8 +12,8 @@ def test_settings_round_trip_through_the_launch_environment():
         users=("alice", "bob"),
         query_timeout_s=2.5,
         chart_row_cap=99,
-        telemetry_tables={"flows": (), "subscribers": ("imsi",)},
+        restricted_columns_by_table={"flows": (), "subscribers": ("imsi",)},
     )
     env = settings.to_env()
-    assert set(env) == {"TELEMETRY_DB", "USERS_DIR", "USER_NAMES", "QUERY_TIMEOUT_S", "CHART_ROW_CAP", "TELEMETRY_TABLES"}
+    assert set(env) == {"TELEMETRY_DB", "USERS_DIR", "USER_NAMES", "QUERY_TIMEOUT_S", "CHART_ROW_CAP", "RESTRICTED_COLUMNS_BY_TABLE"}
     assert ServerSettings.from_env(env) == settings

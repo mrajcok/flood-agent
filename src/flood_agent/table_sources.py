@@ -6,6 +6,7 @@ to which the authorizer's reports only add (it says nothing of the column a USIN
 recognised is an allow-list, and anything else makes the sources unknown.
 """
 
+import json
 import logging
 import sqlite3
 from typing import Callable
@@ -39,6 +40,18 @@ def fold(name: str) -> str:
 def union(a: Sources, b: Sources) -> Sources:
     """The record of data from both: unknown if either is."""
     return None if a is None or b is None else a | b
+
+
+def from_names(names: object) -> Sources:
+    """The record a list of table names holds; None, not known, for anything else."""
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        return None
+    return frozenset(names)
+
+
+def sources_json(sources: Sources) -> str | None:
+    """`sources` as a JSON list in a stable order; None if they are not known."""
+    return None if sources is None else json.dumps(sorted(sources))
 
 
 class _Unrecognised(Exception):

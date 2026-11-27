@@ -65,7 +65,7 @@ def check(table: Table, restriction: Restriction, mode: Mode, key: PublicKey | N
 def _why(name: str, restriction: Restriction) -> str:
     """Why the Restricted Table `name` cannot be had plain."""
     reasons = [f"it has data from {table}, which holds Restricted Columns ({', '.join(columns)})"
-               for table, columns in restriction.sources]
+               for table, columns in restriction.restricting_sources]
     if restriction.unknown_origin:
         reasons.append("CANOPY doesn't know where its data came from")
     return f"{name} is a Restricted Table ({'; '.join(reasons)}), so it can only be downloaded encrypted."

@@ -20,6 +20,8 @@ A table that SQLite removes from the compiled query and never reports, as it can
 
 Each Result Table and Saved Table records in the Table Catalog the Telemetry tables its data came from: each Telemetry table its query read, and the recorded set of each Result or Saved Table it read. A Lookup Table contributes nothing. If any contribution is unknown, the whole record is unknown, which is not the same as no sources. The record is written by every path that makes rows (SQL Cell Runs, AI Cell queries and Refresh) and is never recomputed from stored SQL, so it outlives the tables it came from.
 
+**A name has one record.** A query's new table is never given a name the Table Catalog holds, for a live table or an expired one: the name is chosen while the query holds the write lock on the results database, so no table can be made, renamed or dropped meanwhile. Registering a held name is refused, and leaves that name's record unknown.
+
 **The rows read and the record go together.** The record is established inside the transaction that made the rows, whose lock stops any source being replaced meanwhile. While a table is being replaced, its visible record covers both the old rows and the new ones. A download checks the record and starts reading the rows while it holds the Table Catalog's lock, which a replacement, rename or deletion also takes, so no other table's rows can come to be under the name in between.
 
 ## At download time

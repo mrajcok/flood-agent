@@ -4,11 +4,12 @@ endpoints answer for them, and what an encrypted file holds.
 The Telemetry Database here has the generated one's tables and indexes and no rows, so no query, however it joins them,
 builds anything. Where a test needs rows it chooses them itself (`CHOSEN`)."""
 
-import itertools
 import json
+import sqlite3
 import subprocess
 import threading
 import tracemalloc
+from contextlib import closing
 from pathlib import Path
 
 import pyrage
@@ -221,10 +222,7 @@ def test_a_lookup_table_joined_to_a_restricted_table_does_not_launder_it(client,
 # --- the record follows the data -----------------------------------------------------------------------------------
 
 
-def test_a_derived_table_stays_restricted_after_its_source_is_deleted_or_expires(client, agent, clock, monkeypatch):
-    # A generated name is only to the second, and a test is quick enough to be given a dropped table's name again.
-    seconds = itertools.count()
-    monkeypatch.setattr("flood_agent.queries._timestamp", lambda: f"20260101_{next(seconds):06}")
+def test_a_derived_table_stays_restricted_after_its_source_is_deleted_or_expires(client, agent, clock):
     source = run_cell(client, agent, "SELECT apn FROM diameter")
     derived = run_cell(client, agent, f"SELECT COUNT(*) + 0 AS n FROM {source}")
     chained = run_cell(client, agent, f"SELECT n, dport FROM {derived}, flows")
@@ -296,6 +294,76 @@ def test_a_sql_cell_re_run_and_a_refresh_record_the_new_rows_sources(client, age
     assert origin(client, source) == PLAIN
     assert client.post(f"/api/results/{derived}/refresh").status_code == 200
     assert origin(client, derived) == PLAIN
+
+
+# --- a name the registry holds is never given to new rows ----------------------------------------------------------
+
+
+@pytest.fixture
+def one_second(monkeypatch):
+    """Every query runs within the same second, so each is offered the same generated name first."""
+    monkeypatch.setattr("flood_agent.queries._timestamp", lambda: "20260101_000000")
+
+
+def fail_registry_writes(agent, column: str) -> None:
+    """Make every later write of `column` in the table registry fail."""
+    with closing(sqlite3.connect(agent.databases.app_db)) as con, con:
+        con.execute(f"CREATE TRIGGER fail_write BEFORE UPDATE OF {column} ON result_tables "
+                    "BEGIN SELECT RAISE(ABORT, 'disk full'); END")
+
+
+def test_a_dropped_tables_name_is_not_given_to_a_later_query(client, agent, llm, one_second):
+    dropped = run_cell(client, agent, UNRESTRICTED)
+    agent.tables.delete(dropped)
+    llm.steps = [[tool_call("run_query", sql="SELECT apn FROM diameter", title="t")], [TextChunk("ok")]]
+    run_ai_cell(client, agent, "networks")
+    name = last_tool_result(llm.calls[-1])["result_table"]
+    assert name != dropped
+    assert origin(client, name) == BY_DIAMETER
+
+
+def test_a_name_stays_taken_when_its_rows_are_dropped_but_it_cannot_be_marked_expired(client, agent, one_second):
+    source = run_cell(client, agent, UNRESTRICTED)
+    fail_registry_writes(agent, "expired")
+    with pytest.raises(sqlite3.IntegrityError):
+        agent.tables.delete(source)
+    new = run_cell_directly(agent, RESTRICTED)
+    assert new != source
+    assert origin(client, new) == BY_DIAMETER
+    assert psv(client, source).status_code == 404
+
+
+def test_a_query_cannot_take_the_old_name_of_a_table_being_renamed(client, agent, monkeypatch, one_second):
+    source = run_cell(client, agent, UNRESTRICTED)
+    fail_registry_writes(agent, "name")
+    rename, made = agent.queries.rename, []
+
+    def rename_then_query(old: str, new: str):  # the rows have moved; the registry still holds the old name
+        rename(old, new)
+        if not made:
+            made.append(run_cell_directly(agent, RESTRICTED))
+
+    monkeypatch.setattr(agent.queries, "rename", rename_then_query)
+    with pytest.raises(ValueError):
+        agent.tables.update(source, "kept")
+    assert made[0] != source
+    assert origin(client, made[0]) == BY_DIAMETER
+    assert origin(client, source) == PLAIN and psv(client, source).status_code == 200  # the rename was undone
+
+
+def test_a_query_cannot_take_the_name_of_a_table_being_deleted(client, agent, monkeypatch, one_second):
+    source = run_cell(client, agent, UNRESTRICTED)
+    drop, made = agent.queries.drop, []
+
+    def drop_then_query(name: str):  # the rows are gone; the registry does not yet say the table is
+        drop(name)
+        made.append(run_cell_directly(agent, RESTRICTED))
+        made.append(run_cell_directly(agent, f"SELECT apn FROM {made[0]}"))
+
+    monkeypatch.setattr(agent.queries, "drop", drop_then_query)
+    agent.tables.delete(source)
+    assert source not in made
+    assert [origin(client, name) for name in made] == [BY_DIAMETER, BY_DIAMETER]
 
 
 # --- the configuration as it is now ---------------------------------------------------------------------------------

@@ -31,7 +31,7 @@ def load_golden(path: Path = GOLDEN_PATH) -> list[Question]:
 
 def run_reference(telemetry_db: Path, scratch_results_db: Path, sql: str) -> tuple[list[str], list[tuple]]:
     """Run reference SQL the way the LLM's SQL runs, but with no time limit or row cap and no Result Table readable."""
-    runner = QueryRunner(telemetry_db, scratch_results_db, math.inf, set, lambda name: None)
+    runner = QueryRunner(telemetry_db, scratch_results_db, math.inf, set, lambda name: None, lambda name: False)
     made = runner.run(sql, sys.maxsize)
     if not made["success"]:
         raise RuntimeError(f"Reference SQL failed: {made.get('raw_error', made['error'])}")

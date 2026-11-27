@@ -55,13 +55,20 @@ def _timestamp() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
-def _free_name(con: sqlite3.Connection) -> str:
-    """`rt_<date>_<time>`, with `_2`, `_3`... when that name is already taken."""
+Held = Callable[[str], bool]
+"""Whether the table registry holds a name, for a table that is live or expired."""
+
+
+def _free_name(con: sqlite3.Connection, held: Held) -> str:
+    """`rt_<date>_<time>`, with `_2`, `_3`... until it names neither a table in the results database nor one the
+    registry holds. `con` must hold the write lock on the results database: then no table there can be made, renamed
+    or dropped, and a generated name is registered only while its table is there, so the answer stays true until the
+    transaction ends."""
     base = f"rt_{_timestamp()}"
     taken = {r[0] for r in con.execute("SELECT name FROM results.sqlite_master WHERE name LIKE ? ESCAPE '\\'",
                                        (base.replace("_", "\\_") + "%",))}
     name, n = base, 1
-    while name in taken:
+    while name in taken or held(name):
         n += 1
         name = f"{base}_{n}"
     return name
@@ -400,6 +407,7 @@ def _run_query(
     timeout_s: float,
     max_rows: int,
     recorded: Recorded,
+    held: Held,
     allowed_tables: set[str] | None = None,
     title: str = "",
     stop: threading.Event | None = None,
@@ -411,26 +419,20 @@ def _run_query(
     con = _open_connection(telemetry_db, results_db, allowed_tables)
     executed = ""
     try:
-        name = _free_name(con)
         query = f"SELECT * FROM (\n{select}\n) LIMIT {int(max_rows)}"
         with _deadline(con, timeout_s, stop) as timed_out:
-            for attempt in range(5):  # a concurrent query may take the name between check and create
+            try:
+                # One transaction until the sources are established. It takes the write lock on the results database
+                # first, so the name stays free until the table is made under it, and no table the query reads can be
+                # replaced.
+                con.set_authorizer(None)
+                con.execute("BEGIN IMMEDIATE")
+                con.set_authorizer(_authorizer(allowed_tables))
+                name = _free_name(con, held)
                 executed = f"CREATE TABLE results.{name} AS {query}"
-                try:
-                    # One transaction until the sources are established: the lock it holds on the results database
-                    # keeps any table the query read from being replaced meanwhile.
-                    con.set_authorizer(None)
-                    con.execute("BEGIN")
-                    con.set_authorizer(_authorizer(allowed_tables))
-                    con.execute(executed)
-                    break
-                except sqlite3.Error as e:
-                    con.set_authorizer(None)
-                    con.rollback()
-                    if attempt < 4 and f"table {name} already exists" in str(e):
-                        name = _free_name(con)
-                        continue
-                    return _failure(e, timed_out(), timeout_s, stop, executed_sql=executed)
+                con.execute(executed)
+            except sqlite3.Error as e:
+                return _failure(e, timed_out(), timeout_s, stop, executed_sql=executed)
         try:
             sources = sources_of(con, query, _authorizer(allowed_tables), recorded)
             con.commit()
@@ -670,15 +672,16 @@ class QueryRunner:
     """How callers query: built once with the Telemetry Database, the results database, the query timeout and
     `readable`, which returns the tables a query may read now (ADR 0003: every live Result Table, Saved Table and
     Lookup Table). `recorded` gives the record of a table in the results database, for the sources of a query that
-    reads it. Each operation takes only what varies per call.
+    reads it, and `held` says which names the table registry holds, so that a new table is given none of them. Each
+    operation takes only what varies per call.
 
     A database error is raised as `QueryFailed`; `run` and `count` instead report a failure of the query itself
     in the dict they return. The operations that take a table name do not check that it is live: the caller has."""
 
     def __init__(self, telemetry_db: Path, results_db: Path, timeout_s: float, readable: Callable[[], set[str]],
-                 recorded: Recorded):
+                 recorded: Recorded, held: Held):
         self._telemetry_db, self._results_db = telemetry_db, results_db
-        self._timeout_s, self._readable, self._recorded = timeout_s, readable, recorded
+        self._timeout_s, self._readable, self._recorded, self._held = timeout_s, readable, recorded, held
 
     def run(self, sql: str, max_rows: int, title: str = "", stop: threading.Event | None = None) -> dict:
         """Run the SQL as CTAS into a new Result Table. Returns Query Metadata, and under `sources` the Telemetry
@@ -694,7 +697,7 @@ class QueryRunner:
         readable = self._readable()  # outside: a failure to read the set is not a query failure
         with _database_errors():
             return _run_query(self._telemetry_db, self._results_db, sql, self._timeout_s, max_rows, self._recorded,
-                              readable, title, stop)
+                              self._held, readable, title, stop)
 
     def count(self, sql: str, stop: threading.Event | None = None) -> dict:
         """Run a `SELECT COUNT(...) FROM ...` and return the number itself (no Result Table). The one

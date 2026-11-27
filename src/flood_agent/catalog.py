@@ -19,7 +19,7 @@ from typing import Callable, Iterable, Iterator, Literal, Mapping
 
 from flood_agent import lookup_tables, table_names
 from flood_agent.queries import QueryRunner
-from flood_agent.table_sources import Sources, fold
+from flood_agent.table_sources import Sources, fold, from_names, sources_json
 
 # The Telemetry Database tables the table's data came from, as a JSON list; NULL: not known (ADR 0008).
 _SOURCES_COLUMN = "sources TEXT"
@@ -73,6 +73,10 @@ class TableExpired(Exception):
     KeyError (unknown table) into 404 still lets the app-wide 410 handler run."""
 
 
+class NameHeld(Exception):
+    """A new table cannot be registered under a name the registry already holds, even for an expired table."""
+
+
 @dataclass(frozen=True)
 class CellRun:
     """Who made a Result Table: one Run of a notebook Cell."""
@@ -90,12 +94,12 @@ class Restriction:
     it has data from that have Restricted Columns, each with those columns, and whether any of its origin is unknown
     (it has no record, or the record names a table the Semantic Layer does not describe)."""
 
-    sources: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    restricting_sources: tuple[tuple[str, tuple[str, ...]], ...] = ()
     unknown_origin: bool = False
 
     @property
     def restricted(self) -> bool:
-        return self.unknown_origin or bool(self.sources)
+        return self.unknown_origin or bool(self.restricting_sources)
 
 
 @dataclass(frozen=True)
@@ -146,20 +150,12 @@ def _as_of(row: sqlite3.Row) -> int:
     return row["refreshed_at"] if row["refreshed_at"] is not None else row["created_at"]
 
 
-def _recorded(sources: Sources) -> str | None:
-    """What the `sources` column holds for this."""
-    return None if sources is None else json.dumps(sorted(sources))
-
-
 def _sources(recorded: str | None) -> Sources:
     """The record in the `sources` column; None, not known, for anything but a list of names."""
     try:
-        names = json.loads(recorded) if recorded is not None else None
+        return from_names(json.loads(recorded)) if recorded is not None else None
     except (ValueError, TypeError):
         return None
-    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
-        return None
-    return frozenset(names)
 
 
 def _now() -> int:
@@ -179,11 +175,11 @@ class CatalogView:
 
     def __init__(
         self, app_db: Path, clock: Callable[[], int] = _now,
-        telemetry_tables: Mapping[str, tuple[str, ...]] = MappingProxyType({}),
+        restricted_columns_by_table: Mapping[str, tuple[str, ...]] = MappingProxyType({}),
         results_db: Path | None = None, _read_only: bool = True, default_retention_ms: int = DAY_MS,
     ):
-        """`clock` returns epoch ms; `telemetry_tables` are the Telemetry Database tables the Semantic Layer
-        describes, each mapped to its Restricted Columns;
+        """`clock` returns epoch ms; `restricted_columns_by_table` maps each Telemetry Database table the Semantic
+        Layer describes to its Restricted Columns (empty for a table with none);
         `results_db` is where Lookup Tables' rows are kept (needed only by the Lookup Table operations);
         `default_retention_ms` is the Result Table Retention that `policy` reports."""
         self.path = Path(app_db)
@@ -191,9 +187,9 @@ class CatalogView:
         self._now = clock
         self._read_only = _read_only
         self._restricted_columns: dict[str, tuple[str, ...]] = {}  # keyed as table sources name tables
-        for table, columns in telemetry_tables.items():
+        for table, columns in restricted_columns_by_table.items():
             self._restricted_columns[fold(table)] = self._restricted_columns.get(fold(table), ()) + tuple(columns)
-        self.telemetry_tables = frozenset(canonical(t) for t in telemetry_tables)
+        self.telemetry_tables = frozenset(canonical(t) for t in restricted_columns_by_table)
         self.policy = RetentionPolicy(result_days=default_retention_ms / DAY_MS)
 
     @property
@@ -245,6 +241,12 @@ class CatalogView:
         with closing(self._connect()) as con:
             return [{**dict(r), "columns": json.loads(r["columns"])} for r in con.execute(
                 "SELECT name, created_at, columns, row_count FROM lookup_tables ORDER BY name")]
+
+    def holds(self, name: str) -> bool:
+        """Whether the registry holds `name` (any case) for a Result Table or Saved Table, live or expired. No new
+        table may be given such a name."""
+        with closing(self._connect()) as con:
+            return con.execute("SELECT 1 FROM result_tables WHERE name=?", (canonical(name),)).fetchone() is not None
 
     def recorded_sources(self, name: str) -> Sources:
         """The record of `name` (any case), a table in the results database, as a query reading it takes it: none for
@@ -385,14 +387,15 @@ class Catalog(CatalogView):
 
     def __init__(
         self, app_db: Path, clock: Callable[[], int] = _now, default_retention_ms: int = DAY_MS,
-        telemetry_tables: Mapping[str, tuple[str, ...]] = MappingProxyType({}), results_db: Path | None = None,
+        restricted_columns_by_table: Mapping[str, tuple[str, ...]] = MappingProxyType({}),
+        results_db: Path | None = None,
         on_rename: Callable[[sqlite3.Connection, str, str], None] | None = None, *, runner: QueryRunner,
     ):
         """`default_retention_ms` is the Retention a new Result Table is given (kept in `policy`). `on_rename(con, old, new)` is
         the store's hook: it runs in the same app-database transaction as the registry rename, to update
         whatever else shows the old name (Displays and Chart Specs), so the Catalog never knows their schema.
         `runner`, over the same results database, renames and drops tables there."""
-        super().__init__(app_db, clock, telemetry_tables, results_db, _read_only=False,
+        super().__init__(app_db, clock, restricted_columns_by_table, results_db, _read_only=False,
                          default_retention_ms=default_retention_ms)
         self._on_rename = on_rename
         self._runner = runner
@@ -417,16 +420,23 @@ class Catalog(CatalogView):
     ) -> None:
         """Record a new Result Table made by `owner`, with the current default Retention. `sql` and
         `max_rows` (the query and the row cap it ran under) are what Refresh runs again. `sources` is the record of
-        where its data came from; None, not known, makes it a Restricted Table."""
+        where its data came from; None, not known, makes it a Restricted Table.
+
+        `NameHeld` if the registry already holds `name`: that table keeps its row, but its sources become unknown, as
+        the rows under the name may no longer be the ones they were recorded for."""
         now = self._now()
         with closing(self._connect()) as con, con:
-            con.execute(
+            added = con.execute(
                 "INSERT OR IGNORE INTO result_tables(name, cell_id, run_id, created_at, title,"
                 " columns, request, truncated_to, retention_ms, sql, max_rows, sources)"
                 " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (canonical(name), owner.cell_id, owner.run_id, now, title, json.dumps(columns or []), request,
-                 truncated_to, self.default_retention_ms, sql, max_rows, _recorded(sources)),
-            )
+                 truncated_to, self.default_retention_ms, sql, max_rows, sources_json(sources)),
+            ).rowcount
+            if not added:
+                con.execute("UPDATE result_tables SET sources=NULL WHERE name=?", (canonical(name),))
+        if not added:  # raised here, so that the write above is committed
+            raise NameHeld(f"A table named {canonical(name)} is already registered.")
 
     def record_replacement(self, after: Table) -> Table:
         """Record, in one write, that live table `after.name` is about to hold fresh rows described by `after`:
@@ -447,12 +457,12 @@ class Catalog(CatalogView):
                         " cell_id=?, run_id=?, title=?, sql=?, max_rows=?, sources=?"
                         " WHERE name=?",
                         (as_of_ms, json.dumps(table.columns), table.truncated_to, table.cell_id, table.run_id,
-                         table.title, table.sql, table.max_rows, _recorded(table.sources), table.name))
+                         table.title, table.sql, table.max_rows, sources_json(table.sources), table.name))
 
     def record_sources(self, name: str, sources: Sources) -> None:
         """Record where the data of registered table `name` came from."""
         with closing(self._connect()) as con, con:
-            con.execute("UPDATE result_tables SET sources=? WHERE name=?", (_recorded(sources), canonical(name)))
+            con.execute("UPDATE result_tables SET sources=? WHERE name=?", (sources_json(sources), canonical(name)))
 
     def _drop_physical(self, names: Iterable[str]) -> None:
         names = list(names)

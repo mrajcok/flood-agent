@@ -37,7 +37,7 @@ def make(tmp_path, runner, on_rename=None, telemetry=FLOWS):
     """(catalog, cell id, results db path) with one Result Table, registered and physical, 1-day default."""
     app_db, results_db = tmp_path / "app.db", databases_for_test(tmp_path).results_db
     clock = Clock()
-    catalog = Catalog(app_db, clock, default_retention_ms=DAY, telemetry_tables=telemetry, results_db=results_db,
+    catalog = Catalog(app_db, clock, default_retention_ms=DAY, restricted_columns_by_table=telemetry, results_db=results_db,
                       on_rename=on_rename, runner=runner)
     cid = "cell-1"
     with closing(sqlite3.connect(results_db)) as con, con:

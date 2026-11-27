@@ -11,7 +11,7 @@ from conftest import (
     register_table,
 )
 
-from flood_agent.catalog import Catalog, CatalogView, CellRun, TableExpired
+from flood_agent.catalog import Catalog, CatalogView, CellRun, NameHeld, TableExpired
 
 HOUR = 3_600_000
 DAY = 24 * HOUR
@@ -140,7 +140,7 @@ def test_read_only_view_reads_but_has_no_write_operations_and_cannot_write(world
 
 def test_kind_of_any_case_covers_telemetry_result_saved_lookup_and_unknown(tmp_path, clock, query_runner):
     app_db = tmp_path / "app.db"
-    catalog = Catalog(app_db, clock, default_retention_ms=HOUR, telemetry_tables=FLOWS, runner=query_runner())
+    catalog = Catalog(app_db, clock, default_retention_ms=HOUR, restricted_columns_by_table=FLOWS, runner=query_runner())
     cid = "cell-1"
     register_table(catalog, "rt_20260101_000000", cid, 1)
     register_table(catalog, "busy_ports", cid, 1)
@@ -247,7 +247,7 @@ def _exists(path, name) -> bool:
 def full(tmp_path, clock, query_runner):
     """(catalog, cell id, results db path): a Catalog that knows a Telemetry table `flows`."""
     app_db, results_db = tmp_path / "app.db", databases_for_test(tmp_path).results_db
-    catalog = Catalog(app_db, clock, default_retention_ms=HOUR, results_db=results_db, telemetry_tables=FLOWS,
+    catalog = Catalog(app_db, clock, default_retention_ms=HOUR, results_db=results_db, restricted_columns_by_table=FLOWS,
                       runner=query_runner())
     return catalog, "cell-1", results_db
 
@@ -377,4 +377,11 @@ def test_tables_registered_before_sources_were_recorded_are_restricted(tmp_path,
     catalog = Catalog(app_db, clock, runner=query_runner())
     assert catalog["rt_old"].sources is None
     assert catalog.restriction(catalog["rt_old"]).restricted
-    assert catalog.recorded_sources("rt_old") is None
+
+
+def test_registering_a_name_already_held_is_refused_and_leaves_its_sources_unknown(world):
+    catalog, cid = world
+    register_table(catalog, "rt_a", cid, 1, sources=frozenset())
+    with pytest.raises(NameHeld):
+        register_table(catalog, "RT_A", cid, 2, sources=frozenset({"diameter"}))
+    assert catalog["rt_a"].sources is None  # whatever rows are under the name now, they are restricted

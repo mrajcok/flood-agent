@@ -91,7 +91,6 @@ def test_a_view_of_no_table_is_recorded_by_its_own_name(sources):
 @pytest.mark.parametrize("sql", [
     "SELECT stat FROM sqlite_stat1",
     "SELECT COUNT(*) + 0 AS n FROM sqlite_stat1",
-    "SELECT id FROM rt_unknown",
     "SELECT c.site FROM cells c, rt_unknown",
     # A results table that is in no record (here as a replacement's temporary one is), only its rows being counted
     "SELECT COUNT(*) + 0 AS n FROM RESULTS.rt_temporary",

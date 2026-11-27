@@ -10,7 +10,7 @@ import json
 from dataclasses import dataclass, fields
 from typing import Any
 
-from flood_agent.table_sources import Sources
+from flood_agent.table_sources import Sources, from_names
 
 UNREADABLE = "The tool returned an unreadable result."
 
@@ -124,9 +124,10 @@ def _decode(text: str) -> Outcome:
 
 
 def _sources(wire: list) -> Sources:
-    if not all(isinstance(name, str) for name in wire):
+    sources = from_names(wire)
+    if sources is None:
         raise TypeError("sources")
-    return frozenset(wire)
+    return sources
 
 
 def from_query_result(result: dict) -> Outcome:

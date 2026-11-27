@@ -10,7 +10,7 @@
                sort: null, dir: 'asc', loads: 0, loaded: false, error: false, expired: false,
                options: null, downloadError: false,
                async download() {
-                 /* An unrestricted table downloads at once; a restricted one asks how, in the dialog below. */
+                 /* An unrestricted table downloads at once; a restricted one is offered encrypted, in the dialog below. */
                  this.downloadError = false;
                  try {
                    const r = await fetch(this.urls.options);
@@ -69,16 +69,13 @@
     {# A double click here must not reach a Markdown Cell, which it would put into editing. #}
     <dialog class="download" x-ref="download" aria-label="Restricted table" @dblclick.stop>
       <h3>Restricted table</h3>
-      <div x-show="options && !options.lineage_unknown">
-        <p>Restricted Columns: <b x-text="options && options.restricted_columns.join(', ')"></b></p>
-        <p>They identify a Subscriber or device. In a masked file each of their values is replaced by a token: equal values get equal tokens within the file, and another download gives different ones.</p>
-      </div>
-      <p x-show="options && options.lineage_unknown">CANOPY couldn't tell which columns carry restricted values, so it can only be downloaded encrypted.</p>
-      <p x-show="options && options.public_key">An encrypted file holds the real values. It is encrypted for your <span x-text="options && options.public_key && options.public_key.type"></span> Public Key <b x-text="options && options.public_key && options.public_key.fingerprint" style="overflow-wrap:anywhere"></b>, so only that key's private half can open it.</p>
+      <template x-for="s in (options ? options.sources : [])" :key="s.table">
+        <p>This table has data from <code x-text="s.table"></code>, which holds Restricted Columns (<template x-for="(c, i) in s.restricted_columns" :key="c"><span><span x-text="i ? ', ' : ''"></span><code x-text="c"></code></span></template>).</p>
+      </template>
+      <p x-show="options && options.unknown_origin">CANOPY doesn't know where this table's data came from.</p>
+      <p x-show="options && options.public_key">It can only be downloaded encrypted. The file is encrypted for your <span x-text="options && options.public_key && options.public_key.type"></span> Public Key <b x-text="options && options.public_key && options.public_key.fingerprint" style="overflow-wrap:anywhere"></b>, so only that key's private half can open it.</p>
       <p x-show="options && !options.public_key">No Public Key on file. <a href="/settings">Add one in Settings</a></p>
       <div class="actions">
-        <button type="button" class="primary" x-show="options && !options.lineage_unknown"
-                @click="save(urls.psv + '?mode=masked'); $refs.download.close()">Download masked</button>
         <button type="button" class="primary" x-show="options && options.public_key"
                 @click="save(urls.psv + '?mode=encrypted'); $refs.download.close()">Download encrypted</button>
         <button type="button" @click="$refs.download.close()">Cancel</button>

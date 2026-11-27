@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 import yaml
 
 from flood_agent.ai_cell_context import SystemPrompt
-from flood_agent.lineage import TableSchema
 
 if TYPE_CHECKING:  # annotations only: no import-time coupling to the Catalog
     from flood_agent.catalog import Table
@@ -69,8 +68,8 @@ Metadata (column names, types, row counts). Rules:
   the user, write it as a UTC date and time (e.g. 2026-01-07 23:00 UTC), not epoch ms.
 - Map names (protocols, flags, record types, response codes) to values with the Semantic Layer
   enums; a column with `enum_bits` is a bitmask, so test it with `col & bit != 0`.
-- Columns marked restricted identify a Subscriber or device, and a table carrying their values can only be downloaded
-  masked or encrypted.
+- Columns marked restricted identify a Subscriber or device. The result of any query that reads a table with such a
+  column, even without selecting it, and anything queried from that result, can only be downloaded encrypted.
 - Use the functions and metrics documented in the Semantic Layer (e.g. in_cidr for CIDR filters).
 """
 
@@ -112,13 +111,12 @@ class SemanticLayer:
         """Names of the Telemetry Database tables described in the Semantic Layer's `tables:` map."""
         return list(self.data.get("tables") or {})
 
-    def telemetry_schemas(self) -> dict[str, TableSchema]:
-        """Each Telemetry Database table's columns as described here, with its Restricted Columns."""
+    def restricted_columns(self) -> dict[str, tuple[str, ...]]:
+        """Each Telemetry Database table described here, with its Restricted Columns, in the order described."""
         out = {}
         for table, spec in (self.data.get("tables") or {}).items():
             columns = (spec or {}).get("columns") or {}
-            restricted = frozenset(name for name, meta in columns.items() if (meta or {}).get("restricted"))
-            out[table] = TableSchema(tuple(columns), restricted)
+            out[table] = tuple(name for name, meta in columns.items() if (meta or {}).get("restricted"))
         return out
 
     def column_formats(self, columns: list[str]) -> dict:

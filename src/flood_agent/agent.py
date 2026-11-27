@@ -90,9 +90,9 @@ def build_parts(config: AgentConfig, user: str, semantic_layer: SemanticLayer, c
     store = NotebookStore(databases.app_db, config.clock)
     # The runner asks for the readable set only when it queries, by which time the Catalog below exists.
     runner = QueryRunner(config.telemetry_db, databases.results_db, config.query_timeout_s, lambda: tables.readable(),
-                         lambda name: tables.schema(name))
+                         lambda name: tables.recorded_sources(name), lambda name: tables.holds(name))
     tables = Catalog(
-        databases.app_db, config.clock, config.result_ttl_ms, telemetry_tables=semantic_layer.telemetry_schemas(),
+        databases.app_db, config.clock, config.result_ttl_ms, restricted_columns_by_table=semantic_layer.restricted_columns(),
         results_db=databases.results_db, on_rename=store.follow_rename,  # Displays follow a table's new name
         runner=runner,
     )
@@ -210,8 +210,8 @@ class UserSpace:
         to encrypt for."""
         key = self.public_keys.get() if mode == "encrypted" else None
         with self.tables.settled():  # so the rows read are the ones the restriction checked here is about
-            table = self.tables.for_download(result_table)
-            allowed = downloads.check(table, mode, key)
+            table = self.tables[result_table]
+            allowed = downloads.check(table, self.tables.restriction(table), mode, key)
             columns, rows = self.queries.all_rows(table.name)
         return downloads.psv_file(allowed, columns, rows)  # encrypting holds no replacement up
 
@@ -300,7 +300,7 @@ class Agent:
             users=self.config.users,
             query_timeout_s=self.config.query_timeout_s,
             chart_row_cap=self.config.chart_row_cap,
-            telemetry_tables=self.semantic_layer.telemetry_schemas(),
+            restricted_columns_by_table=self.semantic_layer.restricted_columns(),
             fixed_now_ms=self.config.fixed_now_ms,
         )
 

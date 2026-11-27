@@ -9,7 +9,7 @@ A person who signs in to CANOPY. A User has their own Notebooks, Result Tables, 
 _Avoid_: account, login, Subscriber
 
 **Public Key**:
-The age or SSH public key a User uploads so restricted tables can be downloaded encrypted for them.
+The age or SSH public key a User uploads so Restricted Tables can be downloaded encrypted for them.
 _Avoid_: certificate, PGP key
 
 **Agent**:
@@ -43,8 +43,12 @@ A mobile customer, identified by IMSI; the MSISDN (phone number) and IMEI (devic
 _Avoid_: user (the CANOPY user), customer, UE
 
 **Restricted Column**:
-A Telemetry Database column that identifies a Subscriber or device, or a Result Table column whose values come from one. A table with a Restricted Column can only be downloaded masked or encrypted.
+A Telemetry Database column that identifies a Subscriber or device.
 _Avoid_: sensitive field, PII column
+
+**Restricted Table**:
+A Telemetry table with a Restricted Column, or a Result Table or Saved Table with data from one, or whose data sources CANOPY doesn't know; it can only be downloaded encrypted.
+_Avoid_: sensitive table, locked table
 
 **Circuit**:
 An opaque 12-character identifier for the monitored link a Flow Record was observed on.

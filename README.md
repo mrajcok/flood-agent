@@ -51,7 +51,7 @@ Users read the same Telemetry Database. A User's databases, `app.db` and `result
 (`APP_DB` and `RESULTS_DB`, default `data/app.db` and `data/results.db`) when it starts: nothing in them is migrated.
 Taking a name out of `USERS` leaves that User's directory in place.
 
-On the **Settings** page (linked next to Sign out) a User can keep one Public Key, which restricted tables can be
+On the **Settings** page (linked next to Sign out) a User can keep one Public Key, which Restricted Tables can be
 downloaded encrypted for: an age key (`age1…`), or an OpenSSH `ssh-ed25519` or `ssh-rsa` (2048 to 4096 bits) Public Key,
 pasted or uploaded as a `.pub` file. Private keys are refused.
 
@@ -120,14 +120,15 @@ text prefixed with `'`). Both are Agent endpoints, not LLM tools. The `/api/resu
 endpoints are not scoped per notebook by design: they need a signed-in User (see Users), and reach only that
 User's tables (another User's table is a 404).
 
-A restricted table (ADR 0008) cannot be downloaded plain. A Display's Download PSV first asks
-`GET /api/results/<rt>/download-options` whether the table is restricted: an unrestricted one downloads at once, a
-restricted one opens a dialog offering a masked or an encrypted file. `psv?mode=plain|masked|encrypted` (plain by
-default) refuses, with a 403, a restricted table in plain mode, and one of unknown lineage in plain or masked mode. A
-masked file (`<rt>.masked.psv`) has a token in place of each Restricted Column value, equal for equal values within the
-file, under a secret made for that download and never kept. An encrypted file (`<rt>.psv.age`) is the plain one in
-age's binary format for the User's Public Key (`age -d -i <identity or SSH private key> <rt>.psv.age`); with no Public Key on
-file it is a 409. Each masked or encrypted download is logged, an encrypted one with the key's fingerprint.
+A Restricted Table (ADR 0008) is a table with data from a Telemetry table that has a Restricted Column, or whose data
+sources CANOPY doesn't know; it can only be downloaded encrypted. Each Result Table records the Telemetry tables its data
+came from, as SQLite reports them for the query that made it, and that record is checked against the Semantic Layer at
+each download. A Display's Download PSV first asks `GET /api/results/<rt>/download-options` whether the table is
+restricted, and why: an unrestricted one downloads at once, a restricted one opens a dialog offering an encrypted file.
+`psv?mode=plain|encrypted` (plain by default) refuses, with a 403, a Restricted Table in plain mode. An encrypted file
+(`<rt>.psv.age`) is the plain one in age's binary format for the User's Public Key
+(`age -d -i <identity or SSH private key> <rt>.psv.age`); with no Public Key on file it is a 409. Each encrypted download
+of a Restricted Table is logged with the User, table, source tables and key fingerprint.
 
 Formatting comes from Semantic Layer column metadata (`tables.flows.columns.<col>`):
 `enum` -> names (proto), `enum_bits` -> flag letters (S, SA, FPA), `unit: bytes` -> decimal
@@ -169,9 +170,8 @@ charts with a time x axis, Ctrl+scroll to zoom that axis, drag to pan and double
 - `web.py` + `templates/` - FastAPI, Jinja, htmx (SSE), Alpine table and chart components.
 - `users.py` + `sign_in.py` - the configured Users, their password hashes and where their databases are; the sign-in page, sessions and the
   check every request passes.
-- `lineage.py` - column lineage: which output columns of a query carry values from a Restricted Column.
-- `sqlite_sql.py` - a query rewritten, by SQLite's lexing rules, so that lineage's parser reads it as SQLite does.
-- `downloads.py` - a table's PSV download: the modes it may be had in (plain, masked, encrypted) and the file.
+- `table_sources.py` - which Telemetry tables a query's rows came from, which decides whether its table is restricted.
+- `downloads.py` - a table's PSV download: the modes it may be had in (plain, encrypted) and the file.
 - `public_keys.py` - a User's one Public Key: what an upload may be, and where it is kept.
 - `semantic_layer.yaml` - hand-authored Semantic Layer rendered into the system prompt.
 
